@@ -1,0 +1,112 @@
+# 默认忽略的文件
+/shelf/
+/workspace.xml
+# 基于编辑器的 HTTP 客户端请求
+/httpRequests/
+# 已忽略包含查询文件的默认文件夹
+/queries/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+# ==========================================
+# 1. Python 核心运行时与编译垃圾文件
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==========================================
+# 2. Python 虚拟环境（Virtual Environments）
+# ==========================================
+# 彻底锁死本地的虚拟环境文件夹，绝对不能进 Git
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==========================================
+# 3. IDE 与代码编辑器缓存文件
+# ==========================================
+# 过滤 Cursor / VS Code / PyCharm 的本地工作区配置
+.vscode/
+.cursor/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
+.DS_Store
+
+# ==========================================
+# 4. 安全红线：敏感信息与密钥文件（⚠️ 极其重要）
+# ==========================================
+# 存放 API 密钥（如 DeepSeek_API_KEY、Database_PASSWORD）的文件绝对不能公开！
+.env
+.env.local
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+
+# ==========================================
+# 5. AI/RAG 专属：本地模型与大型数据集过滤
+# ==========================================
+# 防止你不小心把本地下载的几十G的 FlagEmbedding / BGE 权重文件传上去
+models/
+.models/
+huggingface/
+.cache/huggingface/
+.cache/torch/
+datasets/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# ==========================================
+# 6. Docker 与本地数据库持久化数据
+# ==========================================
+# 刚才在 Mac 上通过绝对路径挂载映射出来的本地数据，千万别进 Git
+data/
+db/
+*.db
+*.sqlite3
+.qdrant/
+postgres_data/
+
+# ==========================================
+# 7. 日志与临时测试文件
+# ==========================================
+*.log
+logs/
+tmp/
+temp/
+.pytest_cache/
+.coverage
+htmlcov/

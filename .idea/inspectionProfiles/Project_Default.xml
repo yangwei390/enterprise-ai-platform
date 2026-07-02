@@ -1,0 +1,53 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="annotated-types" />
+          <option value="anyio" />
+          <option value="certifi" />
+          <option value="charset-normalizer" />
+          <option value="distro" />
+          <option value="h11" />
+          <option value="httpcore" />
+          <option value="httpx" />
+          <option value="idna" />
+          <option value="jiter" />
+          <option value="jsonpatch" />
+          <option value="jsonpointer" />
+          <option value="langchain-core" />
+          <option value="langchain-openai" />
+          <option value="langchain-protocol" />
+          <option value="langgraph" />
+          <option value="langgraph-checkpoint" />
+          <option value="langgraph-prebuilt" />
+          <option value="langgraph-sdk" />
+          <option value="langsmith" />
+          <option value="openai" />
+          <option value="orjson" />
+          <option value="ormsgpack" />
+          <option value="packaging" />
+          <option value="pydantic" />
+          <option value="pydantic_core" />
+          <option value="python-dotenv" />
+          <option value="PyYAML" />
+          <option value="regex" />
+          <option value="requests" />
+          <option value="requests-toolbelt" />
+          <option value="sniffio" />
+          <option value="tenacity" />
+          <option value="tiktoken" />
+          <option value="tqdm" />
+          <option value="typing-inspection" />
+          <option value="typing_extensions" />
+          <option value="urllib3" />
+          <option value="uuid_utils" />
+          <option value="websockets" />
+          <option value="xxhash" />
+          <option value="zstandard" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
