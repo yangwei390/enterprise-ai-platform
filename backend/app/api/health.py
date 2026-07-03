@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from backend.app.config.settings import ConfigResponse, settings
+from backend.app.exceptions import BusinessException
 from backend.app.logger import logger
 from backend.app.schemas import ApiResponse, success
 
@@ -32,3 +33,13 @@ def get_config() -> ApiResponse:
             app_port=settings.APP_PORT,
         )
     )
+
+
+@router.get("/test/error")
+def test_error():
+    raise BusinessException(10001, "这是一个测试异常")
+
+
+@router.get("/test/crash")
+def test_crash():
+    raise RuntimeError("boom")
