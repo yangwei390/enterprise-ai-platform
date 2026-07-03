@@ -1,26 +1,65 @@
+# =========================
+# Web Framework
+# =========================
 fastapi
 uvicorn
 
+# =========================
+# Configuration
+# =========================
 pydantic
-
-sqlalchemy
-
-psycopg2-binary
-
-redis
-
-qdrant-client
-
-openai
-
-langgraph
-
+pydantic-settings
 python-dotenv
 
+# =========================
+# Database
+# =========================
+sqlalchemy
+psycopg2-binary
+
+# =========================
+# Cache
+# =========================
+redis
+
+# =========================
+# Vector Database
+# =========================
+qdrant-client
+
+# =========================
+# LLM
+# =========================
+openai
 httpx
 
-pymupdf
+# =========================
+# Agent
+# =========================
+langgraph
 
+# =========================
+# Document Parser
+# =========================
+pymupdf
 unstructured
 
+# =========================
+# Embedding
+# =========================
 FlagEmbedding
+
+# =========================
+# Logging
+# =========================
+loguru
+
+# =========================
+# Testing
+# =========================
+pytest
+
+# =========================
+# Code Quality
+# =========================
+ruff
