@@ -30,6 +30,8 @@ build/
 
 # Models
 models/
+!backend/app/models/
+!backend/app/models/*.py
 
 # Data
 data/
