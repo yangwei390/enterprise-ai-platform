@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 
-from backend.app.api import health_router
+from backend.app.api import database_router, health_router
 from backend.app.config.settings import settings
 from backend.app.exceptions import register_exception_handlers
 from backend.app.logger import logger, setup_logger
+from backend.app.middleware import RequestLogMiddleware
 
 
 def create_app() -> FastAPI:
@@ -15,7 +16,9 @@ def create_app() -> FastAPI:
     logger.info(f"Version: {settings.APP_VERSION}")
 
     register_exception_handlers(app)
+    app.add_middleware(RequestLogMiddleware)
     app.include_router(health_router)
+    app.include_router(database_router)
 
     return app
 
