@@ -13,6 +13,7 @@ def get_redis_client() -> Redis:
         _redis_client = Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
+            password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None,
             decode_responses=True,
         )
 

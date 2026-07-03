@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     REDIS_HOST: str
     REDIS_PORT: int
+    REDIS_PASSWORD: str | None = None
 
     QDRANT_HOST: str
     QDRANT_PORT: int
