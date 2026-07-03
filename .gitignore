@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual Environment
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Logs
+logs/
+
+# Environment
+.env
+
+# Build
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+
+# Models
+models/
+
+# Data
+data/
+
+# Docker
+docker-data/

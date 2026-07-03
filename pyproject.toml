@@ -1,0 +1,12 @@
+[project]
+name = "enterprise-ai-platform"
+version = "0.1.0"
+description = "Enterprise RAG + Agent knowledge platform"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
