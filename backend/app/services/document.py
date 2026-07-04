@@ -4,11 +4,10 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from backend.app.config.settings import PROJECT_ROOT, settings
 from backend.app.exceptions import BusinessException
 from backend.app.logger import logger
 from backend.app.models import Document
-from backend.app.parsers import ParserFactory
+from backend.app.pipeline import DocumentPipeline
 from backend.app.repositories.document import DocumentRepository
 from backend.app.schemas.document import DocumentCreate, DocumentUpdate
 from backend.app.services.base import BaseService
@@ -57,27 +56,14 @@ class DocumentService(BaseService[DocumentRepository]):
             logger.warning("Document not found")
             raise BusinessException(40402, "文档不存在")
 
-        if not document.storage_path:
-            logger.warning("Document storage path is empty")
-            raise BusinessException(41002, "文档文件不存在")
-
-        upload_dir = Path(settings.UPLOAD_DIR)
-        if not upload_dir.is_absolute():
-            upload_dir = PROJECT_ROOT / upload_dir
-
-        file_path = upload_dir / document.storage_path
-        if not file_path.exists():
-            logger.warning("Document file does not exist")
-            raise BusinessException(41002, "文档文件不存在")
-
         self.repository.update(
             document,
             {"parse_status": "processing", "parse_message": None},
         )
 
         try:
-            parser = ParserFactory.get_parser(file_path)
-            parse_result = parser.parse(file_path)
+            pipeline = DocumentPipeline()
+            context = pipeline.run(document)
         except BusinessException as exc:
             self.repository.update(
                 document,
@@ -97,13 +83,42 @@ class DocumentService(BaseService[DocumentRepository]):
             document,
             {"parse_status": "success", "parse_message": "解析成功"},
         )
+        parse_result = context.parse_result
+        clean_result = context.clean_result
+        chunk_result = context.chunk_result
+        if parse_result is None or clean_result is None or chunk_result is None:
+            logger.warning("Document pipeline result is incomplete")
+            raise BusinessException(41003, "文档解析失败")
+
+        chunks_preview = [
+            {
+                "document_id": chunk.document_id,
+                "knowledge_base_id": chunk.knowledge_base_id,
+                "chunk_index": chunk.chunk_index,
+                "text": chunk.text[:200],
+                "start_offset": chunk.start_offset,
+                "end_offset": chunk.end_offset,
+                "token_count": chunk.token_count,
+                "metadata": chunk.metadata,
+            }
+            for chunk in chunk_result.chunks[:3]
+        ]
+
         logger.info("Parse document succeeded")
         return {
             "document_id": document.id,
-            "text_length": len(parse_result.text),
-            "preview": parse_result.text[:500],
+            "text_length": clean_result.cleaned_length,
+            "preview": clean_result.text[:500],
             "page_count": parse_result.page_count,
             "metadata": parse_result.metadata,
+            "original_length": clean_result.original_length,
+            "cleaned_length": clean_result.cleaned_length,
+            "cleaner_metadata": clean_result.metadata,
+            "chunk_strategy": chunk_result.strategy,
+            "chunk_size": chunk_result.chunk_size,
+            "chunk_overlap": chunk_result.chunk_overlap,
+            "total_chunks": chunk_result.total_chunks,
+            "chunks_preview": chunks_preview,
         }
 
     def get(self, id: int) -> Document:

@@ -44,3 +44,11 @@ class DocumentParseResponse(BaseModel):
     preview: str
     page_count: int | None
     metadata: dict
+    original_length: int
+    cleaned_length: int
+    cleaner_metadata: dict
+    chunk_strategy: str
+    chunk_size: int | None
+    chunk_overlap: int | None
+    total_chunks: int
+    chunks_preview: list[dict]
