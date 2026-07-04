@@ -1,6 +1,12 @@
 from fastapi import FastAPI
 
-from backend.app.api import database_router, health_router, qdrant_router, redis_router
+from backend.app.api import (
+    database_router,
+    health_router,
+    knowledge_base_router,
+    qdrant_router,
+    redis_router,
+)
 from backend.app.config.settings import settings
 from backend.app.exceptions import register_exception_handlers
 from backend.app.logger import logger, setup_logger
@@ -21,6 +27,7 @@ def create_app() -> FastAPI:
     app.include_router(database_router)
     app.include_router(redis_router)
     app.include_router(qdrant_router)
+    app.include_router(knowledge_base_router)
 
     return app
 
