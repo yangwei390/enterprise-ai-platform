@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.models.base import Base
@@ -19,6 +19,12 @@ class Document(TimestampMixin, SoftDeleteMixin, Base):
     file_size: Mapped[int] = mapped_column(default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(64), default="uploaded", nullable=False)
     chunk_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parse_status: Mapped[str] = mapped_column(String(64), default="pending", nullable=False)
+    parse_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     knowledge_base: Mapped["KnowledgeBase"] = relationship(
         "KnowledgeBase",

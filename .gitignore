@@ -35,6 +35,7 @@ models/
 
 # Data
 data/
+data/uploads/
 
 # Docker
 docker-data/
