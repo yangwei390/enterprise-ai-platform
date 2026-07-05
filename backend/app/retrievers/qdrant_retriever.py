@@ -1,4 +1,3 @@
-from qdrant_client.http.api_client import jsonable_encoder
 from qdrant_client.models import FieldCondition, Filter, MatchValue, SearchRequest
 
 from backend.app.embeddings import EmbeddingFactory
@@ -48,10 +47,18 @@ class QdrantRetriever(BaseRetriever):
         )
 
     def _to_retrieved_chunk(self, point) -> RetrievedChunk:
-        payload = point.payload or {}
+        if isinstance(point, dict):
+            payload = point.get("payload") or {}
+            point_id = point.get("id")
+            score = point.get("score", 0.0)
+        else:
+            payload = point.payload or {}
+            point_id = point.id
+            score = point.score
+
         return RetrievedChunk(
-            id=str(point.id),
-            score=float(point.score),
+            id=str(point_id),
+            score=float(score),
             text=payload.get("text", ""),
             document_id=payload.get("document_id"),
             knowledge_base_id=payload.get("knowledge_base_id"),
@@ -78,7 +85,7 @@ class QdrantRetriever(BaseRetriever):
             url="/collections/{collection_name}/points/search",
             path_params={"collection_name": self.collection_name},
             headers={"Content-Type": "application/json"},
-            content=jsonable_encoder(search_request),
+            content=search_request.model_dump(mode="json", exclude_none=True),
         )
 
         if isinstance(response, dict):
