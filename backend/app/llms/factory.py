@@ -1,6 +1,6 @@
 from backend.app.llms.base import BaseLLM
 from backend.app.llms.config import get_llm_config
-from backend.app.llms.providers import DummyLLMProvider
+from backend.app.llms.providers import DummyLLMProvider, OpenAIProvider
 from backend.app.logger import logger
 
 
@@ -12,6 +12,9 @@ class LLMFactory:
 
         if selected_provider == "dummy":
             return DummyLLMProvider(config=config)
+
+        if selected_provider == "openai":
+            return OpenAIProvider(config=config)
 
         logger.warning(
             f"LLM provider not implemented, fallback to dummy: {selected_provider}"
