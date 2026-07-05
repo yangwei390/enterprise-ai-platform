@@ -1,9 +1,12 @@
 from backend.app.llms.base import LLMRequest, LLMResponse
 from backend.app.llms.clients.base_client import BaseLLMClient
+from backend.app.llms.config import LLMConfig
 
 
 class DummyLLMClient(BaseLLMClient):
-    model = "dummy-llm"
+    def __init__(self, config: LLMConfig | None = None) -> None:
+        self.config = config or LLMConfig()
+        self.model = self.config.model
 
     def chat(self, request: LLMRequest) -> LLMResponse:
         user_message = self._get_last_user_message(request)
@@ -16,6 +19,9 @@ class DummyLLMClient(BaseLLMClient):
             usage={},
             metadata={
                 "client": "dummy",
+                "provider": self.config.provider,
+                "model": self.model,
+                "temperature": self.config.temperature,
                 "message_count": len(request.messages),
                 "has_context": "上下文：" in user_message,
             },

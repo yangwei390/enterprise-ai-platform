@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -34,7 +34,30 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_PATH: str = ""
     RERANKER_MODEL_PATH: str = ""
 
+    LLM_PROVIDER: str = "dummy"
+    LLM_MODEL: str = "dummy-llm"
+    LLM_TEMPERATURE: float = 0.2
+    LLM_MAX_TOKENS: int | None = None
+    LLM_TIMEOUT: int = 30
+    LLM_BASE_URL: str | None = None
+    LLM_API_KEY: str | None = None
+    LLM_STREAM: bool = False
+
     UPLOAD_DIR: str
+
+    @field_validator("LLM_MAX_TOKENS", mode="before")
+    @classmethod
+    def parse_optional_int(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
+
+    @field_validator("LLM_BASE_URL", "LLM_API_KEY", mode="before")
+    @classmethod
+    def parse_optional_str(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

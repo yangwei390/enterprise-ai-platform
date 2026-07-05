@@ -1,4 +1,5 @@
 from backend.app.llms.base import BaseLLM
+from backend.app.llms.config import get_llm_config
 from backend.app.llms.providers import DummyLLMProvider
 from backend.app.logger import logger
 
@@ -6,8 +7,13 @@ from backend.app.logger import logger
 class LLMFactory:
     @staticmethod
     def get_llm(provider: str | None = None) -> BaseLLM:
-        if provider in (None, "", "dummy"):
-            return DummyLLMProvider()
+        config = get_llm_config()
+        selected_provider = provider or config.provider
 
-        logger.warning(f"LLM provider not implemented, fallback to dummy: {provider}")
-        return DummyLLMProvider()
+        if selected_provider == "dummy":
+            return DummyLLMProvider(config=config)
+
+        logger.warning(
+            f"LLM provider not implemented, fallback to dummy: {selected_provider}"
+        )
+        return DummyLLMProvider(config=config)
