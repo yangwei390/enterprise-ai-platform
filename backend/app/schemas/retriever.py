@@ -1,4 +1,5 @@
 from backend.app.context import ContextChunk
+from backend.app.prompts import PromptMessage
 from backend.app.rerankers import RerankedChunk
 from pydantic import BaseModel
 
@@ -18,3 +19,5 @@ class RetrieveResponse(BaseModel):
     context_text: str
     context_total_chars: int
     context_chunks: list[ContextChunk]
+    prompt_text: str
+    prompt_messages: list[PromptMessage]
