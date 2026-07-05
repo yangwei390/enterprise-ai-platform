@@ -66,3 +66,6 @@ pytest
 # Code Quality
 # =========================
 ruff
+black
+pyright
+pre-commit

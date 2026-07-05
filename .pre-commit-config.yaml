@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check backend
+        language: system
+        pass_filenames: false
+
+      - id: black
+        name: black
+        entry: black backend
+        language: system
+        pass_filenames: false
+
+      - id: pyright
+        name: pyright
+        entry: pyright backend
+        language: system
+        pass_filenames: false
+
+      - id: compileall
+        name: compileall backend/app
+        entry: python -m compileall backend/app
+        language: system
+        pass_filenames: false
