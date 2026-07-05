@@ -1,4 +1,5 @@
 from backend.app.api import (
+    chat_router,
     database_router,
     document_router,
     health_router,
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_base_router)
     app.include_router(document_router)
     app.include_router(retriever_router)
+    app.include_router(chat_router)
 
     return app
 

@@ -1,4 +1,5 @@
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
+from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.prompts import PromptBuilderFactory, PromptBuildRequest
 from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieveQuery, RetrieverFactory
@@ -42,6 +43,15 @@ def search(request: RetrieveRequest) -> ApiResponse:
             context_text=context_result.context_text,
         )
     )
+    llm = LLMFactory.get_llm()
+    llm_response = llm.chat(
+        LLMRequest(
+            messages=[
+                LLMMessage(role=message.role, content=message.content)
+                for message in prompt_result.messages
+            ]
+        )
+    )
     response_data = {
         **rerank_result.model_dump(),
         "context_text": context_result.context_text,
@@ -49,5 +59,8 @@ def search(request: RetrieveRequest) -> ApiResponse:
         "context_chunks": [chunk.model_dump() for chunk in context_result.chunks],
         "prompt_text": prompt_result.prompt_text,
         "prompt_messages": [message.model_dump() for message in prompt_result.messages],
+        "answer": llm_response.answer,
+        "llm_model": llm_response.model,
+        "llm_usage": llm_response.usage,
     }
     return success(data=RetrieveResponse.model_validate(response_data))

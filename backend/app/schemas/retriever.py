@@ -21,3 +21,6 @@ class RetrieveResponse(BaseModel):
     context_chunks: list[ContextChunk]
     prompt_text: str
     prompt_messages: list[PromptMessage]
+    answer: str | None
+    llm_model: str | None
+    llm_usage: dict | None
