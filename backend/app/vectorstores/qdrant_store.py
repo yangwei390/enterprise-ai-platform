@@ -1,10 +1,9 @@
 import hashlib
 import uuid
 
-from qdrant_client.models import Distance, PointStruct, VectorParams
-
 from backend.app.vector.qdrant_client import get_qdrant_client
 from backend.app.vectorstores.base import BaseVectorStore, VectorRecord, VectorStoreResult
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 
 class QdrantVectorStore(BaseVectorStore):

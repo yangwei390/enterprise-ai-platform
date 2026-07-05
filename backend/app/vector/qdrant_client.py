@@ -1,7 +1,5 @@
-from qdrant_client import QdrantClient
-
 from backend.app.config.settings import settings
-
+from qdrant_client import QdrantClient
 
 _qdrant_client: QdrantClient | None = None
 

@@ -1,9 +1,8 @@
+from backend.app.exceptions.custom import BusinessException
+from backend.app.logger import logger
 from fastapi import FastAPI
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
-
-from backend.app.exceptions.custom import BusinessException
-from backend.app.logger import logger
 
 
 def register_exception_handlers(app: FastAPI) -> None:

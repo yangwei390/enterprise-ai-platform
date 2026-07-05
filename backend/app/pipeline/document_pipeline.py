@@ -61,9 +61,7 @@ class ChunkStep(PipelineStep):
                 or getattr(document, "filename", None),
                 "parser": context.metadata.get("parser"),
                 "cleaner": context.metadata.get("cleaner"),
-                "page_count": context.parse_result.page_count
-                if context.parse_result
-                else None,
+                "page_count": context.parse_result.page_count if context.parse_result else None,
             },
         )
         return context
@@ -86,9 +84,7 @@ class VectorStoreStep(PipelineStep):
 
         chunks_by_index = {}
         if context.chunk_result is not None:
-            chunks_by_index = {
-                chunk.chunk_index: chunk for chunk in context.chunk_result.chunks
-            }
+            chunks_by_index = {chunk.chunk_index: chunk for chunk in context.chunk_result.chunks}
 
         records = [
             VectorRecord(
@@ -100,21 +96,25 @@ class VectorStoreStep(PipelineStep):
                 chunk_index=item.chunk_index,
                 metadata={
                     **item.metadata,
-                    "chunk_size": context.chunk_result.chunk_size
-                    if context.chunk_result
-                    else None,
-                    "chunk_overlap": context.chunk_result.chunk_overlap
-                    if context.chunk_result
-                    else None,
-                    "start_offset": chunks_by_index[item.chunk_index].start_offset
-                    if item.chunk_index in chunks_by_index
-                    else None,
-                    "end_offset": chunks_by_index[item.chunk_index].end_offset
-                    if item.chunk_index in chunks_by_index
-                    else None,
-                    "token_count": chunks_by_index[item.chunk_index].token_count
-                    if item.chunk_index in chunks_by_index
-                    else None,
+                    "chunk_size": context.chunk_result.chunk_size if context.chunk_result else None,
+                    "chunk_overlap": (
+                        context.chunk_result.chunk_overlap if context.chunk_result else None
+                    ),
+                    "start_offset": (
+                        chunks_by_index[item.chunk_index].start_offset
+                        if item.chunk_index in chunks_by_index
+                        else None
+                    ),
+                    "end_offset": (
+                        chunks_by_index[item.chunk_index].end_offset
+                        if item.chunk_index in chunks_by_index
+                        else None
+                    ),
+                    "token_count": (
+                        chunks_by_index[item.chunk_index].token_count
+                        if item.chunk_index in chunks_by_index
+                        else None
+                    ),
                 },
             )
             for item in context.embedding_result.items

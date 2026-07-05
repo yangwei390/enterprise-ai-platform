@@ -1,7 +1,5 @@
-from redis import Redis
-
 from backend.app.config.settings import settings
-
+from redis import Redis
 
 _redis_client: Redis | None = None
 

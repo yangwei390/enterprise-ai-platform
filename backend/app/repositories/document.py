@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
-
 from backend.app.models import Document
 from backend.app.repositories.base import BaseRepository
+from sqlalchemy import select
 
 
 class DocumentRepository(BaseRepository):

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import UploadFile
-
 from backend.app.exceptions import BusinessException
 from backend.app.logger import logger
 from backend.app.models import Document
@@ -12,6 +10,7 @@ from backend.app.repositories.document import DocumentRepository
 from backend.app.schemas.document import DocumentCreate, DocumentUpdate
 from backend.app.services.base import BaseService
 from backend.app.storage import LocalStorageService
+from fastapi import UploadFile
 
 
 class DocumentService(BaseService[DocumentRepository]):

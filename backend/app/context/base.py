@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, Field
-
 from backend.app.rerankers import RerankedChunk
+from pydantic import BaseModel, Field
 
 
 class ContextChunk(BaseModel):

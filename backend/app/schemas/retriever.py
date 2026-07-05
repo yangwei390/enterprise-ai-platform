@@ -1,7 +1,6 @@
-from pydantic import BaseModel
-
 from backend.app.context import ContextChunk
 from backend.app.rerankers import RerankedChunk
+from pydantic import BaseModel
 
 
 class RetrieveRequest(BaseModel):

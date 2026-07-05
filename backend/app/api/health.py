@@ -1,10 +1,8 @@
-from fastapi import APIRouter
-
 from backend.app.config.settings import ConfigResponse, settings
 from backend.app.exceptions import BusinessException
 from backend.app.logger import logger
 from backend.app.schemas import ApiResponse, success
-
+from fastapi import APIRouter
 
 router = APIRouter()
 

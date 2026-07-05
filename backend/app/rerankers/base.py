@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, Field
-
 from backend.app.retrievers import RetrievedChunk
+from pydantic import BaseModel, Field
 
 
 class RerankQuery(BaseModel):

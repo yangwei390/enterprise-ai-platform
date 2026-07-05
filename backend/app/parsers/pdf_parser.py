@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import fitz
-
 from backend.app.parsers.base import BaseParser, ParseResult
 
 
@@ -11,7 +10,10 @@ class PdfParser(BaseParser):
         with fitz.open(file_path) as document:
             page_count = document.page_count
             for page in document:
-                texts.append(page.get_text())
+                text = page.get_text("text")
+                if not isinstance(text, str):
+                    text = str(text)
+                texts.append(text)
 
         return ParseResult(
             text="\n".join(texts),

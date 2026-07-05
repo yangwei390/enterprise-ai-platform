@@ -4,9 +4,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import UploadFile
-
 from backend.app.config.settings import PROJECT_ROOT, settings
+from fastapi import UploadFile
 
 
 class LocalStorageService:

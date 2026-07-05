@@ -1,6 +1,3 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-
 from backend.app.db.session import get_db
 from backend.app.repositories.knowledge_base import KnowledgeBaseRepository
 from backend.app.schemas import ApiResponse, success
@@ -11,7 +8,8 @@ from backend.app.schemas.knowledge_base import (
     KnowledgeBaseUpdate,
 )
 from backend.app.services.knowledge_base import KnowledgeBaseService
-
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 

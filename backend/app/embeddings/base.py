@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, Field
-
 from backend.app.chunkers import Chunk
+from pydantic import BaseModel, Field
 
 
 class EmbeddingItem(BaseModel):
@@ -23,6 +22,9 @@ class EmbeddingResult(BaseModel):
 
 
 class BaseEmbedding(ABC):
+    model_name: str
+    dimension: int
+
     @abstractmethod
     def embed_text(self, text: str) -> list[float]:
         raise NotImplementedError

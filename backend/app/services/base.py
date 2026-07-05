@@ -1,6 +1,5 @@
 from typing import Generic, TypeVar
 
-
 RepositoryType = TypeVar("RepositoryType")
 
 

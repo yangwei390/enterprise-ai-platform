@@ -1,11 +1,9 @@
-from fastapi import APIRouter
-
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
 from backend.app.rerankers import RerankerFactory, RerankQuery
-from backend.app.retrievers import RetrieverFactory, RetrieveQuery
+from backend.app.retrievers import RetrieveQuery, RetrieverFactory
 from backend.app.schemas import ApiResponse, success
 from backend.app.schemas.retriever import RetrieveRequest, RetrieveResponse
-
+from fastapi import APIRouter
 
 router = APIRouter()
 

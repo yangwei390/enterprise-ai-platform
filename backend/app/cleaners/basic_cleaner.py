@@ -27,7 +27,5 @@ class BasicTextCleaner(BaseCleaner):
 
     def _remove_control_chars(self, text: str) -> str:
         return "".join(
-            char
-            for char in text
-            if char in {"\n", "\t"} or unicodedata.category(char) != "Cc"
+            char for char in text if char in {"\n", "\t"} or unicodedata.category(char) != "Cc"
         )

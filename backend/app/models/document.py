@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import TYPE_CHECKING
 
 from backend.app.models.base import Base
 from backend.app.models.mixins import SoftDeleteMixin, TimestampMixin
+from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+if TYPE_CHECKING:
+    from .knowledge_base import KnowledgeBase
 
 
 class Document(TimestampMixin, SoftDeleteMixin, Base):
@@ -26,7 +30,6 @@ class Document(TimestampMixin, SoftDeleteMixin, Base):
     parse_status: Mapped[str] = mapped_column(String(64), default="pending", nullable=False)
     parse_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    knowledge_base: Mapped["KnowledgeBase"] = relationship(
-        "KnowledgeBase",
+    knowledge_base: Mapped[KnowledgeBase] = relationship(
         back_populates="documents",
     )

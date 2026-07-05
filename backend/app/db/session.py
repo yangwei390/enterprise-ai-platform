@@ -1,10 +1,9 @@
 from collections.abc import Generator
 
+from backend.app.config.settings import settings
 from sqlalchemy import create_engine as sqlalchemy_create_engine
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session, sessionmaker
-
-from backend.app.config.settings import settings
 
 
 def create_engine() -> Engine:

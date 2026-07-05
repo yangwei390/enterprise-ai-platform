@@ -1,11 +1,10 @@
 import requests
-
 from backend.app.config.settings import settings
 from backend.app.embeddings import EmbeddingFactory
 from backend.app.exceptions import BusinessException
 from backend.app.logger import logger
-from backend.app.vectorstores import QdrantVectorStore
 from backend.app.retrievers.base import BaseRetriever, RetrievedChunk, RetrieveQuery, RetrieveResult
+from backend.app.vectorstores import QdrantVectorStore
 
 
 class QdrantRetriever(BaseRetriever):

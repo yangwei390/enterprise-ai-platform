@@ -3,14 +3,10 @@ from pathlib import Path
 
 from loguru import logger
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_FILE = LOG_DIR / "app.log"
-LOG_FORMAT = (
-    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | "
-    "{file}:{line} | {message}"
-)
+LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | " "{file}:{line} | {message}"
 
 
 def setup_logger() -> None:

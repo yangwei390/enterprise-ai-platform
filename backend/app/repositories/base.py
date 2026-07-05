@@ -3,7 +3,6 @@ from typing import Any, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-
 ModelType = TypeVar("ModelType")
 
 

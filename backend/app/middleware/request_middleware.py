@@ -2,9 +2,8 @@ import time
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
-
 from backend.app.logger import logger
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
 class RequestLogMiddleware:

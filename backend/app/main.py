@@ -1,5 +1,3 @@
-from fastapi import FastAPI
-
 from backend.app.api import (
     database_router,
     document_router,
@@ -13,6 +11,7 @@ from backend.app.config.settings import settings
 from backend.app.exceptions import register_exception_handlers
 from backend.app.logger import logger, setup_logger
 from backend.app.middleware import RequestLogMiddleware
+from fastapi import FastAPI
 
 
 def create_app() -> FastAPI:

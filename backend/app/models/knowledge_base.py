@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy import String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import TYPE_CHECKING
 
 from backend.app.models.base import Base
 from backend.app.models.mixins import SoftDeleteMixin, TimestampMixin
+from sqlalchemy import String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+if TYPE_CHECKING:
+    from .document import Document
 
 
 class KnowledgeBase(TimestampMixin, SoftDeleteMixin, Base):
@@ -16,7 +20,7 @@ class KnowledgeBase(TimestampMixin, SoftDeleteMixin, Base):
     embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     vector_store: Mapped[str] = mapped_column(String(64), default="qdrant", nullable=False)
 
-    documents: Mapped[list["Document"]] = relationship(
+    documents: Mapped[list[Document]] = relationship(
         "Document",
         back_populates="knowledge_base",
     )
