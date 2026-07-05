@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from backend.app.retrievers import RetrievedChunk
+from backend.app.rerankers import RerankedChunk
 
 
 class RetrieveRequest(BaseModel):
@@ -13,4 +13,4 @@ class RetrieveResponse(BaseModel):
     query: str
     top_k: int
     total: int
-    chunks: list[RetrievedChunk]
+    chunks: list[RerankedChunk]
