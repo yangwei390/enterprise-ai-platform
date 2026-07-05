@@ -12,7 +12,7 @@ from backend.app.logger import logger
 class DashScopeClient(BaseLLMClient):
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
-        client_kwargs = dict[str, Any] = {
+        client_kwargs: dict[str, Any] = {
             "api_key": config.api_key,
             "timeout": config.timeout,
         }
