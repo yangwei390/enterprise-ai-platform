@@ -21,31 +21,30 @@ class DashScopeClient(BaseLLMClient):
 
         self.client = OpenAI(**client_kwargs)
 
+    def chat(self, request: LLMRequest) -> LLMResponse:
+        try:
+            create_kwargs: dict[str, Any] = {
+                "model": self.config.model,
+                "input": [
+                    {"role": message.role, "content": message.content}
+                    for message in request.messages
+                ],
+                "temperature": request.temperature,
+            }
+            if self.config.max_tokens is not None:
+                create_kwargs["max_output_tokens"] = self.config.max_tokens
 
-def chat(self, request: LLMRequest) -> LLMResponse:
-    try:
-        create_kwargs: dict[str, Any] = {
-            "model": self.config.model,
-            "input": [
-                {"role": message.role, "content": message.content}
-                for message in request.messages
-            ],
-            "temperature": request.temperature,
-        }
-        if self.config.max_tokens is not None:
-            create_kwargs["max_output_tokens"] = self.config.max_tokens
-
-        response = self.client.responses.create(**create_kwargs)
-        return LLMResponse(
-            answer=response.output_text or "",
-            model=self.config.model,
-            usage={},
-            metadata={
-                "provider": "dashscope",
-                "client": "dashscope",
-                "response_id": response.id,
-            },
-        )
-    except Exception as exc:
-        logger.exception("dashscope model call failed")
-        raise BusinessException(50010, "dashscope模型调用失败") from exc
+            response = self.client.responses.create(**create_kwargs)
+            return LLMResponse(
+                answer=response.output_text or "",
+                model=self.config.model,
+                usage={},
+                metadata={
+                    "provider": "dashscope",
+                    "client": "dashscope",
+                    "response_id": response.id,
+                },
+            )
+        except Exception as exc:
+            logger.exception("dashscope model call failed")
+            raise BusinessException(50010, "dashscope模型调用失败") from exc
