@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from backend.app.context import ContextBuilderFactory, ContextBuildRequest
 from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory, RetrieveQuery
 from backend.app.schemas import ApiResponse, success
@@ -27,4 +28,17 @@ def search(request: RetrieveRequest) -> ApiResponse:
             top_k=request.top_k,
         )
     )
-    return success(data=RetrieveResponse.model_validate(rerank_result.model_dump()))
+    context_builder = ContextBuilderFactory.get_builder()
+    context_result = context_builder.build(
+        ContextBuildRequest(
+            query=request.query,
+            chunks=rerank_result.chunks,
+        )
+    )
+    response_data = {
+        **rerank_result.model_dump(),
+        "context_text": context_result.context_text,
+        "context_total_chars": context_result.total_chars,
+        "context_chunks": [chunk.model_dump() for chunk in context_result.chunks],
+    }
+    return success(data=RetrieveResponse.model_validate(response_data))

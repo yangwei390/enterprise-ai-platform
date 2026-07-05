@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+from backend.app.context import ContextChunk
 from backend.app.rerankers import RerankedChunk
 
 
@@ -14,3 +15,6 @@ class RetrieveResponse(BaseModel):
     top_k: int
     total: int
     chunks: list[RerankedChunk]
+    context_text: str
+    context_total_chars: int
+    context_chunks: list[ContextChunk]
