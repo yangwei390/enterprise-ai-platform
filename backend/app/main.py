@@ -7,6 +7,7 @@ from backend.app.api import (
     knowledge_base_router,
     qdrant_router,
     redis_router,
+    retriever_router,
 )
 from backend.app.config.settings import settings
 from backend.app.exceptions import register_exception_handlers
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(qdrant_router)
     app.include_router(knowledge_base_router)
     app.include_router(document_router)
+    app.include_router(retriever_router)
 
     return app
 

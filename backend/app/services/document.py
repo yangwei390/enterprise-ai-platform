@@ -86,7 +86,15 @@ class DocumentService(BaseService[DocumentRepository]):
         parse_result = context.parse_result
         clean_result = context.clean_result
         chunk_result = context.chunk_result
-        if parse_result is None or clean_result is None or chunk_result is None:
+        embedding_result = context.embedding_result
+        vector_store_result = context.vector_store_result
+        if (
+            parse_result is None
+            or clean_result is None
+            or chunk_result is None
+            or embedding_result is None
+            or vector_store_result is None
+        ):
             logger.warning("Document pipeline result is incomplete")
             raise BusinessException(41003, "文档解析失败")
 
@@ -102,6 +110,16 @@ class DocumentService(BaseService[DocumentRepository]):
                 "metadata": chunk.metadata,
             }
             for chunk in chunk_result.chunks[:3]
+        ]
+        embeddings_preview = [
+            {
+                "chunk_index": item.chunk_index,
+                "document_id": item.document_id,
+                "knowledge_base_id": item.knowledge_base_id,
+                "dimension": len(item.vector),
+                "preview": item.vector[:5],
+            }
+            for item in embedding_result.items[:3]
         ]
 
         logger.info("Parse document succeeded")
@@ -119,6 +137,13 @@ class DocumentService(BaseService[DocumentRepository]):
             "chunk_overlap": chunk_result.chunk_overlap,
             "total_chunks": chunk_result.total_chunks,
             "chunks_preview": chunks_preview,
+            "embedding_model": embedding_result.model_name,
+            "embedding_dimension": embedding_result.dimension,
+            "total_embeddings": embedding_result.total_items,
+            "embeddings_preview": embeddings_preview,
+            "vector_collection": vector_store_result.collection_name,
+            "vector_total_records": vector_store_result.total_records,
+            "vector_ids_preview": vector_store_result.ids[:5],
         }
 
     def get(self, id: int) -> Document:

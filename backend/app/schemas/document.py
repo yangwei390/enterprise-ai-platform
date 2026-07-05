@@ -38,6 +38,14 @@ class DocumentListResponse(BaseModel):
     total: int
 
 
+class EmbeddingPreview(BaseModel):
+    chunk_index: int
+    document_id: int | None
+    knowledge_base_id: int | None
+    dimension: int
+    preview: list[float]
+
+
 class DocumentParseResponse(BaseModel):
     document_id: int
     text_length: int
@@ -52,3 +60,10 @@ class DocumentParseResponse(BaseModel):
     chunk_overlap: int | None
     total_chunks: int
     chunks_preview: list[dict]
+    embedding_model: str | None
+    embedding_dimension: int | None
+    total_embeddings: int
+    embeddings_preview: list[EmbeddingPreview]
+    vector_collection: str | None
+    vector_total_records: int | None
+    vector_ids_preview: list[str]
