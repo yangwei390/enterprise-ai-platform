@@ -14,15 +14,14 @@ class QdrantRetriever(BaseRetriever):
         query_vector = embedding.embed_text(query.query)
         query_filter = self._build_filter(query.knowledge_base_id)
 
-        response = get_qdrant_client().query_points(
+        points = get_qdrant_client().search(
             collection_name=self.collection_name,
-            query=query_vector,
+            query_vector=query_vector,
             query_filter=query_filter,
             limit=query.top_k,
             with_payload=True,
             with_vectors=False,
         )
-        points = getattr(response, "points", [])
         chunks = [self._to_retrieved_chunk(point) for point in points]
 
         return RetrieveResult(
