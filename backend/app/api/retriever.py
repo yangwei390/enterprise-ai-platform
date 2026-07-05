@@ -16,6 +16,7 @@ def search(request: RetrieveRequest) -> ApiResponse:
             query=request.query,
             knowledge_base_id=request.knowledge_base_id,
             top_k=request.top_k,
+            score_threshold=request.score_threshold,
         )
     )
     reranker = RerankerFactory.get_reranker()

@@ -20,16 +20,23 @@ class QdrantRetriever(BaseRetriever):
             limit=query.top_k,
         )
         chunks = [self._to_retrieved_chunk(point) for point in points]
+        before_filter_total = len(chunks)
+        if query.score_threshold is not None:
+            chunks = [chunk for chunk in chunks if chunk.score >= query.score_threshold]
+        after_filter_total = len(chunks)
 
         return RetrieveResult(
             query=query.query,
             top_k=query.top_k,
-            total=len(chunks),
+            total=after_filter_total,
             chunks=chunks,
             metadata={
                 "vector_store": "qdrant",
                 "collection_name": self.collection_name,
                 "embedding_model": embedding.model_name,
+                "score_threshold": query.score_threshold,
+                "before_filter_total": before_filter_total,
+                "after_filter_total": after_filter_total,
             },
         )
 

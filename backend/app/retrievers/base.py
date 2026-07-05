@@ -7,6 +7,7 @@ class RetrieveQuery(BaseModel):
     query: str
     knowledge_base_id: int | None = None
     top_k: int = 5
+    score_threshold: float | None = None
 
 
 class RetrievedChunk(BaseModel):
