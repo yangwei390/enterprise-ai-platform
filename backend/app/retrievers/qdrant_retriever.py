@@ -1,4 +1,5 @@
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.http.api_client import jsonable_encoder
+from qdrant_client.models import FieldCondition, Filter, MatchValue, SearchRequest
 
 from backend.app.embeddings import EmbeddingFactory
 from backend.app.vector.qdrant_client import get_qdrant_client
@@ -14,13 +15,10 @@ class QdrantRetriever(BaseRetriever):
         query_vector = embedding.embed_text(query.query)
         query_filter = self._build_filter(query.knowledge_base_id)
 
-        points = get_qdrant_client().search(
-            collection_name=self.collection_name,
+        points = self._search_points(
             query_vector=query_vector,
             query_filter=query_filter,
             limit=query.top_k,
-            with_payload=True,
-            with_vectors=False,
         )
         chunks = [self._to_retrieved_chunk(point) for point in points]
 
@@ -60,3 +58,30 @@ class QdrantRetriever(BaseRetriever):
             chunk_index=payload.get("chunk_index"),
             metadata=payload.get("metadata") or {},
         )
+
+    def _search_points(
+        self,
+        query_vector: list[float],
+        query_filter: Filter | None,
+        limit: int,
+    ) -> list:
+        search_request = SearchRequest(
+            vector=query_vector,
+            filter=query_filter,
+            limit=limit,
+            with_payload=True,
+            with_vector=False,
+        )
+        response = get_qdrant_client().http.points_api.api_client.request(
+            type_=object,
+            method="POST",
+            url="/collections/{collection_name}/points/search",
+            path_params={"collection_name": self.collection_name},
+            headers={"Content-Type": "application/json"},
+            content=jsonable_encoder(search_request),
+        )
+
+        if isinstance(response, dict):
+            return response.get("result", [])
+
+        return getattr(response, "result", [])
