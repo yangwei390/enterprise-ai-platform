@@ -1,7 +1,9 @@
-from qdrant_client.models import FieldCondition, Filter, MatchValue, SearchRequest
+import requests
 
+from backend.app.config.settings import settings
 from backend.app.embeddings import EmbeddingFactory
-from backend.app.vector.qdrant_client import get_qdrant_client
+from backend.app.exceptions import BusinessException
+from backend.app.logger import logger
 from backend.app.vectorstores import QdrantVectorStore
 from backend.app.retrievers.base import BaseRetriever, RetrievedChunk, RetrieveQuery, RetrieveResult
 
@@ -12,11 +14,10 @@ class QdrantRetriever(BaseRetriever):
     def retrieve(self, query: RetrieveQuery) -> RetrieveResult:
         embedding = EmbeddingFactory.get_embedding()
         query_vector = embedding.embed_text(query.query)
-        query_filter = self._build_filter(query.knowledge_base_id)
 
         points = self._search_points(
             query_vector=query_vector,
-            query_filter=query_filter,
+            knowledge_base_id=query.knowledge_base_id,
             limit=query.top_k,
         )
         chunks = [self._to_retrieved_chunk(point) for point in points]
@@ -33,18 +34,20 @@ class QdrantRetriever(BaseRetriever):
             },
         )
 
-    def _build_filter(self, knowledge_base_id: int | None) -> Filter | None:
+    def _build_filter(self, knowledge_base_id: int | None) -> dict | None:
         if knowledge_base_id is None:
             return None
 
-        return Filter(
-            must=[
-                FieldCondition(
-                    key="knowledge_base_id",
-                    match=MatchValue(value=knowledge_base_id),
-                )
+        return {
+            "must": [
+                {
+                    "key": "knowledge_base_id",
+                    "match": {
+                        "value": knowledge_base_id,
+                    },
+                }
             ]
-        )
+        }
 
     def _to_retrieved_chunk(self, point) -> RetrievedChunk:
         if isinstance(point, dict):
@@ -69,26 +72,29 @@ class QdrantRetriever(BaseRetriever):
     def _search_points(
         self,
         query_vector: list[float],
-        query_filter: Filter | None,
+        knowledge_base_id: int | None,
         limit: int,
     ) -> list:
-        search_request = SearchRequest(
-            vector=query_vector,
-            filter=query_filter,
-            limit=limit,
-            with_payload=True,
-            with_vector=False,
-        )
-        response = get_qdrant_client().http.points_api.api_client.request(
-            type_=object,
-            method="POST",
-            url="/collections/{collection_name}/points/search",
-            path_params={"collection_name": self.collection_name},
-            headers={"Content-Type": "application/json"},
-            content=search_request.model_dump(mode="json", exclude_none=True),
-        )
+        body = {
+            "vector": query_vector,
+            "limit": limit,
+            "with_payload": True,
+            "with_vector": False,
+        }
+        query_filter = self._build_filter(knowledge_base_id)
+        if query_filter is not None:
+            body["filter"] = query_filter
 
-        if isinstance(response, dict):
-            return response.get("result", [])
+        url = (
+            f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
+            f"/collections/{self.collection_name}/points/search"
+        )
+        response = requests.post(url, json=body, timeout=30)
+        if response.status_code != 200:
+            logger.error(
+                f"Qdrant search failed | status_code={response.status_code} | "
+                f"response={response.text}"
+            )
+            raise BusinessException(50004, "向量检索失败")
 
-        return getattr(response, "result", [])
+        return response.json().get("result", [])

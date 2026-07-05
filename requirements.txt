@@ -28,6 +28,7 @@ redis
 # Vector Database
 # =========================
 qdrant-client
+requests
 
 # =========================
 # LLM
