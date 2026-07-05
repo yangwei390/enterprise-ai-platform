@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
@@ -58,6 +59,10 @@ class QdrantVectorStore(BaseVectorStore):
         )
 
     def _build_point_id(self, record: VectorRecord) -> str:
+        business_key = self._build_business_key(record)
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, business_key))
+
+    def _build_business_key(self, record: VectorRecord) -> str:
         document_id = record.document_id if record.document_id is not None else "unknown"
         chunk_index = record.chunk_index if record.chunk_index is not None else 0
         text_hash = hashlib.sha256(record.text.encode("utf-8")).hexdigest()[:8]
@@ -74,6 +79,7 @@ class QdrantVectorStore(BaseVectorStore):
         }
 
         return {
+            "business_key": self._build_business_key(record),
             "text": payload_text,
             "document_id": record.document_id,
             "knowledge_base_id": record.knowledge_base_id,
