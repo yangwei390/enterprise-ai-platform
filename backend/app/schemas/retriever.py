@@ -1,7 +1,7 @@
 from backend.app.context import ContextChunk
 from backend.app.prompts import PromptMessage
 from backend.app.rerankers import RerankedChunk
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RetrieveRequest(BaseModel):
@@ -9,6 +9,7 @@ class RetrieveRequest(BaseModel):
     knowledge_base_id: int | None = None
     top_k: int = 5
     score_threshold: float | None = None
+    metadata_filter: dict | None = None
 
 
 class RetrieveResponse(BaseModel):
@@ -24,3 +25,4 @@ class RetrieveResponse(BaseModel):
     answer: str | None
     llm_model: str | None
     llm_usage: dict | None
+    metadata: dict = Field(default_factory=dict)

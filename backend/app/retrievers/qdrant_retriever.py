@@ -17,6 +17,7 @@ class QdrantRetriever(BaseRetriever):
         points = self._search_points(
             query_vector=query_vector,
             knowledge_base_id=query.knowledge_base_id,
+            metadata_filter=query.metadata_filter,
             limit=query.top_k,
         )
         chunks = [self._to_retrieved_chunk(point) for point in points]
@@ -37,23 +38,42 @@ class QdrantRetriever(BaseRetriever):
                 "score_threshold": query.score_threshold,
                 "before_filter_total": before_filter_total,
                 "after_filter_total": after_filter_total,
+                "metadata_filter": query.metadata_filter,
+                "metadata_filter_applied": bool(query.metadata_filter),
             },
         )
 
-    def _build_filter(self, knowledge_base_id: int | None) -> dict | None:
-        if knowledge_base_id is None:
-            return None
+    def _build_filter(
+        self,
+        knowledge_base_id: int | None,
+        metadata_filter: dict | None,
+    ) -> dict | None:
+        must_conditions = []
 
-        return {
-            "must": [
+        if knowledge_base_id is not None:
+            must_conditions.append(
                 {
                     "key": "knowledge_base_id",
                     "match": {
                         "value": knowledge_base_id,
                     },
                 }
-            ]
-        }
+            )
+
+        for key, value in (metadata_filter or {}).items():
+            must_conditions.append(
+                {
+                    "key": f"metadata.{key}",
+                    "match": {
+                        "value": value,
+                    },
+                }
+            )
+
+        if not must_conditions:
+            return None
+
+        return {"must": must_conditions}
 
     def _to_retrieved_chunk(self, point) -> RetrievedChunk:
         if isinstance(point, dict):
@@ -79,6 +99,7 @@ class QdrantRetriever(BaseRetriever):
         self,
         query_vector: list[float],
         knowledge_base_id: int | None,
+        metadata_filter: dict | None,
         limit: int,
     ) -> list:
         body = {
@@ -87,7 +108,10 @@ class QdrantRetriever(BaseRetriever):
             "with_payload": True,
             "with_vector": False,
         }
-        query_filter = self._build_filter(knowledge_base_id)
+        query_filter = self._build_filter(
+            knowledge_base_id=knowledge_base_id,
+            metadata_filter=metadata_filter,
+        )
         if query_filter is not None:
             body["filter"] = query_filter
 

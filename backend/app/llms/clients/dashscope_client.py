@@ -1,12 +1,11 @@
 from typing import Any
 
-from openai import OpenAI
-
 from backend.app.exceptions import BusinessException
 from backend.app.llms import LLMRequest, LLMResponse
 from backend.app.llms.clients import BaseLLMClient
 from backend.app.llms.config import LLMConfig
 from backend.app.logger import logger
+from openai import OpenAI
 
 
 class DashScopeClient(BaseLLMClient):

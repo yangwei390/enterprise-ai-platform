@@ -15,6 +15,7 @@ class ChatService:
                 knowledge_base_id=request.knowledge_base_id,
                 top_k=request.top_k,
                 score_threshold=request.score_threshold,
+                metadata_filter=request.metadata_filter,
             )
         )
 
@@ -48,6 +49,8 @@ class ChatService:
                     "reranked_total": rerank_result.total,
                     "context_total_chunks": context_result.total_chunks,
                     "context_total_chars": context_result.total_chars,
+                    "metadata_filter": request.metadata_filter,
+                    "metadata_filter_applied": bool(request.metadata_filter),
                     "guardrail_triggered": True,
                     "guardrail_reason": "empty_context",
                     "llm_called": False,
@@ -96,6 +99,8 @@ class ChatService:
                 "reranked_total": rerank_result.total,
                 "context_total_chunks": context_result.total_chunks,
                 "context_total_chars": context_result.total_chars,
+                "metadata_filter": request.metadata_filter,
+                "metadata_filter_applied": bool(request.metadata_filter),
                 "guardrail_triggered": False,
                 "llm_called": True,
                 "llm_usage": llm_response.usage,
