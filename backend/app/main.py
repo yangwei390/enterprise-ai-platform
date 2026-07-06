@@ -18,6 +18,7 @@ from backend.app.exceptions import register_exception_handlers
 from backend.app.logger import logger, setup_logger
 from backend.app.middleware import RequestLogMiddleware
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 
 def create_app() -> FastAPI:
@@ -29,6 +30,18 @@ def create_app() -> FastAPI:
     logger.info(f"Version: {settings.APP_VERSION}")
 
     register_exception_handlers(app)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://192.168.0.121:5173",
+            "http://192.168.0.111:5173",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.add_middleware(RequestLogMiddleware)
     app.include_router(agent_router)
     app.include_router(health_router)
