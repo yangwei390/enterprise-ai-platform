@@ -9,6 +9,7 @@ from backend.app.api import (
     redis_router,
     retriever_router,
     tools_router,
+    workflow_router,
 )
 from backend.app.config.settings import settings
 from backend.app.exceptions import register_exception_handlers
@@ -35,6 +36,7 @@ def create_app() -> FastAPI:
     app.include_router(document_router)
     app.include_router(retriever_router)
     app.include_router(tools_router)
+    app.include_router(workflow_router)
     app.include_router(conversation_router)
     app.include_router(chat_router)
 
