@@ -3,14 +3,15 @@ from backend.app.context import ContextBuilderFactory, ContextBuildRequest
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.prompts import PromptBuilderFactory, PromptBuildRequest
 from backend.app.rerankers import RerankerFactory, RerankQuery
-from backend.app.retrievers import RetrieveQuery, RetrieverFactory
+from backend.app.retrievers import RetrieverFactory
+from backend.app.retrievers.hybrid import HybridRetrieveQuery
 
 
 class ChatService:
     def chat(self, request: ChatRequest) -> ChatResponse:
-        retriever = RetrieverFactory.get_retriever()
+        retriever = RetrieverFactory.get_hybrid_retriever()
         retrieve_result = retriever.retrieve(
-            RetrieveQuery(
+            HybridRetrieveQuery(
                 query=request.query,
                 knowledge_base_id=request.knowledge_base_id,
                 top_k=request.top_k,
@@ -54,6 +55,7 @@ class ChatService:
                     "guardrail_triggered": True,
                     "guardrail_reason": "empty_context",
                     "llm_called": False,
+                    **retrieve_result.metadata,
                 },
             )
 
@@ -104,5 +106,6 @@ class ChatService:
                 "guardrail_triggered": False,
                 "llm_called": True,
                 "llm_usage": llm_response.usage,
+                **retrieve_result.metadata,
             },
         )

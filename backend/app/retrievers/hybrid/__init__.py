@@ -2,11 +2,11 @@ from backend.app.retrievers.hybrid.base import HybridRetrieveQuery, HybridRetrie
 from backend.app.retrievers.hybrid.dense_retriever import DenseRetriever
 from backend.app.retrievers.hybrid.fusion import rrf_fusion
 from backend.app.retrievers.hybrid.hybrid_retriever import HybridRetriever
-from backend.app.retrievers.hybrid.sparse_retriever import DummySparseRetriever
+from backend.app.retrievers.hybrid.sparse_retriever import BM25SparseRetriever
 
 __all__ = [
+    "BM25SparseRetriever",
     "DenseRetriever",
-    "DummySparseRetriever",
     "HybridRetrieveQuery",
     "HybridRetrieveResult",
     "HybridRetriever",
