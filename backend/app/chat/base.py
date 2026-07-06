@@ -20,10 +20,21 @@ class ChatSource(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class CitationItem(BaseModel):
+    source: str | None
+    document_id: int | None
+    knowledge_base_id: int | None
+    chunk_index: int | None
+    score: float | None
+    text_preview: str | None
+    metadata: dict = Field(default_factory=dict)
+
+
 class ChatResponse(BaseModel):
     query: str
     answer: str
     sources: list[ChatSource]
+    citations: list[CitationItem] = Field(default_factory=list)
     context_text: str
     prompt_text: str
     llm_model: str | None = None
