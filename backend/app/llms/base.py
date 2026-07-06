@@ -15,9 +15,16 @@ class LLMRequest(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class LLMToolCall(BaseModel):
+    name: str
+    arguments: dict = Field(default_factory=dict)
+
+
 class LLMResponse(BaseModel):
     answer: str
     model: str
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
+    finish_reason: str | None = None
     usage: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
 

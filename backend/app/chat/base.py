@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
     top_k: int = 5
     score_threshold: float | None = None
     metadata_filter: dict | None = None
+    enable_tools: bool = False
 
 
 class ChatSource(BaseModel):

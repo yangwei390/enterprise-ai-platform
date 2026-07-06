@@ -7,6 +7,7 @@ from backend.app.api.knowledge_base import router as knowledge_base_router
 from backend.app.api.qdrant import router as qdrant_router
 from backend.app.api.redis import router as redis_router
 from backend.app.api.retriever import router as retriever_router
+from backend.app.api.tools import router as tools_router
 
 __all__ = [
     "chat_router",
@@ -18,4 +19,5 @@ __all__ = [
     "qdrant_router",
     "redis_router",
     "retriever_router",
+    "tools_router",
 ]

@@ -10,6 +10,7 @@ from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory
 from backend.app.retrievers.hybrid import HybridRetrieveQuery
 from backend.app.schemas.conversation import ConversationCreate
+from backend.app.tools import ToolCall, ToolExecutor, get_tool_registry
 
 
 class ChatService:
@@ -89,6 +90,8 @@ class ChatService:
                 "guardrail_triggered": True,
                 "guardrail_reason": "empty_context",
                 "llm_called": False,
+                "tools_enabled": request.enable_tools,
+                "tool_results": [],
                 "history_loaded_count": history_loaded_count,
                 **retrieve_result.metadata,
             }
@@ -118,13 +121,24 @@ class ChatService:
             )
         )
 
+        tool_definitions = []
+        if request.enable_tools:
+            tool_definitions = get_tool_registry().get_tool_definitions()
+
         llm = LLMFactory.get_llm()
         llm_response = llm.chat(
             LLMRequest(
                 messages=[
                     LLMMessage(role=message.role, content=message.content)
                     for message in prompt_result.messages
-                ]
+                ],
+                metadata={
+                    "tools_enabled": request.enable_tools,
+                    "tools": [
+                        tool_definition.model_dump()
+                        for tool_definition in tool_definitions
+                    ],
+                },
             )
         )
 
@@ -176,12 +190,31 @@ class ChatService:
             "llm_called": True,
             "llm_usage": llm_response.usage,
             "llm_metadata": llm_response.metadata,
+            "tools_enabled": request.enable_tools,
+            "tool_results": [],
             "history_loaded_count": history_loaded_count,
             **retrieve_result.metadata,
         }
+
+        answer = llm_response.answer
+        if request.enable_tools and llm_response.tool_calls:
+            tool_results = [
+                ToolExecutor()
+                .execute(
+                    ToolCall(
+                        name=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+                )
+                .model_dump()
+                for tool_call in llm_response.tool_calls
+            ]
+            metadata["tool_results"] = tool_results
+            answer = self._build_tool_result_answer(tool_results)
+
         assistant_message = self._save_assistant_message(
             conversation_id=conversation_id,
-            content=llm_response.answer,
+            content=answer,
             metadata={
                 **metadata,
                 "sources": [source.model_dump() for source in sources],
@@ -191,7 +224,7 @@ class ChatService:
 
         return ChatResponse(
             query=request.query,
-            answer=llm_response.answer,
+            answer=answer,
             conversation_id=conversation_id,
             message_id=assistant_message.id if assistant_message else None,
             sources=sources,
@@ -239,3 +272,15 @@ class ChatService:
     def _build_conversation_title(self, query: str) -> str:
         title = query.strip()[:20]
         return title or "New Chat"
+
+    def _build_tool_result_answer(self, tool_results: list[dict]) -> str:
+        if not tool_results:
+            return ""
+
+        lines = []
+        for result in tool_results:
+            if result.get("success"):
+                lines.append(f"{result.get('name')}: {result.get('result')}")
+            else:
+                lines.append(f"{result.get('name')}: {result.get('error')}")
+        return "\n".join(lines)
