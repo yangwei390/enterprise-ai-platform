@@ -1,3 +1,4 @@
+from backend.app.api.agent import router as agent_router
 from backend.app.api.chat import router as chat_router
 from backend.app.api.conversation import router as conversation_router
 from backend.app.api.database import router as database_router
@@ -12,6 +13,7 @@ from backend.app.api.workflow import router as workflow_router
 
 __all__ = [
     "chat_router",
+    "agent_router",
     "conversation_router",
     "database_router",
     "document_router",

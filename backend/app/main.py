@@ -1,4 +1,5 @@
 from backend.app.api import (
+    agent_router,
     chat_router,
     conversation_router,
     database_router,
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.add_middleware(RequestLogMiddleware)
+    app.include_router(agent_router)
     app.include_router(health_router)
     app.include_router(database_router)
     app.include_router(redis_router)
