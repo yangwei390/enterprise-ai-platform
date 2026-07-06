@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     query: str
+    conversation_id: int | None = None
     knowledge_base_id: int | None = None
     top_k: int = 5
     score_threshold: float | None = None
@@ -33,6 +34,8 @@ class CitationItem(BaseModel):
 class ChatResponse(BaseModel):
     query: str
     answer: str
+    conversation_id: int | None = None
+    message_id: int | None = None
     sources: list[ChatSource]
     citations: list[CitationItem] = Field(default_factory=list)
     context_text: str

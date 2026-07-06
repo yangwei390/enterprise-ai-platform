@@ -1,4 +1,5 @@
 from backend.app.api.chat import router as chat_router
+from backend.app.api.conversation import router as conversation_router
 from backend.app.api.database import router as database_router
 from backend.app.api.document import router as document_router
 from backend.app.api.health import router as health_router
@@ -9,6 +10,7 @@ from backend.app.api.retriever import router as retriever_router
 
 __all__ = [
     "chat_router",
+    "conversation_router",
     "database_router",
     "document_router",
     "health_router",
