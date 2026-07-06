@@ -26,6 +26,8 @@ class ConversationResponse(BaseModel):
     id: int
     title: str | None
     knowledge_base_id: int | None
+    summary: str | None = None
+    summary_updated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

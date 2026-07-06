@@ -4,6 +4,7 @@ from backend.app.context.compression import SimpleContextCompressor
 from backend.app.conversations import ConversationService
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.logger import logger
+from backend.app.memory import MemoryContext, MemoryService
 from backend.app.models import Message
 from backend.app.prompts import PromptBuilderFactory, PromptBuildRequest
 from backend.app.query import SimpleQueryRewriter
@@ -20,6 +21,7 @@ class ChatService:
 
     def chat(self, request: ChatRequest) -> ChatResponse:
         conversation_id, history_loaded_count = self._prepare_conversation(request)
+        memory_context = self._build_memory_context(request, conversation_id)
 
         rewrite_result = SimpleQueryRewriter().rewrite(request.query)
 
@@ -93,6 +95,7 @@ class ChatService:
                 "llm_called": False,
                 "tools_enabled": request.enable_tools,
                 "tool_results": [],
+                **self._build_memory_metadata(request, memory_context),
                 "history_loaded_count": history_loaded_count,
                 **retrieve_result.metadata,
             }
@@ -101,6 +104,7 @@ class ChatService:
                 content=answer,
                 metadata=metadata,
             )
+            self._update_memory_summary(request, conversation_id)
             return ChatResponse(
                 query=request.query,
                 answer=answer,
@@ -135,6 +139,7 @@ class ChatService:
             LLMMessage(role=message.role, content=message.content)
             for message in prompt_result.messages
         ]
+        prompt_messages = self._inject_memory_messages(prompt_messages, memory_context)
         llm_request = LLMRequest(
             messages=prompt_messages,
             tools=function_tools if request.enable_tools else [],
@@ -198,6 +203,7 @@ class ChatService:
             "tool_call_count": len(llm_response.tool_calls),
             "tool_summary_llm_called": False,
             "tool_results": [],
+            **self._build_memory_metadata(request, memory_context),
             "history_loaded_count": history_loaded_count,
             **retrieve_result.metadata,
         }
@@ -234,6 +240,7 @@ class ChatService:
                 "citations": [citation.model_dump() for citation in citations],
             },
         )
+        self._update_memory_summary(request, conversation_id)
 
         return ChatResponse(
             query=request.query,
@@ -309,6 +316,125 @@ class ChatService:
                 "parameters": tool_definition["parameters"],
             },
         }
+
+    def _build_memory_context(
+        self,
+        request: ChatRequest,
+        conversation_id: int | None,
+    ) -> MemoryContext:
+        if (
+            not request.enable_memory
+            or self.conversation_service is None
+            or conversation_id is None
+        ):
+            return MemoryContext(
+                metadata={
+                    "memory_enabled": False,
+                    "reason": "disabled_or_unavailable",
+                }
+            )
+
+        try:
+            return MemoryService(self.conversation_service).build_memory_context(
+                conversation_id=conversation_id,
+                max_history_tokens=request.max_history_tokens,
+                window_size=request.memory_window_size,
+            )
+        except Exception:
+            logger.exception("Memory context build failed")
+            return MemoryContext(
+                metadata={
+                    "memory_enabled": False,
+                    "reason": "build_failed",
+                }
+            )
+
+    def _inject_memory_messages(
+        self,
+        prompt_messages: list[LLMMessage],
+        memory_context: MemoryContext,
+    ) -> list[LLMMessage]:
+        memory_messages = self._build_prompt_memory_messages(memory_context)
+        if not memory_messages:
+            return prompt_messages
+
+        insert_index = 1 if prompt_messages and prompt_messages[0].role == "system" else 0
+        return [
+            *prompt_messages[:insert_index],
+            *memory_messages,
+            *prompt_messages[insert_index:],
+        ]
+
+    def _build_prompt_memory_messages(
+        self,
+        memory_context: MemoryContext,
+    ) -> list[LLMMessage]:
+        messages: list[LLMMessage] = []
+        if memory_context.summary:
+            messages.append(
+                LLMMessage(
+                    role="system",
+                    content=f"以下是当前会话摘要：\n{memory_context.summary}",
+                )
+            )
+
+        if memory_context.recent_messages:
+            history_lines = [
+                f"{self._format_memory_role(message.role)}：{message.content}"
+                for message in memory_context.recent_messages
+            ]
+            messages.append(
+                LLMMessage(
+                    role="system",
+                    content="以下是最近对话历史：\n" + "\n".join(history_lines),
+                )
+            )
+        return messages
+
+    def _build_memory_metadata(
+        self,
+        request: ChatRequest,
+        memory_context: MemoryContext,
+    ) -> dict:
+        memory_enabled = (
+            request.enable_memory
+            and self.conversation_service is not None
+            and memory_context.metadata.get("reason") is None
+        )
+        return {
+            "memory_enabled": memory_enabled,
+            "memory_summary_used": bool(memory_context.summary),
+            "memory_recent_count": len(memory_context.recent_messages),
+            "memory_token_budget_used": memory_context.token_budget_used,
+            "memory_metadata": memory_context.metadata,
+        }
+
+    def _update_memory_summary(
+        self,
+        request: ChatRequest,
+        conversation_id: int | None,
+    ) -> None:
+        if (
+            not request.enable_memory
+            or self.conversation_service is None
+            or conversation_id is None
+        ):
+            return
+
+        try:
+            MemoryService(self.conversation_service).update_summary(
+                conversation_id=conversation_id,
+                window_size=request.memory_window_size,
+            )
+        except Exception:
+            logger.exception("Memory summary update failed")
+
+    def _format_memory_role(self, role: str) -> str:
+        if role == "user":
+            return "用户"
+        if role == "assistant":
+            return "助手"
+        return role
 
     def _prepare_conversation(self, request: ChatRequest) -> tuple[int | None, int]:
         if self.conversation_service is None:

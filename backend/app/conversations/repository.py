@@ -52,6 +52,18 @@ class ConversationRepository:
         self.db.refresh(conversation)
         return conversation
 
+    def update_conversation_summary(
+        self,
+        conversation: Conversation,
+        summary: str,
+        summary_updated_at: datetime,
+    ) -> Conversation:
+        conversation.summary = summary
+        conversation.summary_updated_at = summary_updated_at
+        self.db.commit()
+        self.db.refresh(conversation)
+        return conversation
+
     def soft_delete_conversation(self, conversation: Conversation) -> None:
         conversation.deleted_at = datetime.utcnow()
         self.db.commit()
@@ -74,7 +86,11 @@ class ConversationRepository:
         self.db.refresh(message)
         return message
 
-    def list_messages(self, conversation_id: int, limit: int | None = None) -> list[Message]:
+    def list_messages(
+        self,
+        conversation_id: int,
+        limit: int | None = None,
+    ) -> list[Message]:
         statement = (
             select(Message)
             .where(

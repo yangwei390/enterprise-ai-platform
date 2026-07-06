@@ -9,6 +9,9 @@ class ChatRequest(BaseModel):
     score_threshold: float | None = None
     metadata_filter: dict | None = None
     enable_tools: bool = False
+    enable_memory: bool = True
+    memory_window_size: int = 10
+    max_history_tokens: int = 1500
 
 
 class ChatSource(BaseModel):

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from backend.app.conversations.repository import ConversationRepository
 from backend.app.exceptions import BusinessException
 from backend.app.models import Conversation, Message
@@ -71,3 +73,11 @@ class ConversationService:
     def list_messages(self, conversation_id: int) -> list[Message]:
         self.get_conversation(conversation_id)
         return self.repository.list_messages(conversation_id)
+
+    def update_summary(self, conversation_id: int, summary: str) -> Conversation:
+        conversation = self.get_conversation(conversation_id)
+        return self.repository.update_conversation_summary(
+            conversation=conversation,
+            summary=summary,
+            summary_updated_at=datetime.utcnow(),
+        )
