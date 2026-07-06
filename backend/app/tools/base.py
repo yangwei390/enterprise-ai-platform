@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -8,6 +7,8 @@ class ToolDefinition(BaseModel):
     name: str
     description: str
     parameters: dict = Field(default_factory=dict)
+    source: str = "builtin"
+    permission: str = "public"
 
 
 class ToolCall(BaseModel):
@@ -24,9 +25,11 @@ class ToolResult(BaseModel):
 
 
 class BaseTool(ABC):
-    name: ClassVar[str]
-    description: ClassVar[str]
-    args_schema: ClassVar[type[BaseModel]]
+    name: str
+    description: str
+    args_schema: type[BaseModel]
+    source: str = "builtin"
+    permission: str = "public"
 
     @abstractmethod
     def run(self, arguments: dict) -> ToolResult:
@@ -40,4 +43,6 @@ class BaseTool(ABC):
             name=self.name,
             description=self.description,
             parameters=self.get_parameters_schema(),
+            source=self.source,
+            permission=self.permission,
         )

@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     LLM_STREAM: bool = False
 
+    MCP_ENABLED: bool = False
+
     UPLOAD_DIR: str
 
     @field_validator("LLM_MAX_TOKENS", mode="before")
