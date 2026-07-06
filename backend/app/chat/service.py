@@ -3,6 +3,7 @@ from backend.app.context import ContextBuilderFactory, ContextBuildRequest
 from backend.app.context.compression import SimpleContextCompressor
 from backend.app.conversations import ConversationService
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
+from backend.app.logger import logger
 from backend.app.models import Message
 from backend.app.prompts import PromptBuilderFactory, PromptBuildRequest
 from backend.app.query import SimpleQueryRewriter
@@ -121,26 +122,29 @@ class ChatService:
             )
         )
 
-        tool_definitions = []
+        function_tools: list[dict] = []
         if request.enable_tools:
             tool_definitions = get_tool_registry().get_tool_definitions()
+            function_tools = [
+                self._to_function_tool(tool_definition.model_dump())
+                for tool_definition in tool_definitions
+            ]
 
         llm = LLMFactory.get_llm()
-        llm_response = llm.chat(
-            LLMRequest(
-                messages=[
-                    LLMMessage(role=message.role, content=message.content)
-                    for message in prompt_result.messages
-                ],
-                metadata={
-                    "tools_enabled": request.enable_tools,
-                    "tools": [
-                        tool_definition.model_dump()
-                        for tool_definition in tool_definitions
-                    ],
-                },
-            )
+        prompt_messages = [
+            LLMMessage(role=message.role, content=message.content)
+            for message in prompt_result.messages
+        ]
+        llm_request = LLMRequest(
+            messages=prompt_messages,
+            tools=function_tools if request.enable_tools else [],
+            tool_choice="auto" if request.enable_tools and function_tools else None,
+            metadata={
+                "tools_enabled": request.enable_tools,
+                "tools": function_tools,
+            },
         )
+        llm_response = self._call_llm_with_tool_fallback(llm, llm_request)
 
         sources = [
             ChatSource(
@@ -191,6 +195,8 @@ class ChatService:
             "llm_usage": llm_response.usage,
             "llm_metadata": llm_response.metadata,
             "tools_enabled": request.enable_tools,
+            "tool_call_count": len(llm_response.tool_calls),
+            "tool_summary_llm_called": False,
             "tool_results": [],
             "history_loaded_count": history_loaded_count,
             **retrieve_result.metadata,
@@ -198,6 +204,7 @@ class ChatService:
 
         answer = llm_response.answer
         if request.enable_tools and llm_response.tool_calls:
+            limited_tool_calls = llm_response.tool_calls[:3]
             tool_results = [
                 ToolExecutor()
                 .execute(
@@ -207,10 +214,16 @@ class ChatService:
                     )
                 )
                 .model_dump()
-                for tool_call in llm_response.tool_calls
+                for tool_call in limited_tool_calls
             ]
+            metadata["tool_call_count"] = len(limited_tool_calls)
             metadata["tool_results"] = tool_results
-            answer = self._build_tool_result_answer(tool_results)
+            answer, summary_called = self._summarize_tool_results(
+                llm=llm,
+                prompt_messages=prompt_messages,
+                tool_results=tool_results,
+            )
+            metadata["tool_summary_llm_called"] = summary_called
 
         assistant_message = self._save_assistant_message(
             conversation_id=conversation_id,
@@ -234,6 +247,68 @@ class ChatService:
             llm_model=llm_response.model,
             metadata=metadata,
         )
+
+    def _call_llm_with_tool_fallback(self, llm, request: LLMRequest):
+        if not request.tools:
+            return llm.chat(request)
+
+        try:
+            return llm.chat(request)
+        except Exception:
+            logger.exception("LLM tool calling failed, retry without tools")
+            fallback_request = LLMRequest(
+                messages=request.messages,
+                model=request.model,
+                temperature=request.temperature,
+                metadata={
+                    **request.metadata,
+                    "tool_calling_fallback": True,
+                },
+            )
+            response = llm.chat(fallback_request)
+            response.metadata["tool_calling_fallback"] = True
+            return response
+
+    def _summarize_tool_results(
+        self,
+        llm,
+        prompt_messages: list[LLMMessage],
+        tool_results: list[dict],
+    ) -> tuple[str, bool]:
+        fallback_answer = self._build_tool_result_answer(tool_results)
+        try:
+            summary_response = llm.chat(
+                LLMRequest(
+                    messages=[
+                        *prompt_messages,
+                        LLMMessage(
+                            role="user",
+                            content=(
+                                "以下是工具执行结果，请基于原问题和工具结果给出自然语言回答：\n"
+                                f"{tool_results}"
+                            ),
+                        ),
+                    ],
+                    metadata={
+                        "tools_enabled": True,
+                        "tool_summary": True,
+                    },
+                )
+            )
+            return summary_response.answer or fallback_answer, True
+        except Exception:
+            logger.exception("LLM tool result summary failed")
+            return fallback_answer, False
+
+    def _to_function_tool(self, tool_definition: dict) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": tool_definition["name"],
+                "description": tool_definition["description"],
+                "parameters": tool_definition["parameters"],
+            },
+        }
 
     def _prepare_conversation(self, request: ChatRequest) -> tuple[int | None, int]:
         if self.conversation_service is None:

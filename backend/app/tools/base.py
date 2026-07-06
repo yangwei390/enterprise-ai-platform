@@ -20,20 +20,24 @@ class ToolResult(BaseModel):
     success: bool
     result: dict | str | None = None
     error: str | None = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class BaseTool(ABC):
     name: ClassVar[str]
     description: ClassVar[str]
-    parameters: ClassVar[dict]
+    args_schema: ClassVar[type[BaseModel]]
 
     @abstractmethod
     def run(self, arguments: dict) -> ToolResult:
         raise NotImplementedError
 
+    def get_parameters_schema(self) -> dict:
+        return self.args_schema.model_json_schema()
+
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name=self.name,
             description=self.description,
-            parameters=self.parameters,
+            parameters=self.get_parameters_schema(),
         )

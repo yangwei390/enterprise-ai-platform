@@ -1,5 +1,5 @@
 from backend.app.tools.base import BaseTool, ToolDefinition
-from backend.app.tools.builtin_tools import get_builtin_tools
+from backend.app.tools.loader import load_builtin_tools
 
 
 class ToolRegistry:
@@ -26,6 +26,6 @@ def get_tool_registry() -> ToolRegistry:
     global _tool_registry
     if _tool_registry is None:
         _tool_registry = ToolRegistry()
-        for tool in get_builtin_tools():
+        for tool in load_builtin_tools():
             _tool_registry.register(tool)
     return _tool_registry

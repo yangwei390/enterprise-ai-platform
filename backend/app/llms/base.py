@@ -12,10 +12,13 @@ class LLMRequest(BaseModel):
     messages: list[LLMMessage]
     model: str | None = None
     temperature: float = 0.2
+    tools: list[dict] = Field(default_factory=list)
+    tool_choice: str | dict | None = None
     metadata: dict = Field(default_factory=dict)
 
 
 class LLMToolCall(BaseModel):
+    id: str | None = None
     name: str
     arguments: dict = Field(default_factory=dict)
 
@@ -25,6 +28,7 @@ class LLMResponse(BaseModel):
     model: str
     tool_calls: list[LLMToolCall] = Field(default_factory=list)
     finish_reason: str | None = None
+    raw_response: dict | None = None
     usage: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
 
