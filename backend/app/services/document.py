@@ -130,6 +130,7 @@ class DocumentService(BaseService[DocumentRepository]):
             "metadata": {
                 **parse_result.metadata,
                 "bm25_indexed": context.metadata.get("bm25_indexed", False),
+                "bm25_replaced": context.metadata.get("bm25_replaced", False),
                 "bm25_indexed_count": context.metadata.get("bm25_indexed_count", 0),
                 "bm25_index_path": context.metadata.get("bm25_index_path"),
                 "bm25_error": context.metadata.get("bm25_error"),
