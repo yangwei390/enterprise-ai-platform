@@ -35,6 +35,25 @@ class ChatService:
             )
         )
 
+        if not context_result.context_text.strip() or not context_result.chunks:
+            return ChatResponse(
+                query=request.query,
+                answer="根据当前知识库内容无法回答该问题。",
+                sources=[],
+                context_text="",
+                prompt_text="",
+                llm_model=None,
+                metadata={
+                    "retrieved_total": retrieve_result.total,
+                    "reranked_total": rerank_result.total,
+                    "context_total_chunks": context_result.total_chunks,
+                    "context_total_chars": context_result.total_chars,
+                    "guardrail_triggered": True,
+                    "guardrail_reason": "empty_context",
+                    "llm_called": False,
+                },
+            )
+
         prompt_builder = PromptBuilderFactory.get_builder()
         prompt_result = prompt_builder.build(
             PromptBuildRequest(
@@ -77,6 +96,8 @@ class ChatService:
                 "reranked_total": rerank_result.total,
                 "context_total_chunks": context_result.total_chunks,
                 "context_total_chars": context_result.total_chars,
+                "guardrail_triggered": False,
+                "llm_called": True,
                 "llm_usage": llm_response.usage,
             },
         )
