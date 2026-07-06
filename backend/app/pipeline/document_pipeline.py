@@ -5,8 +5,10 @@ from backend.app.cleaners import CleanerFactory
 from backend.app.config.settings import PROJECT_ROOT, settings
 from backend.app.embeddings import EmbeddingFactory
 from backend.app.exceptions import BusinessException
+from backend.app.logger import logger
 from backend.app.parsers import ParserFactory
 from backend.app.pipeline.base import PipelineContext, PipelineStep
+from backend.app.retrievers.sparse import SparseDocument, get_bm25_index_manager
 from backend.app.vectorstores import VectorRecord, VectorStoreFactory
 
 
@@ -124,6 +126,63 @@ class VectorStoreStep(PipelineStep):
         return context
 
 
+class BM25IndexStep(PipelineStep):
+    def run(self, context: PipelineContext) -> PipelineContext:
+        if context.chunk_result is None:
+            context.metadata["bm25_indexed"] = False
+            context.metadata["bm25_indexed_count"] = 0
+            context.metadata["bm25_error"] = "chunk_result is empty"
+            return context
+
+        try:
+            document = context.document
+            document_id = getattr(document, "id", None)
+            knowledge_base_id = getattr(document, "knowledge_base_id", None)
+            source = getattr(document, "original_filename", None) or getattr(
+                document, "filename", None
+            )
+            documents = [
+                SparseDocument(
+                    id=self._get_chunk_id(chunk, document_id),
+                    text=chunk.text,
+                    document_id=document_id,
+                    knowledge_base_id=knowledge_base_id,
+                    chunk_index=chunk.chunk_index,
+                    metadata={
+                        "source": source,
+                        "parser": context.metadata.get("parser"),
+                        "cleaner": context.metadata.get("cleaner"),
+                        "strategy": context.chunk_result.strategy,
+                        "chunk_size": context.chunk_result.chunk_size,
+                        "chunk_overlap": context.chunk_result.chunk_overlap,
+                        **chunk.metadata,
+                    },
+                )
+                for chunk in context.chunk_result.chunks
+            ]
+
+            manager = get_bm25_index_manager()
+            if isinstance(document_id, int):
+                manager.remove_document(document_id=document_id, save=False)
+            manager.add_documents(documents)
+            context.metadata["bm25_indexed"] = True
+            context.metadata["bm25_indexed_count"] = len(documents)
+            context.metadata["bm25_index_path"] = str(manager.index_path)
+        except Exception as exc:
+            logger.exception("BM25 index sync failed")
+            context.metadata["bm25_indexed"] = False
+            context.metadata["bm25_indexed_count"] = 0
+            context.metadata["bm25_error"] = str(exc)
+
+        return context
+
+    def _get_chunk_id(self, chunk, document_id: int | None) -> str:
+        chunk_id = getattr(chunk, "id", None)
+        if chunk_id:
+            return str(chunk_id)
+        return f"{document_id}_{chunk.chunk_index}"
+
+
 class DocumentPipeline:
     def __init__(self) -> None:
         self.steps: list[PipelineStep] = [
@@ -132,6 +191,7 @@ class DocumentPipeline:
             ChunkStep(),
             EmbeddingStep(),
             VectorStoreStep(),
+            BM25IndexStep(),
         ]
 
     def run(self, document) -> PipelineContext:
