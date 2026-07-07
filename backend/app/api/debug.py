@@ -32,6 +32,22 @@ def _metadata_value(metadata: dict, key: str) -> Any | None:
     return None
 
 
+def _optional_int(value: Any | None) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def _optional_float(value: Any | None) -> float | None:
+    return value if isinstance(value, int | float) else None
+
+
+def _first_float(*values: Any | None) -> float | None:
+    for value in values:
+        float_value = _optional_float(value)
+        if float_value is not None:
+            return float_value
+    return None
+
+
 def _to_trace_chunk(chunk: Any, text_limit: int = 300) -> RagTraceChunk:
     metadata = getattr(chunk, "metadata", {}) or {}
     source = getattr(chunk, "source", None) or _metadata_value(metadata, "source")
@@ -39,6 +55,7 @@ def _to_trace_chunk(chunk: Any, text_limit: int = 300) -> RagTraceChunk:
     score = getattr(chunk, "score", None)
     rerank_score = getattr(chunk, "rerank_score", None)
     original_score = getattr(chunk, "original_score", None)
+    fusion_score = _optional_float(_metadata_value(metadata, "fusion_score"))
 
     return RagTraceChunk(
         id=getattr(chunk, "id", None),
@@ -47,11 +64,11 @@ def _to_trace_chunk(chunk: Any, text_limit: int = 300) -> RagTraceChunk:
         chunk_index=getattr(chunk, "chunk_index", None),
         source=source,
         text_preview=text[:text_limit],
-        score=score if score is not None else original_score,
-        dense_rank=_metadata_value(metadata, "dense_rank"),
-        sparse_rank=_metadata_value(metadata, "sparse_rank"),
-        fusion_score=_metadata_value(metadata, "fusion_score"),
-        rerank_score=rerank_score,
+        score=_first_float(score, original_score, fusion_score, rerank_score),
+        dense_rank=_optional_int(_metadata_value(metadata, "dense_rank")),
+        sparse_rank=_optional_int(_metadata_value(metadata, "sparse_rank")),
+        fusion_score=fusion_score,
+        rerank_score=_optional_float(rerank_score),
         metadata=metadata,
     )
 
@@ -94,6 +111,9 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
         chunks=context_result.chunks,
     )
 
+    fused_chunks = retrieve_result.chunks[: request.top_k]
+    context_chunks = compression_result.chunks
+
     trace_result = RagTraceResult(
         query=request.query,
         rewritten_query=rewritten_query,
@@ -101,13 +121,16 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
         retriever_mode=retrieve_result.metadata.get("retriever_mode", "hybrid"),
         dense_chunks=[],
         sparse_chunks=[],
-        fused_chunks=[_to_trace_chunk(chunk) for chunk in retrieve_result.chunks],
+        fused_chunks=[_to_trace_chunk(chunk) for chunk in fused_chunks],
         reranked_chunks=[_to_trace_chunk(chunk) for chunk in rerank_result.chunks],
-        context_chunks=[_to_trace_chunk(chunk) for chunk in compression_result.chunks],
+        context_chunks=[_to_trace_chunk(chunk) for chunk in context_chunks],
         context_text_preview=compression_result.context_text[:1000],
         metadata={
             "trace_limited": True,
             "trace_limited_reason": "HybridRetriever currently exposes fused chunks only.",
+            "fused_chunk_count": len(fused_chunks),
+            "context_chunk_count": len(context_chunks),
+            "context_text_preview_chars": len(compression_result.context_text[:1000]),
             "query_rewrite": rewrite_result.model_dump(),
             "retriever": retrieve_result.metadata,
             "reranker": rerank_result.metadata,
