@@ -1,13 +1,14 @@
 import { FormEvent, useState } from "react";
-import { runRagTrace } from "../api/debug";
+import { runRagTrace, runRetrieverCompare } from "../api/debug";
 import type { RagTraceChunk, RagTraceResult } from "../api/debug";
 
 type TraceResultState = RagTraceResult | { error: string } | null;
 
-function ChunkCard({ chunk }: { chunk: RagTraceChunk }) {
+function ChunkCard({ chunk, rank }: { chunk: RagTraceChunk; rank?: number }) {
   return (
     <article className="trace-chunk-card">
       <div className="trace-chunk-meta">
+        {rank !== undefined && <span>rank: {rank}</span>}
         <span>source: {chunk.source ?? "-"}</span>
         <span>chunk: {String(chunk.chunk_index)}</span>
         <span>score: {chunk.score === null ? "-" : chunk.score.toFixed(6)}</span>
@@ -17,6 +18,7 @@ function ChunkCard({ chunk }: { chunk: RagTraceChunk }) {
         <span>dense_rank: {String(chunk.dense_rank ?? "-")}</span>
         <span>sparse_rank: {String(chunk.sparse_rank ?? "-")}</span>
         <span>fusion_score: {String(chunk.fusion_score ?? "-")}</span>
+        <span>sparse_score: {String(chunk.sparse_score ?? "-")}</span>
         <span>rerank_score: {String(chunk.rerank_score ?? "-")}</span>
       </div>
       <pre className="trace-preview">{chunk.text_preview}</pre>
@@ -45,7 +47,9 @@ function ChunkSection({
         {chunks.length === 0 ? (
           <p className="muted">No chunks captured in this stage.</p>
         ) : (
-          chunks.map((chunk, index) => <ChunkCard key={`${chunk.id ?? title}-${index}`} chunk={chunk} />)
+          chunks.map((chunk, index) => (
+            <ChunkCard key={`${chunk.id ?? title}-${index}`} chunk={chunk} rank={index + 1} />
+          ))
         )}
       </div>
     </div>
@@ -59,8 +63,11 @@ export default function RagDebugPage() {
   const [scoreThreshold, setScoreThreshold] = useState("0.0");
   const [metadataFilter, setMetadataFilter] = useState("");
   const [result, setResult] = useState<TraceResultState>(null);
+  const [compareResult, setCompareResult] = useState<TraceResultState>(null);
   const [loading, setLoading] = useState(false);
+  const [compareLoading, setCompareLoading] = useState(false);
   const traceResult = result && "query" in result ? result : null;
+  const retrieverCompareResult = compareResult && "query" in compareResult ? compareResult : null;
 
   function parseMetadataFilter() {
     if (!metadataFilter.trim()) {
@@ -85,6 +92,24 @@ export default function RagDebugPage() {
       setResult({ error: error instanceof Error ? error.message : String(error) });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleCompare() {
+    setCompareLoading(true);
+    try {
+      const response = await runRetrieverCompare({
+        query,
+        knowledge_base_id: knowledgeBaseId ? Number(knowledgeBaseId) : null,
+        top_k: topK ? Number(topK) : 10,
+        score_threshold: scoreThreshold ? Number(scoreThreshold) : null,
+        metadata_filter: parseMetadataFilter()
+      });
+      setCompareResult(response);
+    } catch (error) {
+      setCompareResult({ error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCompareLoading(false);
     }
   }
 
@@ -129,6 +154,9 @@ export default function RagDebugPage() {
           <button type="submit" disabled={loading}>
             Run Trace
           </button>
+          <button type="button" className="secondary" disabled={compareLoading} onClick={handleCompare}>
+            Run Compare
+          </button>
         </form>
 
         <div className="stack">
@@ -165,6 +193,31 @@ export default function RagDebugPage() {
           </div>
         </div>
       )}
+
+      <div className="trace-grid">
+        <div className="card">
+          <div className="section-header">
+            <h3>Retriever Compare</h3>
+            <span className="muted">Dense / BM25 / Fusion / Context</span>
+          </div>
+          {compareResult && "error" in compareResult && (
+            <p className="error-text">{compareResult.error}</p>
+          )}
+          {retrieverCompareResult ? (
+            <pre>{JSON.stringify(retrieverCompareResult.metadata, null, 2)}</pre>
+          ) : (
+            <p className="muted">Run Compare to inspect each retrieval stage side by side.</p>
+          )}
+        </div>
+        {retrieverCompareResult && (
+          <div className="compare-grid">
+            <ChunkSection title="Dense TopK" chunks={retrieverCompareResult.dense_chunks} />
+            <ChunkSection title="BM25 TopK" chunks={retrieverCompareResult.sparse_chunks} />
+            <ChunkSection title="Fusion TopK" chunks={retrieverCompareResult.fused_chunks} />
+            <ChunkSection title="Context Chunks" chunks={retrieverCompareResult.context_chunks} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

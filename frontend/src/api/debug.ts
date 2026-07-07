@@ -11,6 +11,7 @@ export type RagTraceChunk = {
   dense_rank?: number | null;
   sparse_rank?: number | null;
   fusion_score?: number | null;
+  sparse_score?: number | null;
   rerank_score?: number | null;
   metadata: Record<string, unknown>;
 };
@@ -39,6 +40,13 @@ export type RagTraceRequest = {
 
 export function runRagTrace(request: RagTraceRequest) {
   return apiRequest<RagTraceResult>("/debug/rag-trace", {
+    method: "POST",
+    body: request
+  });
+}
+
+export function runRetrieverCompare(request: RagTraceRequest) {
+  return apiRequest<RagTraceResult>("/debug/retriever-compare", {
     method: "POST",
     body: request
   });

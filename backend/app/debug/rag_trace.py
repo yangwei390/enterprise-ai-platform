@@ -12,6 +12,7 @@ class RagTraceChunk(BaseModel):
     dense_rank: int | None = None
     sparse_rank: int | None = None
     fusion_score: float | None = None
+    sparse_score: float | None = None
     rerank_score: float | None = None
     metadata: dict = Field(default_factory=dict)
 
