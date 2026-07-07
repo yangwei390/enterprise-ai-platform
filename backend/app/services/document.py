@@ -15,18 +15,22 @@ from fastapi import UploadFile
 
 class DocumentService(BaseService[DocumentRepository]):
     def create(self, data: DocumentCreate) -> Document:
-        logger.info("Create document metadata started")
+        logger.info(
+            f"Create document metadata started | knowledge_base_id={data.knowledge_base_id}"
+        )
         self._validate_create(data)
+        self._validate_knowledge_base_exists(data.knowledge_base_id)
 
         document = self.repository.create(data.model_dump())
         logger.info("Create document metadata succeeded")
         return document
 
     def upload_document(self, knowledge_base_id: int | None, file: UploadFile) -> Document:
-        logger.info("Upload document started")
+        logger.info(f"Upload document started | knowledge_base_id={knowledge_base_id}")
         if knowledge_base_id is None:
             logger.warning("Knowledge base id is empty")
             raise BusinessException(40002, "知识库ID不能为空")
+        self._validate_knowledge_base_exists(knowledge_base_id)
 
         storage_service = LocalStorageService()
         storage_data = storage_service.save_upload_file(file)
@@ -204,3 +208,13 @@ class DocumentService(BaseService[DocumentRepository]):
         if data.file_size < 0:
             logger.warning("Document file size is invalid")
             raise BusinessException(40004, "文件大小不能小于0")
+
+    def _validate_knowledge_base_exists(self, knowledge_base_id: int | None) -> None:
+        logger.info(f"Validate knowledge base exists | knowledge_base_id={knowledge_base_id}")
+        if knowledge_base_id is None:
+            logger.warning("Knowledge base id is empty")
+            raise BusinessException(40002, "知识库ID不能为空")
+
+        if not self.repository.knowledge_base_exists(knowledge_base_id):
+            logger.warning(f"Knowledge base not found | knowledge_base_id={knowledge_base_id}")
+            raise BusinessException(40401, "知识库不存在")
