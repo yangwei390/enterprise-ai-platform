@@ -143,4 +143,4 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
             },
         },
     )
-    return success(data=trace_result)
+    return success(data=trace_result.model_dump())
