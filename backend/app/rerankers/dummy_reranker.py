@@ -1,35 +1,43 @@
-from backend.app.rerankers.base import BaseReranker, RerankedChunk, RerankQuery, RerankResult
+from backend.app.rerankers.base import (
+    BaseReranker,
+    RerankInputItem,
+    RerankQuery,
+    RerankResult,
+    RerankResultItem,
+)
 
 
 class DummyReranker(BaseReranker):
-    def rerank(self, query: RerankQuery) -> RerankResult:
-        sorted_chunks = sorted(
-            query.chunks,
-            key=lambda chunk: chunk.score,
-            reverse=True,
-        )[: query.top_k]
+    provider = "dummy"
+    model_name = "dummy-reranker"
 
-        chunks = [
-            RerankedChunk(
-                id=chunk.id,
-                original_score=chunk.score,
-                rerank_score=chunk.score,
-                text=chunk.text,
-                document_id=chunk.document_id,
-                knowledge_base_id=chunk.knowledge_base_id,
-                chunk_index=chunk.chunk_index,
-                metadata=chunk.metadata,
+    def rerank(
+        self,
+        query: str | RerankQuery,
+        items: list[RerankInputItem] | None = None,
+        top_k: int | None = None,
+    ) -> list[RerankResultItem] | RerankResult:
+        if isinstance(query, RerankQuery):
+            return self._rerank_query_compat(query)
+
+        if items is None:
+            return []
+
+        limit = top_k or len(items)
+        result_items = []
+        for index, item in enumerate(items[:limit]):
+            score = item.original_score
+            if score is None:
+                score = float(len(items) - index)
+            result_items.append(
+                RerankResultItem(
+                    id=item.id,
+                    index=index,
+                    score=score,
+                    metadata={
+                        "provider": self.provider,
+                        "model": self.model_name,
+                    },
+                )
             )
-            for chunk in sorted_chunks
-        ]
-
-        return RerankResult(
-            query=query.query,
-            top_k=query.top_k,
-            total=len(chunks),
-            chunks=chunks,
-            metadata={
-                "reranker": "dummy",
-                "strategy": "score_desc",
-            },
-        )
+        return result_items

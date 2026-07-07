@@ -216,6 +216,7 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
 
     context_chunks = []
     context_text_preview = ""
+    reranked_chunks = []
     if fused_chunks:
         try:
             rerank_result = RerankerFactory.get_reranker().rerank(
@@ -225,6 +226,7 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
                     top_k=request.top_k,
                 )
             )
+            reranked_chunks = rerank_result.chunks
             context_result = ContextBuilderFactory.get_builder().build(
                 ContextBuildRequest(
                     query=rewritten_query,
@@ -275,7 +277,9 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
         fused_chunks=[
             _to_trace_chunk(chunk, text_limit=500) for chunk in fused_chunks
         ],
-        reranked_chunks=[],
+        reranked_chunks=[
+            _to_trace_chunk(chunk, text_limit=500) for chunk in reranked_chunks
+        ],
         context_chunks=[
             _to_trace_chunk(chunk, text_limit=500) for chunk in context_chunks
         ],

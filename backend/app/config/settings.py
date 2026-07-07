@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     EMBEDDING_BASE_URL: str | None = None
     EMBEDDING_DIMENSION: int | None = None
 
+    RERANK_PROVIDER: str = "dummy"
+    RERANK_MODEL: str = "gte-rerank-v2"
+    RERANK_API_KEY: str | None = None
+    RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    RERANK_TOP_K: int = 20
+    RERANK_TIMEOUT: int = 30
+    RERANK_FAIL_OPEN: bool = True
+
     LLM_PROVIDER: str = "dummy"
     LLM_MODEL: str = "dummy-llm"
     LLM_TEMPERATURE: float = 0.2
@@ -65,6 +73,7 @@ class Settings(BaseSettings):
         "LLM_API_KEY",
         "EMBEDDING_API_KEY",
         "EMBEDDING_BASE_URL",
+        "RERANK_API_KEY",
         mode="before",
     )
     @classmethod
