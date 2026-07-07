@@ -17,21 +17,28 @@ export default function ChatPage() {
     event.preventDefault();
     setLoading(true);
     try {
-      setResult(
-        await sendChat({
-          query,
-          knowledge_base_id: knowledgeBaseId ? Number(knowledgeBaseId) : null,
-          conversation_id: conversationId ? Number(conversationId) : null,
-          enable_memory: enableMemory,
-          enable_tools: enableTools,
-          score_threshold: scoreThreshold ? Number(scoreThreshold) : null
-        })
-      );
+      const response = await sendChat({
+        query,
+        knowledge_base_id: knowledgeBaseId ? Number(knowledgeBaseId) : null,
+        conversation_id: conversationId ? Number(conversationId) : null,
+        enable_memory: enableMemory,
+        enable_tools: enableTools,
+        score_threshold: scoreThreshold ? Number(scoreThreshold) : null
+      });
+      setResult(response);
+      if (!conversationId && response.conversation_id) {
+        setConversationId(String(response.conversation_id));
+      }
     } catch (error) {
       setResult({ error: error instanceof Error ? error.message : String(error) });
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleNewConversation() {
+    setConversationId("");
+    setResult(null);
   }
 
   return (
@@ -78,6 +85,9 @@ export default function ChatPage() {
             Enable Tools
           </label>
           <button type="submit" disabled={loading}>POST /chat</button>
+          <button type="button" className="secondary" onClick={handleNewConversation}>
+            New Conversation
+          </button>
           <button
             type="button"
             className="secondary"
