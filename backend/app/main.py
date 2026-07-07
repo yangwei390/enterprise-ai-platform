@@ -3,6 +3,7 @@ from backend.app.api import (
     chat_router,
     conversation_router,
     database_router,
+    debug_router,
     document_router,
     health_router,
     knowledge_base_router,
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_router)
     app.include_router(health_router)
     app.include_router(database_router)
+    app.include_router(debug_router)
     app.include_router(redis_router)
     app.include_router(qdrant_router)
     app.include_router(mcp_router)

@@ -8,6 +8,7 @@ import ToolsPage from "./pages/ToolsPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import AgentPage from "./pages/AgentPage";
 import McpPage from "./pages/McpPage";
+import RagDebugPage from "./pages/RagDebugPage";
 
 type PageKey =
   | "dashboard"
@@ -16,7 +17,8 @@ type PageKey =
   | "tools"
   | "workflow"
   | "agent"
-  | "mcp";
+  | "mcp"
+  | "ragDebug";
 
 const navItems: Array<{ key: PageKey; label: string }> = [
   { key: "dashboard", label: "Dashboard" },
@@ -25,7 +27,8 @@ const navItems: Array<{ key: PageKey; label: string }> = [
   { key: "tools", label: "Tools" },
   { key: "workflow", label: "Workflow" },
   { key: "agent", label: "Agent" },
-  { key: "mcp", label: "MCP" }
+  { key: "mcp", label: "MCP" },
+  { key: "ragDebug", label: "RAG Debug" }
 ];
 
 const pages: Record<PageKey, ReactNode> = {
@@ -35,7 +38,8 @@ const pages: Record<PageKey, ReactNode> = {
   tools: <ToolsPage />,
   workflow: <WorkflowPage />,
   agent: <AgentPage />,
-  mcp: <McpPage />
+  mcp: <McpPage />,
+  ragDebug: <RagDebugPage />
 };
 
 export default function App() {

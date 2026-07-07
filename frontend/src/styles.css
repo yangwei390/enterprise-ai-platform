@@ -240,6 +240,49 @@ pre {
   line-height: 1.65;
 }
 
+.trace-grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.trace-summary p {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.trace-chunk-list {
+  display: grid;
+  gap: 12px;
+}
+
+.trace-chunk-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f9fafb;
+}
+
+.trace-chunk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.trace-preview {
+  max-height: 220px;
+  white-space: pre-wrap;
+}
+
+.error-text {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     display: block;

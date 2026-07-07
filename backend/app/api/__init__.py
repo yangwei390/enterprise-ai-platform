@@ -2,6 +2,7 @@ from backend.app.api.agent import router as agent_router
 from backend.app.api.chat import router as chat_router
 from backend.app.api.conversation import router as conversation_router
 from backend.app.api.database import router as database_router
+from backend.app.api.debug import router as debug_router
 from backend.app.api.document import router as document_router
 from backend.app.api.health import router as health_router
 from backend.app.api.knowledge_base import router as knowledge_base_router
@@ -17,6 +18,7 @@ __all__ = [
     "agent_router",
     "conversation_router",
     "database_router",
+    "debug_router",
     "document_router",
     "health_router",
     "knowledge_base_router",
