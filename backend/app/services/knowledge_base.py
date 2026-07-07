@@ -45,6 +45,13 @@ class KnowledgeBaseService(BaseService[KnowledgeBaseRepository]):
     def delete(self, id: int) -> None:
         logger.info("Delete knowledge base started")
         knowledge_base = self.get(id)
+        if self.repository.has_active_documents(id):
+            logger.warning("Knowledge base has active documents")
+            raise BusinessException(
+                40001,
+                "知识库下存在文档，请先删除文档后再删除知识库",
+            )
+
         self.repository.delete(knowledge_base)
         logger.info("Delete knowledge base succeeded")
 
