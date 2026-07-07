@@ -1,14 +1,15 @@
 import hashlib
 
 from backend.app.chunkers import Chunk
-from backend.app.embeddings import get_embedding_config
 from backend.app.embeddings.base import BaseEmbedding, EmbeddingItem, EmbeddingResult
+from backend.app.embeddings.config import get_embedding_config
 
 
 class DummyEmbedding(BaseEmbedding):
+    default_dimension = 8
     model_name = "dummy-embedding"
     config = get_embedding_config()
-    dimension = config.dimension
+    dimension = config.dimension or default_dimension
 
     def embed_text(self, text: str) -> list[float]:
         values: list[float] = []
@@ -21,7 +22,8 @@ class DummyEmbedding(BaseEmbedding):
                 if len(values) >= self.dimension:
                     break
                 values.append(
-                    int.from_bytes(digest[index:index + 4], byteorder="big") / 0xFFFFFFFF
+                    int.from_bytes(digest[index : index + 4], byteorder="big")
+                    / 0xFFFFFFFF
                 )
             counter += 1
 

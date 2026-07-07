@@ -24,6 +24,15 @@ class DocumentRepository(BaseRepository):
         )
         return list(result.scalars().all())
 
+    def list_active_by_knowledge_base_id(self, knowledge_base_id: int) -> list[Document]:
+        result = self.db.execute(
+            select(Document).where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.deleted_at.is_(None),
+            )
+        )
+        return list(result.scalars().all())
+
     def knowledge_base_exists(self, knowledge_base_id: int) -> bool:
         result = self.db.execute(
             select(KnowledgeBase.id)

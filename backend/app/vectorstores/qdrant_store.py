@@ -1,6 +1,8 @@
 import hashlib
 import uuid
+from typing import Any, cast
 
+from backend.app.exceptions import BusinessException
 from backend.app.vector.qdrant_client import get_qdrant_client
 from backend.app.vectorstores.base import BaseVectorStore, VectorRecord, VectorStoreResult
 from qdrant_client.models import Distance, PointStruct, VectorParams
@@ -47,6 +49,16 @@ class QdrantVectorStore(BaseVectorStore):
     def _ensure_collection(self, vector_size: int) -> None:
         client = get_qdrant_client()
         if client.collection_exists(self.collection_name):
+            existing_vector_size = self._get_collection_vector_size()
+            if existing_vector_size is not None and existing_vector_size != vector_size:
+                raise BusinessException(
+                    50005,
+                    (
+                        "Qdrant collection向量维度不匹配，"
+                        f"当前collection维度={existing_vector_size}，"
+                        f"新Embedding维度={vector_size}，请重建collection后重新索引"
+                    ),
+                )
             return
 
         client.create_collection(
@@ -56,6 +68,25 @@ class QdrantVectorStore(BaseVectorStore):
                 distance=Distance.COSINE,
             ),
         )
+
+    def _get_collection_vector_size(self) -> int | None:
+        client = get_qdrant_client()
+        collection_info = client.get_collection(self.collection_name)
+        vectors = collection_info.config.params.vectors
+        vectors_any = cast(Any, vectors)
+        if hasattr(vectors_any, "size"):
+            size = vectors_any.size
+            return size if isinstance(size, int) else None
+        if isinstance(vectors, dict):
+            first_vector = next(iter(vectors.values()), None)
+            if first_vector is None:
+                return None
+            return self._get_vector_size_from_config(first_vector)
+        return self._get_vector_size_from_config(vectors)
+
+    def _get_vector_size_from_config(self, vector_config: Any) -> int | None:
+        size = getattr(vector_config, "size", None)
+        return size if isinstance(size, int) else None
 
     def _build_point_id(self, record: VectorRecord) -> str:
         business_key = self._build_business_key(record)

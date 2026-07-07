@@ -1,4 +1,5 @@
 from backend.app.db.session import get_db
+from backend.app.repositories.document import DocumentRepository
 from backend.app.repositories.knowledge_base import KnowledgeBaseRepository
 from backend.app.schemas import ApiResponse, success
 from backend.app.schemas.knowledge_base import (
@@ -8,6 +9,7 @@ from backend.app.schemas.knowledge_base import (
     KnowledgeBaseUpdate,
 )
 from backend.app.services.knowledge_base import KnowledgeBaseService
+from backend.app.services.knowledge_base_reindex import KnowledgeBaseReindexService
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,17 @@ router = APIRouter()
 def get_knowledge_base_service(db: Session = Depends(get_db)) -> KnowledgeBaseService:
     repository = KnowledgeBaseRepository(db)
     return KnowledgeBaseService(repository)
+
+
+def get_knowledge_base_reindex_service(
+    db: Session = Depends(get_db),
+) -> KnowledgeBaseReindexService:
+    knowledge_base_repository = KnowledgeBaseRepository(db)
+    document_repository = DocumentRepository(db)
+    return KnowledgeBaseReindexService(
+        knowledge_base_repository=knowledge_base_repository,
+        document_repository=document_repository,
+    )
 
 
 @router.get("/kb", response_model=ApiResponse)
@@ -63,3 +76,12 @@ def delete_knowledge_base(
 ) -> ApiResponse:
     service.delete(id)
     return success(data={"deleted": True})
+
+
+@router.post("/kb/{id}/reindex", response_model=ApiResponse)
+def reindex_knowledge_base(
+    id: int,
+    service: KnowledgeBaseReindexService = Depends(get_knowledge_base_reindex_service),
+) -> ApiResponse:
+    result = service.reindex(id)
+    return success(data=result)
