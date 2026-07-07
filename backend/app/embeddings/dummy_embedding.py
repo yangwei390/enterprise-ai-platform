@@ -34,8 +34,8 @@ class DummyEmbedding(BaseEmbedding):
             model_name=self.model_name,
             dimension=self.dimension,
             metadata={
-                "provider": "dummy",
-                "model_name": self.model_name,
-                "dimension": self.dimension,
+                "embedding_provider": "dummy",
+                "embedding_model": self.model_name,
+                "embedding_dimension": self.dimension,
             },
         )

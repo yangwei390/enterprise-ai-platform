@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_PATH: str = ""
     RERANKER_MODEL_PATH: str = ""
 
+    EMBEDDING_PROVIDER: str = "dummy"
+    EMBEDDING_MODEL: str = "text-embedding-v4"
+    EMBEDDING_API_KEY: str | None = None
+    EMBEDDING_BASE_URL: str | None = None
+    EMBEDDING_DIMENSION: int | None = None
+
     LLM_PROVIDER: str = "dummy"
     LLM_MODEL: str = "dummy-llm"
     LLM_TEMPERATURE: float = 0.2
@@ -47,14 +53,20 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: str
 
-    @field_validator("LLM_MAX_TOKENS", mode="before")
+    @field_validator("LLM_MAX_TOKENS", "EMBEDDING_DIMENSION", mode="before")
     @classmethod
     def parse_optional_int(cls, value: object) -> object:
         if value == "":
             return None
         return value
 
-    @field_validator("LLM_BASE_URL", "LLM_API_KEY", mode="before")
+    @field_validator(
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
+        "EMBEDDING_API_KEY",
+        "EMBEDDING_BASE_URL",
+        mode="before",
+    )
     @classmethod
     def parse_optional_str(cls, value: object) -> object:
         if value == "":
