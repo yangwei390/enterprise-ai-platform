@@ -5,6 +5,7 @@ from backend.app.retrievers.hybrid.base import HybridRetrieveQuery, HybridRetrie
 from backend.app.retrievers.hybrid.dense_retriever import DenseRetriever
 from backend.app.retrievers.hybrid.fusion import rrf_fusion
 from backend.app.retrievers.hybrid.sparse_retriever import BM25SparseRetriever
+from backend.app.retrievers.metadata_filter import AutoMetadataFilterBuilder
 
 
 class HybridRetriever:
@@ -24,6 +25,11 @@ class HybridRetriever:
     def retrieve(self, query: HybridRetrieveQuery) -> HybridRetrieveResult:
         dense_chunks = self.dense_retriever.retrieve(query)
         sparse_chunks = self.sparse_retriever.retrieve(query)
+        auto_filter_result = AutoMetadataFilterBuilder().build(
+            query=query.query,
+            knowledge_base_id=query.knowledge_base_id,
+            metadata_filter=query.metadata_filter,
+        )
         retrieval_intent = self._detect_retrieval_intent(query.query)
         sparse_boosted = retrieval_intent == "sparse"
 
@@ -42,6 +48,12 @@ class HybridRetriever:
             )
             fusion_strategy = "rrf"
 
+        fused_chunks, soft_boost_applied = self._apply_soft_boost(
+            chunks=fused_chunks,
+            candidate_document_ids=auto_filter_result.candidate_document_ids,
+            top_k=query.top_k,
+        )
+
         return HybridRetrieveResult(
             chunks=fused_chunks,
             total=len(fused_chunks),
@@ -54,6 +66,13 @@ class HybridRetriever:
                 "fused_total": len(fused_chunks),
                 "fusion": fusion_strategy,
                 "bm25_enabled": True,
+                "auto_filter_applied": auto_filter_result.auto_filter_applied,
+                "candidate_document_ids": auto_filter_result.candidate_document_ids,
+                "source_hints": auto_filter_result.source_hints,
+                "soft_boost_enabled": auto_filter_result.soft_boost_enabled,
+                "soft_boost_applied": soft_boost_applied,
+                "soft_boost_factor": 1.2,
+                "auto_filter": auto_filter_result.metadata,
             },
         )
 
@@ -113,3 +132,37 @@ class HybridRetriever:
                 break
 
         return fused_chunks
+
+    def _apply_soft_boost(
+        self,
+        chunks: list[RetrievedChunk],
+        candidate_document_ids: list[int],
+        top_k: int,
+    ) -> tuple[list[RetrievedChunk], bool]:
+        if not candidate_document_ids:
+            return chunks, False
+
+        candidate_ids = set(candidate_document_ids)
+        boosted_chunks: list[RetrievedChunk] = []
+        soft_boost_applied = False
+        for chunk in chunks:
+            if chunk.document_id not in candidate_ids:
+                boosted_chunks.append(chunk)
+                continue
+
+            boosted_score = chunk.score * 1.2
+            metadata = {
+                **chunk.metadata,
+                "auto_filter_candidate": True,
+                "soft_boost_applied": True,
+                "soft_boost_factor": 1.2,
+                "score_before_soft_boost": chunk.score,
+                "fusion_score": boosted_score,
+            }
+            boosted_chunks.append(
+                chunk.model_copy(update={"score": boosted_score, "metadata": metadata})
+            )
+            soft_boost_applied = True
+
+        boosted_chunks.sort(key=lambda item: item.score, reverse=True)
+        return boosted_chunks[:top_k], soft_boost_applied
