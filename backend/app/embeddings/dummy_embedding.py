@@ -1,19 +1,31 @@
 import hashlib
 
 from backend.app.chunkers import Chunk
+from backend.app.embeddings import get_embedding_config
 from backend.app.embeddings.base import BaseEmbedding, EmbeddingItem, EmbeddingResult
 
 
 class DummyEmbedding(BaseEmbedding):
     model_name = "dummy-embedding"
-    dimension = 8
+    config = get_embedding_config()
+    dimension = config.dimension
 
     def embed_text(self, text: str) -> list[float]:
-        digest = hashlib.sha256(text.encode("utf-8")).digest()
-        return [
-            int.from_bytes(digest[index * 4 : (index + 1) * 4], "big") / 0xFFFFFFFF
-            for index in range(self.dimension)
-        ]
+        values: list[float] = []
+        seed = text.encode("utf-8")
+        counter = 0
+
+        while len(values) < self.dimension:
+            digest = hashlib.sha256(seed + str(counter).encode("utf-8")).digest()
+            for index in range(0, len(digest), 4):
+                if len(values) >= self.dimension:
+                    break
+                values.append(
+                    int.from_bytes(digest[index:index + 4], byteorder="big") / 0xFFFFFFFF
+                )
+            counter += 1
+
+        return values
 
     def embed_chunks(self, chunks: list[Chunk]) -> EmbeddingResult:
         items = [
