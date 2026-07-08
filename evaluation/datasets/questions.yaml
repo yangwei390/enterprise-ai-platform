@@ -1,0 +1,12 @@
+- id: labor_law_001
+  question: 劳动法第二章说什么
+  expected_documents:
+    - 中国劳动法.pdf
+  expected_chunks:
+    - 2
+    - 3
+    - 4
+  expected_keywords:
+    - 劳动合同
+    - 试用期
+    - 劳动合同解除

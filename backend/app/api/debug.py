@@ -16,7 +16,7 @@ from backend.app.retrievers.hybrid import HybridRetrieveQuery
 from backend.app.retrievers.hybrid.dense_retriever import DenseRetriever
 from backend.app.retrievers.hybrid.sparse_retriever import BM25SparseRetriever
 from backend.app.retrievers.pipeline import RetrieverPipelineContext
-from backend.app.retrievers.pipeline.steps import NeighborExpansionStep
+from backend.app.retrievers.pipeline.steps import MMRStep, NeighborExpansionStep
 from backend.app.schemas import ApiResponse, success
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -189,12 +189,20 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
             top_k=request.top_k,
         )
     )
-    neighbor_context = NeighborExpansionStep().run(
+    mmr_context = MMRStep().run(
         RetrieverPipelineContext(
             query=rewritten_query,
             knowledge_base_id=request.knowledge_base_id,
             top_k=request.top_k,
             reranked_chunks=rerank_result.chunks,
+        )
+    )
+    neighbor_context = NeighborExpansionStep().run(
+        RetrieverPipelineContext(
+            query=rewritten_query,
+            knowledge_base_id=request.knowledge_base_id,
+            top_k=request.top_k,
+            reranked_chunks=mmr_context.reranked_chunks,
         )
     )
 
@@ -242,6 +250,7 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
             "query_rewrite": rewrite_result.model_dump(),
             "retriever": retrieve_result.metadata,
             "reranker": rerank_result.metadata,
+            "mmr": mmr_context.metadata.get("mmr", {}),
             "neighbor_expansion": neighbor_context.metadata.get(
                 "neighbor_expansion", {}
             ),
@@ -325,6 +334,15 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
                 )
             )
             reranked_chunks = rerank_result.chunks
+            mmr_context = MMRStep().run(
+                RetrieverPipelineContext(
+                    query=rewritten_query,
+                    knowledge_base_id=request.knowledge_base_id,
+                    top_k=request.top_k,
+                    reranked_chunks=reranked_chunks,
+                )
+            )
+            reranked_chunks = mmr_context.reranked_chunks
             neighbor_context = NeighborExpansionStep().run(
                 RetrieverPipelineContext(
                     query=rewritten_query,
@@ -355,6 +373,7 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
             metadata["context"] = {
                 "available": True,
                 "reranker": rerank_result.metadata,
+                "mmr": mmr_context.metadata.get("mmr", {}),
                 "neighbor_expansion": neighbor_context.metadata.get(
                     "neighbor_expansion", {}
                 ),

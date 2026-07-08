@@ -5,6 +5,7 @@ from backend.app.retrievers.pipeline.steps.context_compression_step import (
 from backend.app.retrievers.pipeline.steps.dense_retrieve_step import DenseRetrieveStep
 from backend.app.retrievers.pipeline.steps.fusion_step import FusionStep
 from backend.app.retrievers.pipeline.steps.metadata_filter_step import MetadataFilterStep
+from backend.app.retrievers.pipeline.steps.mmr_step import MMRStep
 from backend.app.retrievers.pipeline.steps.neighbor_expansion_step import (
     NeighborExpansionStep,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "DenseRetrieveStep",
     "FusionStep",
     "MetadataFilterStep",
+    "MMRStep",
     "NeighborExpansionStep",
     "QueryRewriteStep",
     "RerankStep",

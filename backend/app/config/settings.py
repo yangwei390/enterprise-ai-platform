@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     NEIGHBOR_EXPANSION_MAX_ADDED_CHUNKS: int = 10
     NEIGHBOR_EXPANSION_FAIL_OPEN: bool = True
 
+    MMR_ENABLED: bool = True
+    MMR_LAMBDA: float = 0.7
+    MMR_TOP_K: int = 5
+    MMR_MIN_SCORE: float = 0.0
+    MMR_FAIL_OPEN: bool = True
+    MMR_SIMILARITY_THRESHOLD: float = 0.85
+
+    EVALUATION_KEYWORD_THRESHOLD: float = 0.5
+
     LLM_PROVIDER: str = "dummy"
     LLM_MODEL: str = "dummy-llm"
     LLM_TEMPERATURE: float = 0.2

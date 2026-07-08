@@ -17,7 +17,7 @@ from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory
 from backend.app.retrievers.hybrid import HybridRetrieveQuery
 from backend.app.retrievers.pipeline import RetrieverPipelineContext
-from backend.app.retrievers.pipeline.steps import NeighborExpansionStep
+from backend.app.retrievers.pipeline.steps import MMRStep, NeighborExpansionStep
 from backend.app.schemas.conversation import ConversationCreate
 from backend.app.tools import ToolCall, ToolExecutor, get_tool_registry
 
@@ -62,12 +62,20 @@ class ChatService:
                 top_k=request.top_k,
             )
         )
-        neighbor_context = NeighborExpansionStep().run(
+        mmr_context = MMRStep().run(
             RetrieverPipelineContext(
                 query=rewrite_result.rewritten_query,
                 knowledge_base_id=request.knowledge_base_id,
                 top_k=request.top_k,
                 reranked_chunks=rerank_result.chunks,
+            )
+        )
+        neighbor_context = NeighborExpansionStep().run(
+            RetrieverPipelineContext(
+                query=rewrite_result.rewritten_query,
+                knowledge_base_id=request.knowledge_base_id,
+                top_k=request.top_k,
+                reranked_chunks=mmr_context.reranked_chunks,
             )
         )
 
@@ -111,6 +119,7 @@ class ChatService:
                 "metadata_filter": request.metadata_filter,
                 "metadata_filter_applied": bool(request.metadata_filter),
                 "reranker": rerank_result.metadata,
+                "mmr": mmr_context.metadata.get("mmr", {}),
                 "neighbor_expansion": neighbor_context.metadata.get(
                     "neighbor_expansion", {}
                 ),
@@ -219,6 +228,7 @@ class ChatService:
             "metadata_filter": request.metadata_filter,
             "metadata_filter_applied": bool(request.metadata_filter),
             "reranker": rerank_result.metadata,
+            "mmr": mmr_context.metadata.get("mmr", {}),
             "neighbor_expansion": neighbor_context.metadata.get("neighbor_expansion", {}),
             "guardrail_triggered": False,
             "llm_called": True,
