@@ -1,5 +1,6 @@
 from backend.app.context_compression.base import BaseContextCompressor
 from backend.app.context_compression.config import get_context_compression_config
+from backend.app.context_compression.llm_compressor import LLMContextCompressor
 from backend.app.context_compression.rule_based_compressor import (
     RuleBasedContextCompressor,
 )
@@ -14,6 +15,14 @@ class ContextCompressorFactory:
 
         if selected_provider == "rule_based":
             return RuleBasedContextCompressor(max_chunk_chars=config.max_chunk_chars)
+
+        if selected_provider == "llm":
+            return LLMContextCompressor(
+                model=config.llm_model,
+                temperature=config.llm_temperature,
+                max_chunk_chars=config.llm_max_chars_per_chunk,
+                max_calls=config.llm_max_calls,
+            )
 
         logger.warning(
             "Unknown context compression provider, fallback to rule_based: {}",

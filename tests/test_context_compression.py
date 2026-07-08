@@ -2,9 +2,12 @@ import pytest
 from backend.app.context.base import ContextChunk
 from backend.app.context_compression import CompressionInput
 from backend.app.context_compression.config import ContextCompressionConfig
+from backend.app.context_compression.factory import ContextCompressorFactory
+from backend.app.context_compression.llm_compressor import LLMContextCompressor
 from backend.app.context_compression.rule_based_compressor import (
     RuleBasedContextCompressor,
 )
+from backend.app.llms import LLMRequest, LLMResponse
 from backend.app.retrievers.pipeline.context import RetrieverPipelineContext
 from backend.app.retrievers.pipeline.steps.context_compression_step import (
     ContextCompressionStep,
@@ -14,6 +17,17 @@ from backend.app.retrievers.pipeline.steps.context_compression_step import (
 class ExplodingCompressor:
     def compress(self, input: CompressionInput):
         raise RuntimeError("compression exploded")
+
+
+class FakeLLM:
+    def __init__(self, answers: list[str]) -> None:
+        self.answers = answers
+        self.requests: list[LLMRequest] = []
+
+    def chat(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        answer = self.answers[len(self.requests) - 1]
+        return LLMResponse(answer=answer, model=request.model or "fake-model")
 
 
 def _context_chunk(
@@ -166,3 +180,176 @@ def test_compression_fail_open_returns_original_context(monkeypatch: pytest.Monk
     assert metadata["compressed_chars"] == len(original_context)
     assert metadata["original_chunk_count"] == 1
     assert metadata["compressed_chunk_count"] == 1
+
+
+def test_llm_compressor_preserves_metadata():
+    fake_llm = FakeLLM(["劳动法第二章讲的是促进就业。"])
+    chunk = _context_chunk(
+        chunk_id="chunk-1",
+        text="劳动法第二章讲的是促进就业。其他无关内容。" * 5,
+        rerank_score=0.9,
+        rerank_rank=1,
+    )
+    compressor = LLMContextCompressor(
+        model="qwen-turbo",
+        temperature=0,
+        max_chunk_chars=1200,
+        max_calls=8,
+        llm=fake_llm,
+    )
+
+    result = compressor.compress(
+        CompressionInput(
+            query="劳动法第二章讲什么？",
+            chunks=[chunk],
+            max_chars=6000,
+        )
+    )
+
+    metadata = result.compressed_chunks[0].metadata
+    assert metadata["document_id"] == 10
+    assert metadata["knowledge_base_id"] == 20
+    assert metadata["chunk_index"] == 1
+    assert metadata["source"] == "source.txt"
+    assert metadata["rerank_score"] == 0.9
+    assert metadata["rerank_rank"] == 1
+    assert metadata["rerank_provider"] == "dummy"
+    assert metadata["rerank_model"] == "dummy-reranker"
+    assert metadata["context_compressed"] is True
+    assert metadata["context_compression_provider"] == "llm"
+    assert metadata["context_compression_original_chars"] == len(chunk.text)
+    assert metadata["context_compression_compressed_chars"] == len(
+        result.compressed_chunks[0].text
+    )
+
+
+def test_llm_compressor_skips_irrelevant_chunk():
+    fake_llm = FakeLLM(["相关内容", ""])
+    relevant_chunk = _context_chunk(
+        chunk_id="relevant",
+        text="劳动法第二章讲的是促进就业。",
+        rerank_score=0.9,
+        rerank_rank=1,
+    )
+    irrelevant_chunk = _context_chunk(
+        chunk_id="irrelevant",
+        text="Android ViewModel 内容。",
+        rerank_score=0.8,
+        rerank_rank=2,
+    )
+    compressor = LLMContextCompressor(
+        model="qwen-turbo",
+        max_calls=8,
+        llm=fake_llm,
+    )
+
+    result = compressor.compress(
+        CompressionInput(
+            query="劳动法第二章讲什么？",
+            chunks=[relevant_chunk, irrelevant_chunk],
+            max_chars=6000,
+        )
+    )
+
+    assert [chunk.id for chunk in result.compressed_chunks] == ["relevant"]
+    assert result.metadata["llm_empty_outputs"] == 1
+    assert result.skipped_chunk_count == 1
+
+
+def test_llm_compressor_fail_open_when_all_empty():
+    fake_llm = FakeLLM(["", ""])
+    chunks = [
+        _context_chunk(
+            chunk_id="chunk-1",
+            text="无关内容 1",
+            rerank_score=0.9,
+            rerank_rank=1,
+        ),
+        _context_chunk(
+            chunk_id="chunk-2",
+            text="无关内容 2",
+            rerank_score=0.8,
+            rerank_rank=2,
+        ),
+    ]
+    compressor = LLMContextCompressor(
+        model="qwen-turbo",
+        max_calls=8,
+        llm=fake_llm,
+    )
+
+    result = compressor.compress(
+        CompressionInput(
+            query="劳动法第二章讲什么？",
+            chunks=chunks,
+            max_chars=6000,
+        )
+    )
+
+    assert result.compressed_chunks == chunks
+    assert result.compressed_chunk_count == len(chunks)
+    assert result.metadata["fallback_used"] is True
+    assert result.metadata["llm_empty_outputs"] == 2
+    assert result.metadata["context_text"]
+
+
+def test_factory_creates_llm_compressor(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "backend.app.context_compression.factory.get_context_compression_config",
+        lambda: ContextCompressionConfig(
+            enabled=True,
+            provider="llm",
+            max_chars=6000,
+            max_chunk_chars=1200,
+            fail_open=True,
+            llm_model="qwen-turbo",
+            llm_temperature=0,
+            llm_max_chars_per_chunk=1200,
+            llm_timeout_seconds=30,
+            llm_max_calls=8,
+        ),
+    )
+
+    compressor = ContextCompressorFactory.get_compressor()
+
+    assert isinstance(compressor, LLMContextCompressor)
+
+
+def test_llm_compressor_respects_max_calls():
+    fake_llm = FakeLLM(["high compressed", "middle compressed"])
+    low_chunk = _context_chunk(
+        chunk_id="low",
+        text="low",
+        rerank_score=0.1,
+        rerank_rank=3,
+    )
+    high_chunk = _context_chunk(
+        chunk_id="high",
+        text="high",
+        rerank_score=0.9,
+        rerank_rank=1,
+    )
+    middle_chunk = _context_chunk(
+        chunk_id="middle",
+        text="middle",
+        rerank_score=0.5,
+        rerank_rank=2,
+    )
+    compressor = LLMContextCompressor(
+        model="qwen-turbo",
+        max_calls=2,
+        llm=fake_llm,
+    )
+
+    result = compressor.compress(
+        CompressionInput(
+            query="测试",
+            chunks=[low_chunk, high_chunk, middle_chunk],
+            max_chars=6000,
+        )
+    )
+
+    assert result.metadata["llm_calls"] == 2
+    assert len(fake_llm.requests) == 2
+    assert result.metadata["llm_skipped_chunks"] == 1
+    assert [chunk.id for chunk in result.compressed_chunks] == ["high", "middle"]

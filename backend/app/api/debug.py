@@ -15,6 +15,8 @@ from backend.app.retrievers import RetrieverFactory
 from backend.app.retrievers.hybrid import HybridRetrieveQuery
 from backend.app.retrievers.hybrid.dense_retriever import DenseRetriever
 from backend.app.retrievers.hybrid.sparse_retriever import BM25SparseRetriever
+from backend.app.retrievers.pipeline import RetrieverPipelineContext
+from backend.app.retrievers.pipeline.steps import NeighborExpansionStep
 from backend.app.schemas import ApiResponse, success
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -187,12 +189,20 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
             top_k=request.top_k,
         )
     )
+    neighbor_context = NeighborExpansionStep().run(
+        RetrieverPipelineContext(
+            query=rewritten_query,
+            knowledge_base_id=request.knowledge_base_id,
+            top_k=request.top_k,
+            reranked_chunks=rerank_result.chunks,
+        )
+    )
 
     context_builder = ContextBuilderFactory.get_builder()
     context_result = context_builder.build(
         ContextBuildRequest(
             query=rewritten_query,
-            chunks=rerank_result.chunks,
+            chunks=neighbor_context.reranked_chunks,
         )
     )
 
@@ -218,7 +228,9 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
         dense_chunks=[],
         sparse_chunks=[],
         fused_chunks=[_to_trace_chunk(chunk) for chunk in fused_chunks],
-        reranked_chunks=[_to_trace_chunk(chunk) for chunk in rerank_result.chunks],
+        reranked_chunks=[
+            _to_trace_chunk(chunk) for chunk in neighbor_context.reranked_chunks
+        ],
         context_chunks=[_to_trace_chunk(chunk) for chunk in context_chunks],
         context_text_preview=compressed_context_text[:1000],
         metadata={
@@ -230,6 +242,9 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
             "query_rewrite": rewrite_result.model_dump(),
             "retriever": retrieve_result.metadata,
             "reranker": rerank_result.metadata,
+            "neighbor_expansion": neighbor_context.metadata.get(
+                "neighbor_expansion", {}
+            ),
             "context_builder": context_result.metadata,
             "context_compression": compression_metadata,
         },
@@ -310,10 +325,19 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
                 )
             )
             reranked_chunks = rerank_result.chunks
+            neighbor_context = NeighborExpansionStep().run(
+                RetrieverPipelineContext(
+                    query=rewritten_query,
+                    knowledge_base_id=request.knowledge_base_id,
+                    top_k=request.top_k,
+                    reranked_chunks=reranked_chunks,
+                )
+            )
+            reranked_chunks = neighbor_context.reranked_chunks
             context_result = ContextBuilderFactory.get_builder().build(
                 ContextBuildRequest(
                     query=rewritten_query,
-                    chunks=rerank_result.chunks,
+                    chunks=reranked_chunks,
                 )
             )
             (
@@ -331,6 +355,9 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
             metadata["context"] = {
                 "available": True,
                 "reranker": rerank_result.metadata,
+                "neighbor_expansion": neighbor_context.metadata.get(
+                    "neighbor_expansion", {}
+                ),
                 "context_builder": context_result.metadata,
                 "context_compression": compression_metadata,
             }

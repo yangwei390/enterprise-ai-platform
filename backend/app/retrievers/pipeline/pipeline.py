@@ -6,6 +6,7 @@ from backend.app.retrievers.pipeline.steps import (
     DenseRetrieveStep,
     FusionStep,
     MetadataFilterStep,
+    NeighborExpansionStep,
     QueryRewriteStep,
     RerankStep,
     SoftBoostStep,
@@ -23,6 +24,7 @@ class RetrieverPipeline:
             FusionStep(),
             SoftBoostStep(),
             RerankStep(),
+            NeighborExpansionStep(),
             ContextBuildStep(),
             ContextCompressionStep(),
         ]
