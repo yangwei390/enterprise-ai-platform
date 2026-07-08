@@ -290,6 +290,50 @@ pre {
   font-weight: 700;
 }
 
+.agent-trace-list {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-trace-step {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f9fafb;
+}
+
+.agent-trace-step h4 {
+  margin: 0;
+}
+
+.agent-trace-step details {
+  margin-top: 10px;
+}
+
+.agent-trace-step summary {
+  cursor: pointer;
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.status-ok,
+.status-failed {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.status-ok {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.status-failed {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     display: block;

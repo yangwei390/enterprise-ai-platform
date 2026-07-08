@@ -1,30 +1,36 @@
 import { FormEvent, useState } from "react";
-import { runAgent } from "../api/agent";
-import type { AgentResult } from "../types/common";
+import { agentChat } from "../api/agent";
+import type { AgentChatResponseData } from "../types/common";
 
 export default function AgentPage() {
-  const [task, setTask] = useState("计算 1+2*3");
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState("2");
-  const [enableTools, setEnableTools] = useState(true);
-  const [enableMemory, setEnableMemory] = useState(true);
-  const [result, setResult] = useState<AgentResult | { error: string } | null>(null);
+  const [query, setQuery] = useState("劳动法第二章说什么");
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState("4");
+  const [result, setResult] = useState<AgentChatResponseData | null>(null);
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const agentResult = result && "answer" in result ? result : null;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) {
+      setError("请输入内容");
+      return;
+    }
+
     setLoading(true);
+    setError("");
     try {
-      setResult(
-        await runAgent({
-          task,
-          knowledge_base_id: knowledgeBaseId ? Number(knowledgeBaseId) : null,
-          enable_tools: enableTools,
-          enable_memory: enableMemory
-        })
-      );
-    } catch (error) {
-      setResult({ error: error instanceof Error ? error.message : String(error) });
+      const response = await agentChat({
+        query: trimmedQuery,
+        knowledge_base_id: knowledgeBaseId ? Number(knowledgeBaseId) : null,
+        conversation_id: null,
+        memory_context: null,
+        metadata: {}
+      });
+      setResult(response);
+    } catch (requestError) {
+      setResult(null);
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
     } finally {
       setLoading(false);
     }
@@ -33,45 +39,105 @@ export default function AgentPage() {
   return (
     <div>
       <div className="page-title">
-        <h2>Agent</h2>
-        <p>Run Agent Planner, Workflow Executor, Reflection, and final answer.</p>
+        <h2>Agent Studio</h2>
+        <p>Run AgentRuntime through /agent/chat and inspect tool calls, observations, sources, and trace.</p>
       </div>
       <div className="two-column">
         <form className="card form" onSubmit={handleSubmit}>
           <label>
-            Task
-            <textarea value={task} onChange={(event) => setTask(event.target.value)} />
+            Query
+            <textarea
+              placeholder="请输入 Agent 任务，例如：劳动法第二章说什么"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
           </label>
           <label>
             Knowledge Base ID
-            <input value={knowledgeBaseId} onChange={(event) => setKnowledgeBaseId(event.target.value)} />
-          </label>
-          <label className="checkbox-row">
             <input
-              type="checkbox"
-              checked={enableTools}
-              onChange={(event) => setEnableTools(event.target.checked)}
+              value={knowledgeBaseId}
+              onChange={(event) => setKnowledgeBaseId(event.target.value)}
+              placeholder="可为空"
             />
-            Enable Tools
           </label>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={enableMemory}
-              onChange={(event) => setEnableMemory(event.target.checked)}
-            />
-            Enable Memory
-          </label>
-          <button type="submit" disabled={loading}>POST /agents/run</button>
+          {error && <p className="error-text">{error}</p>}
+          <button type="submit" disabled={loading}>
+            {loading ? "Running..." : "Run Agent"}
+          </button>
         </form>
+
         <div className="stack">
           <div className="card">
             <h3>Answer</h3>
-            <p className="answer">{agentResult?.answer ?? ""}</p>
+            <p className="answer">{result?.answer ?? ""}</p>
+            {result && (
+              <p className="muted">
+                action: {result.action} · trace steps: {result.trace.length}
+              </p>
+            )}
           </div>
+
+          <div className="card">
+            <h3>Execution Trace</h3>
+            <div className="agent-trace-list">
+              {result?.trace.map((step, index) => (
+                <div className="agent-trace-step" key={`${step.step}-${index}`}>
+                  <div className="section-header">
+                    <h4>Step {index + 1} · {step.step}</h4>
+                    <span className={step.status === "success" ? "status-ok" : "status-failed"}>
+                      {step.status}
+                    </span>
+                  </div>
+                  <p className="muted">
+                    {step.name} · {step.duration_ms}ms
+                  </p>
+                  {step.error && <p className="error-text">{step.error}</p>}
+                  <details>
+                    <summary>Input / Output</summary>
+                    <pre>{JSON.stringify({ input: step.input, output: step.output }, null, 2)}</pre>
+                  </details>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="card result-card">
-            <h3>Steps / Artifacts / Reflection</h3>
-            <pre>{JSON.stringify(result, null, 2)}</pre>
+            <h3>Tool Calls</h3>
+            <pre>{JSON.stringify(result?.tool_calls ?? [], null, 2)}</pre>
+          </div>
+
+          <div className="card result-card">
+            <h3>Observations</h3>
+            <pre>{JSON.stringify(result?.observations ?? [], null, 2)}</pre>
+          </div>
+
+          <div className="card">
+            <h3>Sources</h3>
+            <div className="trace-chunk-list">
+              {result?.sources.map((source, index) => (
+                <div className="trace-chunk-card" key={index}>
+                  <div className="trace-chunk-meta">
+                    <span>source: {String(source.source ?? "-")}</span>
+                    <span>document_id: {String(source.document_id ?? "-")}</span>
+                    <span>chunk_index: {String(source.chunk_index ?? "-")}</span>
+                    <span>
+                      score: {String(source.rerank_score ?? source.score ?? "-")}
+                    </span>
+                  </div>
+                  <pre className="trace-preview">
+                    {JSON.stringify(source, null, 2)}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="card result-card">
+            <h3>Raw Metadata / JSON</h3>
+            <details open>
+              <summary>Response</summary>
+              <pre>{JSON.stringify(result, null, 2)}</pre>
+            </details>
           </div>
         </div>
       </div>

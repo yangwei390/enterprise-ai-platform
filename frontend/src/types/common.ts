@@ -46,6 +46,25 @@ export type WorkflowResult = {
   error?: string | null;
 };
 
+export type WorkflowTraceStep = {
+  step: number;
+  node_id: string;
+  node_type: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  duration_ms: number;
+  status: string;
+  error?: string | null;
+};
+
+export type WorkflowRunResponseData = {
+  answer?: string | null;
+  output: Record<string, unknown>;
+  node_outputs: Record<string, unknown>;
+  trace: WorkflowTraceStep[];
+  metadata: Record<string, unknown>;
+};
+
 export type AgentResult = {
   task: string;
   status: string;
@@ -54,4 +73,25 @@ export type AgentResult = {
   artifacts: Array<Record<string, unknown>>;
   metadata: Record<string, unknown>;
   error?: string | null;
+};
+
+export type AgentTraceStep = {
+  step: string;
+  name: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  duration_ms: number;
+  status: string;
+  error?: string | null;
+};
+
+export type AgentChatResponseData = {
+  answer: string;
+  action: string;
+  tool_calls: Array<Record<string, unknown>>;
+  observations: Array<Record<string, unknown>>;
+  sources: Array<Record<string, unknown>>;
+  citations: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+  trace: AgentTraceStep[];
 };

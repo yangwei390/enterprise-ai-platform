@@ -1,5 +1,12 @@
 from backend.app.schemas import ApiResponse, success
-from backend.app.workflows import WorkflowDefinition, WorkflowService
+from backend.app.workflows import (
+    WorkflowDefinition,
+    WorkflowRuntimeV1,
+    WorkflowService,
+)
+from backend.app.workflows import (
+    WorkflowRunRequest as WorkflowRunV1Request,
+)
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
@@ -13,6 +20,12 @@ class WorkflowRunRequest(BaseModel):
 
 class WorkflowPlanAndRunRequest(BaseModel):
     task: str
+
+
+@router.post("/workflow/run", response_model=ApiResponse)
+def run_workflow_v1(request: WorkflowRunV1Request) -> ApiResponse:
+    result = WorkflowRuntimeV1().run(request)
+    return success(data=result)
 
 
 @router.post("/workflows/run", response_model=ApiResponse)
