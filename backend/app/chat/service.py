@@ -13,6 +13,7 @@ from backend.app.memory import MemoryContext, MemoryService
 from backend.app.models import Message
 from backend.app.prompts import PromptBuilderFactory, PromptBuildRequest
 from backend.app.query import SimpleQueryRewriter
+from backend.app.rag import RagChatInput, RagChatPipeline
 from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory
 from backend.app.retrievers.hybrid import HybridRetrieveQuery
@@ -41,6 +42,53 @@ class ChatService:
                     "rewritten_query": rewrite_result.rewritten_query,
                     "query_rewrite_changed": rewrite_result.changed,
                 },
+            )
+
+        if not request.enable_tools:
+            rag_result = RagChatPipeline().run(
+                RagChatInput(
+                    query=request.query,
+                    conversation_id=conversation_id,
+                    knowledge_base_id=request.knowledge_base_id,
+                    top_k=request.top_k,
+                    score_threshold=request.score_threshold,
+                    metadata_filter=request.metadata_filter,
+                    memory_messages=self._build_prompt_memory_messages(memory_context),
+                    metadata={
+                        "history_loaded_count": history_loaded_count,
+                    },
+                )
+            )
+            metadata = {
+                **rag_result.metadata,
+                "tools_enabled": request.enable_tools,
+                "tool_results": [],
+                **self._build_memory_metadata(request, memory_context),
+                "history_loaded_count": history_loaded_count,
+            }
+            assistant_message = self._save_assistant_message(
+                conversation_id=conversation_id,
+                content=rag_result.answer,
+                metadata={
+                    **metadata,
+                    "sources": [source.model_dump() for source in rag_result.sources],
+                    "citations": [
+                        citation.model_dump() for citation in rag_result.citations
+                    ],
+                },
+            )
+            self._update_memory_summary(request, conversation_id)
+            return ChatResponse(
+                query=request.query,
+                answer=rag_result.answer,
+                conversation_id=conversation_id,
+                message_id=assistant_message.id if assistant_message else None,
+                sources=rag_result.sources,
+                citations=rag_result.citations,
+                context_text=rag_result.context_text,
+                prompt_text=rag_result.prompt_text,
+                llm_model=rag_result.llm_model,
+                metadata=metadata,
             )
 
         retriever = RetrieverFactory.get_hybrid_retriever()
