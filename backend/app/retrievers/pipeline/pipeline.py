@@ -2,6 +2,7 @@ from backend.app.retrievers.pipeline.base import BaseRetrieverStep
 from backend.app.retrievers.pipeline.context import RetrieverPipelineContext
 from backend.app.retrievers.pipeline.steps import (
     ContextBuildStep,
+    ContextCompressionStep,
     DenseRetrieveStep,
     FusionStep,
     MetadataFilterStep,
@@ -23,6 +24,7 @@ class RetrieverPipeline:
             SoftBoostStep(),
             RerankStep(),
             ContextBuildStep(),
+            ContextCompressionStep(),
         ]
 
     def run(self, context: RetrieverPipelineContext) -> RetrieverPipelineContext:

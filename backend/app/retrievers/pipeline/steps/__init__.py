@@ -1,4 +1,7 @@
 from backend.app.retrievers.pipeline.steps.context_build_step import ContextBuildStep
+from backend.app.retrievers.pipeline.steps.context_compression_step import (
+    ContextCompressionStep,
+)
 from backend.app.retrievers.pipeline.steps.dense_retrieve_step import DenseRetrieveStep
 from backend.app.retrievers.pipeline.steps.fusion_step import FusionStep
 from backend.app.retrievers.pipeline.steps.metadata_filter_step import MetadataFilterStep
@@ -9,6 +12,7 @@ from backend.app.retrievers.pipeline.steps.sparse_retrieve_step import SparseRet
 
 __all__ = [
     "ContextBuildStep",
+    "ContextCompressionStep",
     "DenseRetrieveStep",
     "FusionStep",
     "MetadataFilterStep",

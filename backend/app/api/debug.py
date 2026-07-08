@@ -1,8 +1,14 @@
 from typing import Any
 
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
-from backend.app.context.compression.compressor import SimpleContextCompressor
+from backend.app.context_compression import (
+    CompressionInput,
+    CompressionResult,
+    ContextCompressorFactory,
+    get_context_compression_config,
+)
 from backend.app.debug import RagTraceChunk, RagTraceResult
+from backend.app.logger import logger
 from backend.app.query.rewriter import SimpleQueryRewriter
 from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory
@@ -82,6 +88,81 @@ def _to_trace_chunk(
     )
 
 
+def _compress_context(
+    query: str,
+    context_text: str,
+    chunks: list[Any],
+) -> tuple[str, list[Any], CompressionResult, dict]:
+    config = get_context_compression_config()
+    base_metadata = {
+        "enabled": config.enabled,
+        "provider": config.provider,
+        "original_chunk_count": len(chunks),
+        "compressed_chunk_count": len(chunks),
+        "original_chars": len(context_text),
+        "compressed_chars": len(context_text),
+        "skipped_chunk_count": 0,
+        "max_chars": config.max_chars,
+        "max_chunk_chars": config.max_chunk_chars,
+        "failed": False,
+        "error": None,
+    }
+
+    if not config.enabled:
+        result = CompressionResult(
+            compressed_chunks=chunks,
+            original_chunk_count=len(chunks),
+            compressed_chunk_count=len(chunks),
+            original_chars=len(context_text),
+            compressed_chars=len(context_text),
+            skipped_chunk_count=0,
+            metadata={"context_text": context_text},
+        )
+        return context_text, chunks, result, base_metadata
+
+    try:
+        result = ContextCompressorFactory.get_compressor(config.provider).compress(
+            CompressionInput(
+                query=query,
+                chunks=chunks,
+                max_chars=config.max_chars,
+                metadata={"context_text": context_text},
+            )
+        )
+        compressed_context_text = str(result.metadata.get("context_text") or "")
+        metadata = {
+            **base_metadata,
+            "original_chunk_count": result.original_chunk_count,
+            "compressed_chunk_count": result.compressed_chunk_count,
+            "original_chars": result.original_chars,
+            "compressed_chars": result.compressed_chars,
+            "skipped_chunk_count": result.skipped_chunk_count,
+            **result.metadata,
+            "failed": False,
+            "error": None,
+        }
+        return compressed_context_text, result.compressed_chunks, result, metadata
+    except Exception as exc:
+        logger.exception("Context compression failed in debug API")
+        if not config.fail_open:
+            raise
+        result = CompressionResult(
+            compressed_chunks=chunks,
+            original_chunk_count=len(chunks),
+            compressed_chunk_count=len(chunks),
+            original_chars=len(context_text),
+            compressed_chars=len(context_text),
+            skipped_chunk_count=0,
+            metadata={"context_text": context_text},
+        )
+        metadata = {
+            **base_metadata,
+            "failed": True,
+            "error": str(exc),
+        }
+        return context_text, chunks, result, metadata
+
+
 @router.post("/debug/rag-trace", response_model=ApiResponse)
 def rag_trace(request: RagTraceRequest) -> ApiResponse:
     rewrite_result = SimpleQueryRewriter().rewrite(request.query)
@@ -115,13 +196,19 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
         )
     )
 
-    compression_result = SimpleContextCompressor().compress(
+    (
+        compressed_context_text,
+        compressed_chunks,
+        _compression_result,
+        compression_metadata,
+    ) = _compress_context(
+        query=rewritten_query,
         context_text=context_result.context_text,
         chunks=context_result.chunks,
     )
 
     fused_chunks = retrieve_result.chunks[: request.top_k]
-    context_chunks = compression_result.chunks
+    context_chunks = compressed_chunks
 
     trace_result = RagTraceResult(
         query=request.query,
@@ -133,23 +220,18 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
         fused_chunks=[_to_trace_chunk(chunk) for chunk in fused_chunks],
         reranked_chunks=[_to_trace_chunk(chunk) for chunk in rerank_result.chunks],
         context_chunks=[_to_trace_chunk(chunk) for chunk in context_chunks],
-        context_text_preview=compression_result.context_text[:1000],
+        context_text_preview=compressed_context_text[:1000],
         metadata={
             "trace_limited": True,
             "trace_limited_reason": "HybridRetriever currently exposes fused chunks only.",
             "fused_chunk_count": len(fused_chunks),
             "context_chunk_count": len(context_chunks),
-            "context_text_preview_chars": len(compression_result.context_text[:1000]),
+            "context_text_preview_chars": len(compressed_context_text[:1000]),
             "query_rewrite": rewrite_result.model_dump(),
             "retriever": retrieve_result.metadata,
             "reranker": rerank_result.metadata,
             "context_builder": context_result.metadata,
-            "context_compression": {
-                "original_chars": compression_result.original_chars,
-                "compressed_chars": compression_result.compressed_chars,
-                "compression_applied": compression_result.compression_applied,
-                **compression_result.metadata,
-            },
+            "context_compression": compression_metadata,
         },
     )
     return success(data=trace_result.model_dump())
@@ -172,6 +254,7 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
         "sparse": {},
         "fusion": {},
         "context": {},
+        "context_compression": {},
     }
 
     dense_chunks = []
@@ -233,23 +316,25 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
                     chunks=rerank_result.chunks,
                 )
             )
-            compression_result = SimpleContextCompressor().compress(
+            (
+                compressed_context_text,
+                compressed_chunks,
+                _compression_result,
+                compression_metadata,
+            ) = _compress_context(
+                query=rewritten_query,
                 context_text=context_result.context_text,
                 chunks=context_result.chunks,
             )
-            context_chunks = compression_result.chunks
-            context_text_preview = compression_result.context_text[:1000]
+            context_chunks = compressed_chunks
+            context_text_preview = compressed_context_text[:1000]
             metadata["context"] = {
                 "available": True,
                 "reranker": rerank_result.metadata,
                 "context_builder": context_result.metadata,
-                "context_compression": {
-                    "original_chars": compression_result.original_chars,
-                    "compressed_chars": compression_result.compressed_chars,
-                    "compression_applied": compression_result.compression_applied,
-                    **compression_result.metadata,
-                },
+                "context_compression": compression_metadata,
             }
+            metadata["context_compression"] = compression_metadata
         except Exception as exc:
             metadata["context"] = {
                 "available": False,

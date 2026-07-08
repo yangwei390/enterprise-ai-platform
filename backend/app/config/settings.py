@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     RERANK_TIMEOUT: int = 30
     RERANK_FAIL_OPEN: bool = True
 
+    CONTEXT_COMPRESSION_ENABLED: bool = True
+    CONTEXT_COMPRESSION_PROVIDER: str = "rule_based"
+    CONTEXT_COMPRESSION_MAX_CHARS: int = 6000
+    CONTEXT_COMPRESSION_MAX_CHUNK_CHARS: int = 1200
+    CONTEXT_COMPRESSION_FAIL_OPEN: bool = True
+
     LLM_PROVIDER: str = "dummy"
     LLM_MODEL: str = "dummy-llm"
     LLM_TEMPERATURE: float = 0.2

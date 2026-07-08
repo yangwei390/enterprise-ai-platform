@@ -1,6 +1,11 @@
 from backend.app.chat.base import ChatRequest, ChatResponse, ChatSource, CitationItem
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
-from backend.app.context.compression import SimpleContextCompressor
+from backend.app.context_compression import (
+    CompressionInput,
+    CompressionResult,
+    ContextCompressorFactory,
+    get_context_compression_config,
+)
 from backend.app.conversations import ConversationService
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.logger import logger
@@ -64,12 +69,18 @@ class ChatService:
             )
         )
 
-        compression_result = SimpleContextCompressor().compress(
+        (
+            compressed_context_text,
+            compressed_chunks,
+            compression_result,
+            compression_metadata,
+        ) = self._compress_context(
+            query=rewrite_result.rewritten_query,
             context_text=context_result.context_text,
             chunks=context_result.chunks,
         )
 
-        if not compression_result.context_text.strip() or not compression_result.chunks:
+        if not compressed_context_text.strip() or not compressed_chunks:
             answer = "根据当前知识库内容无法回答该问题。"
             metadata = {
                 "retrieved_total": retrieve_result.total,
@@ -79,15 +90,14 @@ class ChatService:
                 "original_query": rewrite_result.original_query,
                 "rewritten_query": rewrite_result.rewritten_query,
                 "query_rewrite_changed": rewrite_result.changed,
-                "context_compression_applied": compression_result.compression_applied,
+                "context_compression_applied": self._compression_applied(
+                    compression_metadata
+                ),
                 "context_original_chars": compression_result.original_chars,
                 "context_compressed_chars": compression_result.compressed_chars,
-                "context_original_chunks": compression_result.metadata.get(
-                    "original_chunk_count", 0
-                ),
-                "context_compressed_chunks": compression_result.metadata.get(
-                    "compressed_chunk_count", 0
-                ),
+                "context_original_chunks": compression_result.original_chunk_count,
+                "context_compressed_chunks": compression_result.compressed_chunk_count,
+                "context_compression": compression_metadata,
                 "metadata_filter": request.metadata_filter,
                 "metadata_filter_applied": bool(request.metadata_filter),
                 "reranker": rerank_result.metadata,
@@ -123,7 +133,7 @@ class ChatService:
         prompt_result = prompt_builder.build(
             PromptBuildRequest(
                 query=request.query,
-                context_text=compression_result.context_text,
+                context_text=compressed_context_text,
             )
         )
 
@@ -163,7 +173,7 @@ class ChatService:
                 source=chunk.source,
                 metadata=chunk.metadata,
             )
-            for chunk in compression_result.chunks
+            for chunk in compressed_chunks
         ]
         citations = [
             CitationItem(
@@ -175,7 +185,7 @@ class ChatService:
                 text_preview=chunk.text[:120] if chunk.text else None,
                 metadata=chunk.metadata,
             )
-            for chunk in compression_result.chunks
+            for chunk in compressed_chunks
         ]
         metadata = {
             "retrieved_total": retrieve_result.total,
@@ -185,15 +195,14 @@ class ChatService:
             "original_query": rewrite_result.original_query,
             "rewritten_query": rewrite_result.rewritten_query,
             "query_rewrite_changed": rewrite_result.changed,
-            "context_compression_applied": compression_result.compression_applied,
+            "context_compression_applied": self._compression_applied(
+                compression_metadata
+            ),
             "context_original_chars": compression_result.original_chars,
             "context_compressed_chars": compression_result.compressed_chars,
-            "context_original_chunks": compression_result.metadata.get(
-                "original_chunk_count", 0
-            ),
-            "context_compressed_chunks": compression_result.metadata.get(
-                "compressed_chunk_count", 0
-            ),
+            "context_original_chunks": compression_result.original_chunk_count,
+            "context_compressed_chunks": compression_result.compressed_chunk_count,
+            "context_compression": compression_metadata,
             "metadata_filter": request.metadata_filter,
             "metadata_filter_applied": bool(request.metadata_filter),
             "reranker": rerank_result.metadata,
@@ -251,7 +260,7 @@ class ChatService:
             message_id=assistant_message.id if assistant_message else None,
             sources=sources,
             citations=citations,
-            context_text=compression_result.context_text,
+            context_text=compressed_context_text,
             prompt_text=prompt_result.prompt_text,
             llm_model=llm_response.model,
             metadata=metadata,
@@ -487,3 +496,87 @@ class ChatService:
             else:
                 lines.append(f"{result.get('name')}: {result.get('error')}")
         return "\n".join(lines)
+
+    def _compress_context(
+        self,
+        query: str,
+        context_text: str,
+        chunks: list,
+    ) -> tuple[str, list, CompressionResult, dict]:
+        config = get_context_compression_config()
+        base_metadata = {
+            "enabled": config.enabled,
+            "provider": config.provider,
+            "original_chunk_count": len(chunks),
+            "compressed_chunk_count": len(chunks),
+            "original_chars": len(context_text),
+            "compressed_chars": len(context_text),
+            "skipped_chunk_count": 0,
+            "max_chars": config.max_chars,
+            "max_chunk_chars": config.max_chunk_chars,
+            "failed": False,
+            "error": None,
+        }
+
+        if not config.enabled:
+            result = CompressionResult(
+                compressed_chunks=chunks,
+                original_chunk_count=len(chunks),
+                compressed_chunk_count=len(chunks),
+                original_chars=len(context_text),
+                compressed_chars=len(context_text),
+                skipped_chunk_count=0,
+                metadata={"context_text": context_text},
+            )
+            return context_text, chunks, result, base_metadata
+
+        try:
+            result = ContextCompressorFactory.get_compressor(config.provider).compress(
+                CompressionInput(
+                    query=query,
+                    chunks=chunks,
+                    max_chars=config.max_chars,
+                    metadata={"context_text": context_text},
+                )
+            )
+            compressed_context_text = str(result.metadata.get("context_text") or "")
+            metadata = {
+                **base_metadata,
+                "original_chunk_count": result.original_chunk_count,
+                "compressed_chunk_count": result.compressed_chunk_count,
+                "original_chars": result.original_chars,
+                "compressed_chars": result.compressed_chars,
+                "skipped_chunk_count": result.skipped_chunk_count,
+                **result.metadata,
+                "failed": False,
+                "error": None,
+            }
+            return compressed_context_text, result.compressed_chunks, result, metadata
+        except Exception as exc:
+            logger.exception("Context compression failed")
+            if not config.fail_open:
+                raise
+            result = CompressionResult(
+                compressed_chunks=chunks,
+                original_chunk_count=len(chunks),
+                compressed_chunk_count=len(chunks),
+                original_chars=len(context_text),
+                compressed_chars=len(context_text),
+                skipped_chunk_count=0,
+                metadata={"context_text": context_text},
+            )
+            metadata = {
+                **base_metadata,
+                "failed": True,
+                "error": str(exc),
+            }
+            return context_text, chunks, result, metadata
+
+    def _compression_applied(self, metadata: dict) -> bool:
+        if not metadata.get("enabled") or metadata.get("failed"):
+            return False
+        return bool(
+            metadata.get("compressed_chars", 0) < metadata.get("original_chars", 0)
+            or metadata.get("compressed_chunk_count", 0)
+            < metadata.get("original_chunk_count", 0)
+        )
