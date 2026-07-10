@@ -96,6 +96,29 @@ def search(request: RetrieveRequest) -> ApiResponse:
     return success(data=RetrieveResponse.model_validate(response_data))
 
 
+@router.post("/retriever/search-test", response_model=ApiResponse)
+def search_test(request: RetrieveRequest) -> ApiResponse:
+    retriever = RetrieverFactory.get_retriever()
+    result = retriever.retrieve(
+        RetrieveQuery(
+            query=request.query,
+            knowledge_base_id=request.knowledge_base_id,
+            top_k=request.top_k,
+            score_threshold=request.score_threshold,
+            metadata_filter=request.metadata_filter,
+        )
+    )
+    return success(
+        data={
+            "query": request.query,
+            "top_k": request.top_k,
+            "total": result.total,
+            "chunks": [chunk.model_dump() for chunk in result.chunks],
+            "metadata": result.metadata,
+        }
+    )
+
+
 @router.post("/retriever/hybrid-search", response_model=ApiResponse)
 def hybrid_search(request: RetrieveRequest) -> ApiResponse:
     retriever = RetrieverFactory.get_hybrid_retriever()
