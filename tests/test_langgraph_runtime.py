@@ -1,12 +1,16 @@
 from backend.app.agents import AgentRuntime
 from backend.app.agents.langgraph import AgentRuntimeFactory, LangGraphAgentRuntime, LLMPlanner
-from backend.app.agents.langgraph.nodes import ToolNode
+from backend.app.agents.langgraph.graph import build_agent_graph
+from backend.app.agents.langgraph.nodes import FinalNode, PlannerNode, ToolNode
+from backend.app.agents.langgraph.planner import AgentPlan, PlanStep
 from backend.app.agents.langgraph.state import create_initial_state
 from backend.app.agents.state import AgentRuntimeRequest
 from backend.app.llms import LLMResponse
 from backend.app.rag import RagChatResult
-from backend.app.tools import ToolResult
+from backend.app.tools import BaseTool, ToolExecutor, ToolResult
 from backend.app.tools.builtin.knowledge_tool import KnowledgeSearchTool
+from backend.app.tools.registry import ToolRegistry
+from pydantic import BaseModel
 
 
 class FakePlannerLLM:
@@ -33,6 +37,56 @@ class FakeToolExecutor:
                 "sources": [{"source": "中国劳动法.pdf"}],
                 "citations": [{"source": "中国劳动法.pdf"}],
                 "metadata": {"retriever_mode": "hybrid"},
+            },
+        )
+
+
+class SmokePlanner:
+    def plan(
+        self,
+        *,
+        query,
+        knowledge_base_id=None,
+        conversation_id=None,
+        memory_context=None,
+    ):
+        return AgentPlan(
+            steps=[
+                PlanStep(
+                    tool="knowledge_search",
+                    args={
+                        "query": query,
+                        "knowledge_base_id": knowledge_base_id,
+                        "conversation_id": conversation_id,
+                        "memory_context": memory_context,
+                    },
+                )
+            ],
+            metadata={"smoke": True},
+        )
+
+
+class SmokeKnowledgeArgs(BaseModel):
+    query: str
+    knowledge_base_id: int | None = None
+    conversation_id: int | None = None
+    memory_context: str | None = None
+
+
+class SmokeKnowledgeTool(BaseTool):
+    name = "knowledge_search"
+    description = "smoke knowledge tool"
+    args_schema = SmokeKnowledgeArgs
+
+    def run(self, arguments):
+        return ToolResult(
+            name=self.name,
+            success=True,
+            result={
+                "answer": "real graph answer",
+                "sources": [{"source": "smoke.pdf"}],
+                "citations": [{"source": "smoke.pdf"}],
+                "metadata": {"retriever_mode": "smoke"},
             },
         )
 
@@ -166,6 +220,30 @@ def test_langgraph_runtime_returns_final_answer():
     assert result.action == "tool"
     assert result.sources[0]["source"] == "source.pdf"
     assert result.trace[0].step == "final_answer"
+
+
+def test_real_langgraph_graph_compiles_and_invokes():
+    registry = ToolRegistry()
+    registry.register(SmokeKnowledgeTool())
+    graph_app = build_agent_graph(
+        planner_node=PlannerNode(planner=SmokePlanner()),
+        tool_node=ToolNode(tool_executor=ToolExecutor(registry=registry)),
+        final_node=FinalNode(),
+    )
+
+    result = LangGraphAgentRuntime(graph_app=graph_app).run(
+        AgentRuntimeRequest(query="劳动法第二章说什么", knowledge_base_id=4)
+    )
+
+    assert result.answer == "real graph answer"
+    assert result.sources[0]["source"] == "smoke.pdf"
+    assert result.citations[0]["source"] == "smoke.pdf"
+    assert result.metadata.get("runtime_fallback") is None
+    assert [step.step for step in result.trace] == [
+        "planner",
+        "tool_call",
+        "final_answer",
+    ]
 
 
 def test_config_switch_to_langgraph(monkeypatch):
