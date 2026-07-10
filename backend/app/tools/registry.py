@@ -239,5 +239,5 @@ def _register_default_providers(registry: ToolRegistry) -> None:
         from backend.app.tools.providers.workflow import WorkflowToolProvider
 
         registry.register_provider(WorkflowToolProvider())
-    if settings.MCP_TOOL_PROVIDER_ENABLED:
+    if settings.MCP_ENABLED or settings.MCP_TOOL_PROVIDER_ENABLED:
         registry.register_provider(MCPToolProvider())

@@ -1,4 +1,5 @@
-from backend.app.mcp import MCPAdapter, MCPToolConfig
+from backend.app.mcp.adapter import MCPAdapter
+from backend.app.mcp.base import MCPToolConfig
 from backend.app.schemas import ApiResponse, success
 from backend.app.tools import get_tool_registry
 from fastapi import APIRouter

@@ -10,6 +10,7 @@ from backend.app.context_compression import (
 )
 from backend.app.debug import RagTraceChunk, RagTraceResult
 from backend.app.logger import logger
+from backend.app.mcp.client_manager import get_mcp_client_manager
 from backend.app.memory.factory import MemoryFactory
 from backend.app.query.rewriter import SimpleQueryRewriter
 from backend.app.rerankers import RerankerFactory, RerankQuery
@@ -479,3 +480,55 @@ def delete_debug_session(session_id: str) -> ApiResponse:
 def debug_checkpoints() -> ApiResponse:
     manager = MemoryFactory.get_checkpoint_manager()
     return success(data={"checkpoints": manager.list()})
+
+
+@router.get("/debug/mcp", response_model=ApiResponse)
+async def debug_mcp() -> ApiResponse:
+    manager = get_mcp_client_manager()
+    health = await manager.health_all()
+    registry_snapshot = get_tool_registry().snapshot()
+    mcp_tools = [
+        tool
+        for tool in registry_snapshot.get("tools", [])
+        if tool.get("provider") == "mcp"
+    ]
+    return success(
+        data={
+            "enabled": settings.MCP_ENABLED or settings.MCP_TOOL_PROVIDER_ENABLED,
+            "configured_servers": manager.list_servers(),
+            "health": health,
+            "discovered_tool_count": len(mcp_tools),
+            "tools": mcp_tools,
+            "registry_version": registry_snapshot.get("registry_version"),
+            "audit": manager.audit_records[-50:],
+        }
+    )
+
+
+@router.post("/debug/mcp/connect/{server_name}", response_model=ApiResponse)
+async def debug_mcp_connect(server_name: str) -> ApiResponse:
+    if settings.APP_ENV.lower() in {"prod", "production"}:
+        return success(data={"connected": False, "reason": "disabled in production"})
+    await get_mcp_client_manager().connect(server_name)
+    return success(data={"connected": True, "server_name": server_name})
+
+
+@router.post("/debug/mcp/disconnect/{server_name}", response_model=ApiResponse)
+async def debug_mcp_disconnect(server_name: str) -> ApiResponse:
+    if settings.APP_ENV.lower() in {"prod", "production"}:
+        return success(data={"disconnected": False, "reason": "disabled in production"})
+    await get_mcp_client_manager().disconnect(server_name)
+    return success(data={"disconnected": True, "server_name": server_name})
+
+
+@router.post("/debug/mcp/refresh", response_model=ApiResponse)
+async def debug_mcp_refresh() -> ApiResponse:
+    if settings.APP_ENV.lower() in {"prod", "production"}:
+        return success(data={"refreshed": False, "reason": "disabled in production"})
+    result = await get_tool_registry().arefresh()
+    return success(data=result)
+
+
+@router.get("/debug/mcp/health", response_model=ApiResponse)
+async def debug_mcp_health() -> ApiResponse:
+    return success(data=await get_mcp_client_manager().health_all())

@@ -17,7 +17,9 @@ from backend.app.api import (
 from backend.app.config.settings import settings
 from backend.app.exceptions import register_exception_handlers
 from backend.app.logger import logger, setup_logger
+from backend.app.mcp.client_manager import get_mcp_client_manager
 from backend.app.middleware import RequestLogMiddleware
+from backend.app.tools import get_tool_registry
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -44,6 +46,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(RequestLogMiddleware)
+
+    @app.on_event("startup")
+    async def startup_mcp() -> None:
+        if settings.MCP_ENABLED and settings.MCP_DISCOVERY_ON_STARTUP:
+            await get_tool_registry().arefresh()
+
+    @app.on_event("shutdown")
+    async def shutdown_mcp() -> None:
+        await get_mcp_client_manager().disconnect_all()
+
     app.include_router(agent_router)
     app.include_router(health_router)
     app.include_router(database_router)

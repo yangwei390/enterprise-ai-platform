@@ -90,6 +90,24 @@ class Settings(BaseSettings):
     LLM_STREAM: bool = False
 
     MCP_ENABLED: bool = False
+    MCP_CONFIG_PATH: str = "config/mcp/servers.json"
+    MCP_DISCOVERY_ON_STARTUP: bool = True
+    MCP_FAIL_OPEN: bool = True
+    MCP_DEFAULT_CONNECT_TIMEOUT_SECONDS: int = 10
+    MCP_DEFAULT_TOOL_TIMEOUT_SECONDS: int = 30
+    MCP_DEFAULT_RETRY_COUNT: int = 1
+    MCP_MAX_CONCURRENCY: int = 4
+    MCP_STDIO_ENABLED: bool = True
+    MCP_STREAMABLE_HTTP_ENABLED: bool = True
+    MCP_SSE_COMPAT_ENABLED: bool = False
+    MCP_AUTO_RECONNECT: bool = True
+    MCP_HEALTH_CHECK_ENABLED: bool = True
+    MCP_HEALTH_CHECK_INTERVAL_SECONDS: int = 60
+    MCP_AUDIT_ENABLED: bool = True
+    MCP_ALLOW_INSECURE_HTTP_LOCALHOST: bool = True
+    MCP_STDIO_ALLOWED_COMMANDS: str = "python,python3,python3.12,node,npx,uv,uvx"
+    MCP_PERMISSION_ENFORCEMENT_ENABLED: bool = False
+    MCP_PERMISSION_FAIL_OPEN: bool = False
 
     MEMORY_PROVIDER: str = "redis"
 
