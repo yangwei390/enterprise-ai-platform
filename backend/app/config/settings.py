@@ -94,6 +94,21 @@ class Settings(BaseSettings):
     AGENT_ASYNC_FAIL_OPEN: bool = True
     AGENT_SYNC_FALLBACK_ENABLED: bool = True
 
+    DYNAMIC_TOOL_REGISTRY_ENABLED: bool = True
+    TOOL_REGISTRY_AUTO_REFRESH: bool = False
+    TOOL_REGISTRY_REFRESH_INTERVAL_SECONDS: int = 300
+    TOOL_REGISTRY_FAIL_OPEN: bool = True
+
+    TOOL_PLUGIN_ENABLED: bool = True
+    TOOL_PLUGIN_PATH: str = "backend/app/tools/plugins"
+
+    HTTP_TOOL_PROVIDER_ENABLED: bool = False
+    HTTP_TOOL_CONFIG_PATH: str = "config/tools/http_tools.json"
+    HTTP_TOOL_DEFAULT_TIMEOUT_SECONDS: int = 30
+
+    WORKFLOW_TOOL_PROVIDER_ENABLED: bool = True
+    MCP_TOOL_PROVIDER_ENABLED: bool = False
+
     UPLOAD_DIR: str
 
     @field_validator("LLM_MAX_TOKENS", "EMBEDDING_DIMENSION", mode="before")

@@ -1,5 +1,6 @@
 from typing import Any
 
+from backend.app.config.settings import settings
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
 from backend.app.context_compression import (
     CompressionInput,
@@ -18,6 +19,7 @@ from backend.app.retrievers.hybrid.sparse_retriever import BM25SparseRetriever
 from backend.app.retrievers.pipeline import RetrieverPipelineContext
 from backend.app.retrievers.pipeline.steps import MMRStep, NeighborExpansionStep
 from backend.app.schemas import ApiResponse, success
+from backend.app.tools import get_tool_registry
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -418,3 +420,21 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
         metadata=metadata,
     )
     return success(data=result.model_dump())
+
+
+@router.get("/debug/tools", response_model=ApiResponse)
+def debug_tools() -> ApiResponse:
+    return success(data=get_tool_registry().snapshot())
+
+
+@router.post("/debug/tools/refresh", response_model=ApiResponse)
+def refresh_debug_tools() -> ApiResponse:
+    if settings.APP_ENV.lower() in {"prod", "production"}:
+        return success(
+            data={
+                "refreshed": False,
+                "reason": "tool registry refresh is disabled in production",
+            }
+        )
+    result = get_tool_registry().refresh()
+    return success(data=result)

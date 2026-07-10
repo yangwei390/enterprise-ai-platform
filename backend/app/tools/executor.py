@@ -6,7 +6,7 @@ from typing import Any, cast
 from backend.app.config.settings import settings
 from backend.app.logger import logger
 from backend.app.tools.base import ToolCall, ToolResult
-from backend.app.tools.registry import ToolRegistry, get_tool_registry
+from backend.app.tools.registry import ToolDisabledError, ToolRegistry, get_tool_registry
 from pydantic import ValidationError
 
 
@@ -18,7 +18,22 @@ class ToolExecutor:
         started_at = datetime.now(UTC)
         logger.info(f"Tool execution started | tool={tool_call.name}")
 
-        tool = self.registry.get_tool(tool_call.name)
+        try:
+            tool = self.registry.get_tool(tool_call.name, require_enabled=True)
+        except ToolDisabledError as exc:
+            finished_at = datetime.now(UTC)
+            return ToolResult(
+                name=tool_call.name,
+                success=False,
+                error=str(exc),
+                metadata={
+                    "started_at": started_at.isoformat(),
+                    "finished_at": finished_at.isoformat(),
+                    "duration_ms": _duration_ms(started_at, finished_at),
+                    "enabled": False,
+                    "registry_version": self.registry.version,
+                },
+            )
         if tool is None:
             finished_at = datetime.now(UTC)
             return ToolResult(
@@ -29,10 +44,12 @@ class ToolExecutor:
                     "started_at": started_at.isoformat(),
                     "finished_at": finished_at.isoformat(),
                     "duration_ms": _duration_ms(started_at, finished_at),
+                    "registry_version": self.registry.version,
                 },
             )
 
         try:
+            descriptor = self.registry.get_descriptor(tool_call.name)
             validated_args = tool.args_schema.model_validate(tool_call.arguments)
             result = tool.run(validated_args.model_dump())
             finished_at = datetime.now(UTC)
@@ -42,6 +59,12 @@ class ToolExecutor:
                     "started_at": started_at.isoformat(),
                     "finished_at": finished_at.isoformat(),
                     "duration_ms": duration_ms,
+                    "provider": descriptor.provider if descriptor else tool.source,
+                    "tool_version": descriptor.version if descriptor else None,
+                    "registry_version": self.registry.version,
+                    "enabled": descriptor.enabled if descriptor else True,
+                    "dynamic_registration": descriptor is not None,
+                    "discovery_source": descriptor.provider if descriptor else tool.source,
                 }
             )
             logger.info(
@@ -85,7 +108,27 @@ class ToolExecutor:
         started_at = datetime.now(UTC)
         logger.info(f"Async tool execution started | tool={tool_call.name}")
 
-        tool = self.registry.get_tool(tool_call.name)
+        try:
+            tool = self.registry.get_tool(tool_call.name, require_enabled=True)
+        except ToolDisabledError as exc:
+            finished_at = datetime.now(UTC)
+            return ToolResult(
+                name=tool_call.name,
+                success=False,
+                error=str(exc),
+                metadata={
+                    "started_at": started_at.isoformat(),
+                    "finished_at": finished_at.isoformat(),
+                    "duration_ms": _duration_ms(started_at, finished_at),
+                    "async_execution": True,
+                    "sync_fallback": False,
+                    "attempt_count": 0,
+                    "timeout": False,
+                    "cancelled": False,
+                    "enabled": False,
+                    "registry_version": self.registry.version,
+                },
+            )
         if tool is None:
             finished_at = datetime.now(UTC)
             return ToolResult(
@@ -101,10 +144,12 @@ class ToolExecutor:
                     "attempt_count": 0,
                     "timeout": False,
                     "cancelled": False,
+                    "registry_version": self.registry.version,
                 },
             )
 
         try:
+            descriptor = self.registry.get_descriptor(tool_call.name)
             validated_args = tool.args_schema.model_validate(tool_call.arguments)
         except ValidationError as exc:
             finished_at = datetime.now(UTC)
@@ -169,6 +214,12 @@ class ToolExecutor:
                         "timeout": False,
                         "cancelled": False,
                         "retry_errors": retry_errors,
+                        "provider": descriptor.provider if descriptor else tool.source,
+                        "tool_version": descriptor.version if descriptor else None,
+                        "registry_version": self.registry.version,
+                        "enabled": descriptor.enabled if descriptor else True,
+                        "dynamic_registration": descriptor is not None,
+                        "discovery_source": descriptor.provider if descriptor else tool.source,
                     }
                 )
                 logger.info(
