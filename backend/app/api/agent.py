@@ -1,4 +1,9 @@
-from backend.app.agents import AgentRunRequest, AgentRuntime, AgentRuntimeRequest
+from backend.app.agents import (
+    AgentRunRequest,
+    AgentRuntime,
+    AgentRuntimeFactory,
+    AgentRuntimeRequest,
+)
 from backend.app.agents.schemas import AgentChatRequest, AgentChatResponseData
 from backend.app.agents.service import AgentService
 from backend.app.schemas import ApiResponse, success
@@ -6,10 +11,12 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
+V1_AGENT_RUNTIME_CLASS = AgentRuntime
+
 
 @router.post("/agent/chat", response_model=ApiResponse)
 def agent_chat(request: AgentChatRequest) -> ApiResponse:
-    result = AgentRuntime().run(
+    result = AgentRuntimeFactory.get_runtime().run(
         AgentRuntimeRequest(
             query=request.query,
             knowledge_base_id=request.knowledge_base_id,

@@ -7,6 +7,7 @@ from backend.app.agents.base import (
     AgentStepType,
 )
 from backend.app.agents.executor import AgentExecutor
+from backend.app.agents.factory import AgentRuntimeFactory
 from backend.app.agents.planner import AgentPlanner
 from backend.app.agents.reflection import AgentReflection
 from backend.app.agents.runtime import AgentRuntime, SimplePlanner
@@ -24,6 +25,7 @@ __all__ = [
     "AgentExecutor",
     "AgentPlanner",
     "AgentRuntime",
+    "AgentRuntimeFactory",
     "AgentRuntimeRequest",
     "AgentRuntimeResult",
     "AgentReflection",

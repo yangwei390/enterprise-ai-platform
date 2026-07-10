@@ -85,6 +85,8 @@ class Settings(BaseSettings):
 
     MCP_ENABLED: bool = False
 
+    AGENT_RUNTIME: str = "v1"
+
     UPLOAD_DIR: str
 
     @field_validator("LLM_MAX_TOKENS", "EMBEDDING_DIMENSION", mode="before")

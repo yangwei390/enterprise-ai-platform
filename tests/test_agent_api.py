@@ -64,7 +64,10 @@ class FakeChatService:
 def _agent_client(monkeypatch) -> TestClient:
     FakeAgentRuntime.called = False
     FakeAgentRuntime.last_request = None
-    monkeypatch.setattr("backend.app.api.agent.AgentRuntime", FakeAgentRuntime)
+    monkeypatch.setattr(
+        "backend.app.api.agent.AgentRuntimeFactory.get_runtime",
+        lambda: FakeAgentRuntime(),
+    )
     app = FastAPI()
     app.include_router(agent_router)
     return TestClient(app)
