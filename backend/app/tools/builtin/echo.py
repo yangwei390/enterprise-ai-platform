@@ -10,3 +10,6 @@ class EchoTool(BaseTool):
     def run(self, arguments: dict) -> ToolResult:
         args = EchoArgs.model_validate(arguments)
         return ToolResult(name=self.name, success=True, result={"text": args.text})
+
+    async def arun(self, arguments: dict) -> ToolResult:
+        return self.run(arguments)

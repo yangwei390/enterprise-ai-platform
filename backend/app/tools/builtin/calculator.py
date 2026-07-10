@@ -29,6 +29,9 @@ class CalculatorTool(BaseTool):
         value = _safe_eval(expression)
         return ToolResult(name=self.name, success=True, result={"value": value})
 
+    async def arun(self, arguments: dict) -> ToolResult:
+        return self.run(arguments)
+
 
 def _safe_eval(expression: str) -> int | float:
     tree = ast.parse(expression, mode="eval")

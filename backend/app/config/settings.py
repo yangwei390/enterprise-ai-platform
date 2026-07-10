@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     MCP_ENABLED: bool = False
 
     AGENT_RUNTIME: str = "v1"
+    AGENT_ASYNC_ENABLED: bool = True
+    AGENT_ASYNC_TIMEOUT_SECONDS: int = 60
+    AGENT_TOOL_TIMEOUT_SECONDS: int = 30
+    AGENT_TOOL_MAX_CONCURRENCY: int = 4
+    AGENT_TOOL_RETRY_COUNT: int = 1
+    AGENT_ASYNC_FAIL_OPEN: bool = True
+    AGENT_SYNC_FALLBACK_ENABLED: bool = True
 
     UPLOAD_DIR: str
 

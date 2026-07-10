@@ -23,3 +23,6 @@ class CurrentTimeTool(BaseTool):
 
         now = datetime.now(tz=tz).isoformat()
         return ToolResult(name=self.name, success=True, result={"time": now})
+
+    async def arun(self, arguments: dict) -> ToolResult:
+        return self.run(arguments)

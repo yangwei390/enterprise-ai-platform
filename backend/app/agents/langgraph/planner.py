@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any
 
@@ -17,6 +18,22 @@ class AgentPlan(BaseModel):
 
 
 class LLMPlanner:
+    async def aplan(
+        self,
+        *,
+        query: str,
+        knowledge_base_id: int | None = None,
+        conversation_id: int | None = None,
+        memory_context: str | None = None,
+    ) -> AgentPlan:
+        return await asyncio.to_thread(
+            self.plan,
+            query=query,
+            knowledge_base_id=knowledge_base_id,
+            conversation_id=conversation_id,
+            memory_context=memory_context,
+        )
+
     def plan(
         self,
         *,
