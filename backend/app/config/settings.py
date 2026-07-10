@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int
     REDIS_PASSWORD: str | None = None
+    REDIS_ENABLED: bool = True
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_PREFIX: str = "enterprise_ai"
+    REDIS_SESSION_TTL_SECONDS: int = 86400
+    REDIS_TOOL_CACHE_TTL_SECONDS: int = 3600
+    REDIS_CHECKPOINT_TTL_SECONDS: int = 86400
 
     QDRANT_HOST: str
     QDRANT_PORT: int
@@ -84,6 +90,8 @@ class Settings(BaseSettings):
     LLM_STREAM: bool = False
 
     MCP_ENABLED: bool = False
+
+    MEMORY_PROVIDER: str = "redis"
 
     AGENT_RUNTIME: str = "v1"
     AGENT_ASYNC_ENABLED: bool = True

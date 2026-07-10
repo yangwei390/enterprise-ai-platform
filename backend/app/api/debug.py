@@ -10,6 +10,7 @@ from backend.app.context_compression import (
 )
 from backend.app.debug import RagTraceChunk, RagTraceResult
 from backend.app.logger import logger
+from backend.app.memory.factory import MemoryFactory
 from backend.app.query.rewriter import SimpleQueryRewriter
 from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory
@@ -438,3 +439,43 @@ def refresh_debug_tools() -> ApiResponse:
         )
     result = get_tool_registry().refresh()
     return success(data=result)
+
+
+@router.get("/debug/memory", response_model=ApiResponse)
+def debug_memory() -> ApiResponse:
+    manager = MemoryFactory.get_manager()
+    return success(data=manager.snapshot().model_dump())
+
+
+@router.get("/debug/cache", response_model=ApiResponse)
+def debug_cache() -> ApiResponse:
+    snapshot = MemoryFactory.get_manager().snapshot()
+    return success(
+        data={
+            "provider": snapshot.provider,
+            "cache_count": snapshot.cache_count,
+            "metadata": snapshot.metadata,
+        }
+    )
+
+
+@router.delete("/debug/cache", response_model=ApiResponse)
+def delete_debug_cache(cache_key: str | None = None) -> ApiResponse:
+    if settings.APP_ENV.lower() in {"prod", "production"}:
+        return success(data={"deleted": False, "reason": "disabled in production"})
+    MemoryFactory.get_manager().delete_cache(cache_key)
+    return success(data={"deleted": True, "cache_key": cache_key})
+
+
+@router.delete("/debug/memory/session/{session_id}", response_model=ApiResponse)
+def delete_debug_session(session_id: str) -> ApiResponse:
+    if settings.APP_ENV.lower() in {"prod", "production"}:
+        return success(data={"deleted": False, "reason": "disabled in production"})
+    MemoryFactory.get_manager().delete_session(session_id)
+    return success(data={"deleted": True, "session_id": session_id})
+
+
+@router.get("/debug/checkpoints", response_model=ApiResponse)
+def debug_checkpoints() -> ApiResponse:
+    manager = MemoryFactory.get_checkpoint_manager()
+    return success(data={"checkpoints": manager.list()})
