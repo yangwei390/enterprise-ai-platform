@@ -4,6 +4,8 @@ from backend.app.llms.config import LLMConfig
 
 
 class OpenAIProvider(BaseLLM):
+    supports_tool_calling = True
+
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
         self.client = OpenAIClient(config=config)

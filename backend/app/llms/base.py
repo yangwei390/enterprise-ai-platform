@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 class LLMMessage(BaseModel):
     role: str
     content: str
+    name: str | None = None
+    tool_call_id: str | None = None
+    tool_calls: list[dict] = Field(default_factory=list)
 
 
 class LLMRequest(BaseModel):
@@ -14,6 +17,7 @@ class LLMRequest(BaseModel):
     temperature: float = 0.2
     tools: list[dict] = Field(default_factory=list)
     tool_choice: str | dict | None = None
+    parallel_tool_calls: bool | None = None
     metadata: dict = Field(default_factory=dict)
 
 
@@ -34,6 +38,8 @@ class LLMResponse(BaseModel):
 
 
 class BaseLLM(ABC):
+    supports_tool_calling: bool = False
+
     @abstractmethod
     def chat(self, request: LLMRequest) -> LLMResponse:
         raise NotImplementedError

@@ -66,6 +66,29 @@ class FinalAnswerKeywordCoverageMetric(BaseMetric):
         return KeywordCoverageMetric().compute(case, result)
 
 
+class LoopIterationsMetric(BaseMetric):
+    name = "loop_iterations"
+
+    def compute(self, case: EvaluationCase, result: EvaluationTargetResult) -> tuple[int, dict]:
+        return int(result.metadata.get("agent_loop", {}).get("loop_iterations", 0)), {}
+
+
+class ReflectionCountMetric(BaseMetric):
+    name = "reflection_count"
+
+    def compute(self, case: EvaluationCase, result: EvaluationTargetResult) -> tuple[int, dict]:
+        return int(result.metadata.get("reflection", {}).get("count", 0)), {}
+
+
+class TerminationReasonMatchMetric(BaseMetric):
+    name = "termination_reason_match"
+
+    def compute(self, case: EvaluationCase, result: EvaluationTargetResult) -> tuple[bool, dict]:
+        expected = str(case.expected.get("termination_reason", "final_answer"))
+        actual = str(result.metadata.get("agent_loop", {}).get("termination_reason"))
+        return actual == expected, {"expected": expected, "actual": actual}
+
+
 def _tool_names(result: EvaluationTargetResult) -> list[str]:
     names = []
     for item in result.tool_calls:

@@ -1,0 +1,115 @@
+{
+  "report_version": "2.0",
+  "run_id": "9fbc3c59-2fb4-44cd-bb44-7a3938ef92cd",
+  "suite_id": "real_smoke",
+  "suite_name": "real smoke",
+  "suite_version": "1.0",
+  "started_at": "2026-07-11T08:11:06.038251+00:00",
+  "finished_at": "2026-07-11T08:11:06.039640+00:00",
+  "duration_ms": 1.39,
+  "passed": true,
+  "pass_rate": 1.0,
+  "total_cases": 1,
+  "passed_cases": 1,
+  "failed_cases": 0,
+  "skipped_cases": 0,
+  "target_summary": {
+    "tool": 1
+  },
+  "metric_summary": {
+    "tool_success": {
+      "average": 1.0,
+      "count": 1
+    },
+    "result_contains": {
+      "average": 1.0,
+      "count": 1
+    }
+  },
+  "usage_summary": {
+    "available": false,
+    "total_tokens": "***REDACTED***"
+  },
+  "cost_summary": {
+    "estimated_cost": null,
+    "currency": null,
+    "available": false
+  },
+  "regression_summary": {},
+  "cases": [
+    {
+      "case_id": "tool_real",
+      "target": "tool",
+      "status": "passed",
+      "passed": true,
+      "duration_ms": 1.28,
+      "metrics": [
+        {
+          "name": "tool_success",
+          "value": true,
+          "passed": true,
+          "threshold": true,
+          "details": {},
+          "duration_ms": 0.0,
+          "metadata": {},
+          "error": null
+        },
+        {
+          "name": "result_contains",
+          "value": true,
+          "passed": true,
+          "threshold": null,
+          "details": {},
+          "duration_ms": 0.0,
+          "metadata": {},
+          "error": null
+        }
+      ],
+      "target_result_summary": {
+        "answer": "{'text': 'hello'}",
+        "source_count": 0,
+        "citation_count": 0,
+        "chunk_count": 0,
+        "tool_call_count": 0,
+        "trace_count": 0,
+        "usage": {},
+        "duration_ms": 1.28
+      },
+      "error": null,
+      "metadata": {
+        "target_metadata": {
+          "started_at": "2026-07-11T08:11:06.038290+00:00",
+          "finished_at": "2026-07-11T08:11:06.039013+00:00",
+          "duration_ms": 0.72,
+          "async_execution": true,
+          "sync_fallback": false,
+          "attempt_count": 1,
+          "retry_count": 0,
+          "timeout": false,
+          "cancelled": false,
+          "retry_errors": [],
+          "provider": "test",
+          "tool_version": null,
+          "registry_version": 11,
+          "enabled": true,
+          "dynamic_registration": true,
+          "discovery_source": "test",
+          "cache_hit": false,
+          "cache_error": "Error 1 connecting to localhost:6379. Operation not permitted."
+        }
+      }
+    }
+  ],
+  "environment": {
+    "app_env": "dev",
+    "llm_provider": "dashscope",
+    "llm_model": "qwen-max",
+    "agent_runtime": "v1",
+    "workflow_runtime": "v1"
+  },
+  "config": {
+    "max_concurrency": 4,
+    "llm_judge_enabled": false
+  },
+  "metadata": {}
+}

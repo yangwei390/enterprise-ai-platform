@@ -39,7 +39,7 @@ class LangGraphAgentRuntime:
                 ),
             )
             self._inject_session_state(state, session_state)
-            result_state = graph_app.invoke(state)
+            result_state = self._invoke_graph(graph_app, state)
             self._save_session(session_id, result_state)
             return self._to_result(result_state)
         except LangGraphUnavailable as exc:
@@ -106,7 +106,7 @@ class LangGraphAgentRuntime:
             )
             self._inject_session_state(state, session_state)
             async with asyncio.timeout(settings.AGENT_ASYNC_TIMEOUT_SECONDS):
-                result_state = await graph_app.ainvoke(state)
+                result_state = await self._ainvoke_graph(graph_app, state)
             self._save_session(session_id, result_state)
             result = self._to_result(result_state)
             runtime_metadata = result.metadata.get("async_runtime", {})
@@ -194,6 +194,28 @@ class LangGraphAgentRuntime:
         }
         return result
 
+    def _invoke_graph(self, graph_app, state: AgentState) -> dict:
+        try:
+            return graph_app.invoke(
+                state,
+                config={"recursion_limit": settings.AGENT_MAX_STEPS + 8},
+            )
+        except TypeError as exc:
+            if "config" not in str(exc):
+                raise
+            return graph_app.invoke(state)
+
+    async def _ainvoke_graph(self, graph_app, state: AgentState) -> dict:
+        try:
+            return await graph_app.ainvoke(
+                state,
+                config={"recursion_limit": settings.AGENT_MAX_STEPS + 8},
+            )
+        except TypeError as exc:
+            if "config" not in str(exc):
+                raise
+            return await graph_app.ainvoke(state)
+
     def _session_id(self, request: AgentRuntimeRequest) -> str:
         metadata_session_id = request.metadata.get("session_id")
         if metadata_session_id:
@@ -237,7 +259,8 @@ class LangGraphAgentRuntime:
     ) -> None:
         if session_state is None:
             return
-        state["messages"] = [*session_state.messages, *state.get("messages", [])]
+        restored_messages = session_state.messages[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
+        state["messages"] = [*restored_messages, *state.get("messages", [])]
         state["metadata"]["session"]["restored_tool_result_count"] = len(
             session_state.tool_results
         )
@@ -247,16 +270,20 @@ class LangGraphAgentRuntime:
         try:
             session_state = MemoryState(
                 session_id=session_id,
-                messages=state.get("messages", []),
-                tool_results=state.get("tool_results", []),
+                messages=state.get("messages", [])[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :],
+                tool_results=state.get("observations", [])[
+                    -settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :
+                ],
                 current_plan=state.get("plan"),
-                current_step="final",
+                current_step=str(state.get("current_action") or "final"),
                 planner_output=state.get("plan"),
                 workflow_state={},
                 trace_id=state.get("metadata", {}).get("trace_id"),
                 session_metadata={
                     "runtime": "langgraph",
                     "final_answer": state.get("final_answer"),
+                    "termination_reason": state.get("termination_reason"),
+                    "step_count": state.get("step_count"),
                 },
             )
             MemoryFactory.get_manager().save_session(session_state)
@@ -293,7 +320,7 @@ class LangGraphAgentRuntime:
             answer=str(state.get("final_answer") or ""),
             action="tool" if state.get("tool_calls") else "direct_answer",
             tool_calls=state.get("tool_calls", []),
-            observations=state.get("tool_results", []),
+            observations=state.get("observations", []),
             sources=sources,
             citations=citations,
             metadata=metadata,

@@ -101,9 +101,24 @@ class EvaluationRunnerV2:
     def run_suite(
         self,
         suite_or_path: EvaluationSuite | str | Path,
-        **kwargs: object,
+        case_ids: Iterable[str] | None = None,
+        tags: Iterable[str] | None = None,
+        baseline: str | None = None,
+        compare: bool = False,
+        save_baseline: str | None = None,
+        output: str | Path | None = None,
     ) -> EvaluationReportV2:
-        return asyncio.run(self.arun_suite(suite_or_path, **kwargs))
+        return asyncio.run(
+            self.arun_suite(
+                suite_or_path,
+                case_ids=case_ids,
+                tags=tags,
+                baseline=baseline,
+                compare=compare,
+                save_baseline=save_baseline,
+                output=output,
+            )
+        )
 
     async def arun_case(
         self,

@@ -56,10 +56,7 @@ class OpenAIClient(BaseLLMClient):
     def _chat_with_tools(self, request: LLMRequest) -> LLMResponse:
         create_kwargs: dict[str, Any] = {
             "model": self.config.model,
-            "messages": [
-                {"role": message.role, "content": message.content}
-                for message in request.messages
-            ],
+            "messages": [_message_to_chat_payload(message) for message in request.messages],
             "temperature": request.temperature,
             "tools": request.tools,
         }
@@ -107,6 +104,17 @@ def _parse_tool_calls(raw_tool_calls: Any) -> list[LLMToolCall]:
             )
         )
     return tool_calls
+
+
+def _message_to_chat_payload(message) -> dict[str, Any]:
+    payload: dict[str, Any] = {"role": message.role, "content": message.content}
+    if message.name:
+        payload["name"] = message.name
+    if message.tool_call_id:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.tool_calls:
+        payload["tool_calls"] = message.tool_calls
+    return payload
 
 
 def _parse_arguments(arguments: Any) -> dict:

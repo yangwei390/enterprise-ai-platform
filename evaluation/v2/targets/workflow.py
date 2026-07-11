@@ -36,8 +36,9 @@ class WorkflowEvaluationTarget(BaseEvaluationTarget):
                     )
                 )
             else:
+                sync_run = cast(Callable[[WorkflowRunRequest], Any], runtime.run)
                 result = await asyncio.to_thread(
-                    runtime.run,
+                    sync_run,
                     WorkflowRunRequest(
                         workflow_id=workflow_id,
                         query=case.query or str(case.input.get("query", "")),

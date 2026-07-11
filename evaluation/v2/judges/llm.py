@@ -2,7 +2,7 @@ import asyncio
 from time import perf_counter
 
 from backend.app.config.settings import settings
-from backend.app.llms import LLMFactory, LLMRequest
+from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 
 from evaluation.v2.errors import EvaluationError
 from evaluation.v2.judges.base import BaseJudge
@@ -31,9 +31,9 @@ class LLMJudge(BaseJudge):
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(
-                    LLMFactory.get_llm().generate,
+                    LLMFactory.get_llm().chat,
                     LLMRequest(
-                        prompt=prompt,
+                        messages=[LLMMessage(role="user", content=prompt)],
                         model=settings.EVALUATION_LLM_JUDGE_MODEL,
                         temperature=0,
                     ),
@@ -46,7 +46,7 @@ class LLMJudge(BaseJudge):
         return {
             "enabled": True,
             "score": None,
-            "raw": response.content,
+            "raw": response.answer,
             "judge_model": settings.EVALUATION_LLM_JUDGE_MODEL,
             "duration_ms": round((perf_counter() - started_at) * 1000, 2),
         }
