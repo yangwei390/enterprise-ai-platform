@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 from backend.app.config.settings import settings
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
@@ -22,6 +22,9 @@ from backend.app.retrievers.pipeline import RetrieverPipelineContext
 from backend.app.retrievers.pipeline.steps import MMRStep, NeighborExpansionStep
 from backend.app.schemas import ApiResponse, success
 from backend.app.tools import get_tool_registry
+from backend.app.workflows.factory import WorkflowRuntimeFactory
+from backend.app.workflows.langgraph import list_workflow_definitions_v2
+from backend.app.workflows.langgraph.runtime import LangGraphWorkflowRuntime
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -480,6 +483,62 @@ def delete_debug_session(session_id: str) -> ApiResponse:
 def debug_checkpoints() -> ApiResponse:
     manager = MemoryFactory.get_checkpoint_manager()
     return success(data={"checkpoints": manager.list()})
+
+
+@router.get("/debug/workflows", response_model=ApiResponse)
+def debug_workflows() -> ApiResponse:
+    definitions = list_workflow_definitions_v2()
+    return success(
+        data={
+            "runtime": settings.WORKFLOW_RUNTIME,
+            "workflows": [
+                {
+                    "id": definition.id,
+                    "name": definition.name,
+                    "version": definition.version,
+                    "node_count": len(definition.nodes),
+                    "edge_count": len(definition.edges),
+                    "checkpoint_enabled": definition.checkpoint_enabled,
+                    "approval_enabled": definition.approval_enabled,
+                }
+                for definition in definitions
+            ],
+        }
+    )
+
+
+@router.get("/debug/workflows/{workflow_id}", response_model=ApiResponse)
+def debug_workflow_definition(workflow_id: str) -> ApiResponse:
+    for definition in list_workflow_definitions_v2():
+        if definition.id == workflow_id:
+            return success(data=definition.model_dump())
+    return success(data={"found": False, "workflow_id": workflow_id})
+
+
+@router.get("/debug/workflows/runs/{thread_id}", response_model=ApiResponse)
+def debug_workflow_run(thread_id: str) -> ApiResponse:
+    runtime = cast(LangGraphWorkflowRuntime, WorkflowRuntimeFactory.get_runtime("langgraph"))
+    state = runtime.get_state(thread_id)
+    return success(data={"thread_id": thread_id, "state": state})
+
+
+@router.get("/debug/workflows/checkpoints/{thread_id}", response_model=ApiResponse)
+def debug_workflow_checkpoint(thread_id: str) -> ApiResponse:
+    manager = MemoryFactory.get_checkpoint_manager()
+    return success(
+        data={
+            "thread_id": thread_id,
+            "checkpoint": manager.load(f"workflow:{thread_id}"),
+        }
+    )
+
+
+@router.delete("/debug/workflows/checkpoints/{thread_id}", response_model=ApiResponse)
+def delete_debug_workflow_checkpoint(thread_id: str) -> ApiResponse:
+    if settings.APP_ENV.lower() in {"prod", "production"}:
+        return success(data={"deleted": False, "reason": "disabled in production"})
+    MemoryFactory.get_checkpoint_manager().delete(f"workflow:{thread_id}")
+    return success(data={"deleted": True, "thread_id": thread_id})
 
 
 @router.get("/debug/mcp", response_model=ApiResponse)

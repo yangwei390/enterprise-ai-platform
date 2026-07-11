@@ -24,6 +24,8 @@ class WorkflowRunRequest(BaseModel):
     query: str
     knowledge_base_id: int | None = None
     inputs: dict = Field(default_factory=dict)
+    thread_id: str | None = None
+    metadata: dict = Field(default_factory=dict)
     definition: WorkflowV1Definition | None = None
 
     @field_validator("query")

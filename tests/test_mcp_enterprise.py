@@ -311,7 +311,7 @@ def test_mcp_tool_timeout(monkeypatch):
         for tool in await provider.adiscover():
             registry.register(tool, replace=True)
         try:
-            monkeypatch.setattr(settings, "AGENT_TOOL_TIMEOUT_SECONDS", 0.001)
+            monkeypatch.setattr(settings, "AGENT_TOOL_TIMEOUT_SECONDS", 0)
             result = await ToolExecutor(registry).aexecute(
                 ToolCall(name="mcp__local_demo__mcp_add", arguments={"a": 2, "b": 5})
             )

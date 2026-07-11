@@ -154,7 +154,10 @@ def test_workflow_run_api_returns_success(monkeypatch):
         def run(self, request):
             return WorkflowRuntimeV1(tool_executor=FakeToolExecutor()).run(request)
 
-    monkeypatch.setattr("backend.app.api.workflow.WorkflowRuntimeV1", FakeWorkflowRuntime)
+    monkeypatch.setattr(
+        "backend.app.api.workflow.WorkflowRuntimeFactory.get_runtime",
+        lambda provider=None: FakeWorkflowRuntime(),
+    )
     app = FastAPI()
     app.include_router(workflow_router)
     client = TestClient(app)

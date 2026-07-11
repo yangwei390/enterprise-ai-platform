@@ -430,8 +430,8 @@ def test_v1_sync_runtime_still_works(monkeypatch):
 
 def test_chat_and_workflow_api_still_work(monkeypatch):
     monkeypatch.setattr(
-        "backend.app.api.workflow.WorkflowRuntimeV1",
-        lambda: FakeWorkflowRuntime(),
+        "backend.app.api.workflow.WorkflowRuntimeFactory.get_runtime",
+        lambda provider=None: FakeWorkflowRuntime(),
     )
     app = FastAPI()
     app.include_router(chat_router)
