@@ -1,8 +1,10 @@
 from pathlib import Path
 
 from backend.app.chunkers import ChunkerFactory
+from backend.app.chunkers.router import ChunkStrategyRouter
 from backend.app.cleaners import CleanerFactory
 from backend.app.config.settings import PROJECT_ROOT, settings
+from backend.app.documents import DocumentClassifier, StructureParserFactory
 from backend.app.embeddings import EmbeddingFactory
 from backend.app.exceptions import BusinessException
 from backend.app.indexing import DocumentIndexSynchronizer
@@ -51,21 +53,136 @@ class ChunkStep(PipelineStep):
             raise BusinessException(41003, "文档解析失败")
 
         suffix = context.metadata.get("suffix")
-        chunker = ChunkerFactory.get_chunker(suffix)
         document = context.document
-        context.chunk_result = chunker.chunk(
-            context.clean_result.text,
-            metadata={
-                "document_id": getattr(document, "id", None),
-                "knowledge_base_id": getattr(document, "knowledge_base_id", None),
-                "source": getattr(document, "original_filename", None)
-                or getattr(document, "filename", None),
-                "parser": context.metadata.get("parser"),
-                "cleaner": context.metadata.get("cleaner"),
-                "page_count": context.parse_result.page_count if context.parse_result else None,
-            },
-        )
+        source = getattr(document, "original_filename", None) or getattr(document, "filename", None)
+        base_metadata = {
+            "document_id": getattr(document, "id", None),
+            "knowledge_base_id": getattr(document, "knowledge_base_id", None),
+            "source": source,
+            "filename": getattr(document, "filename", None),
+            "original_filename": getattr(document, "original_filename", None),
+            "mime_type": getattr(document, "mime_type", None),
+            "parser": context.metadata.get("parser"),
+            "cleaner": context.metadata.get("cleaner"),
+            "page_count": context.parse_result.page_count if context.parse_result else None,
+            "suffix": suffix,
+        }
+        try:
+            chunk_metadata = self._build_advanced_chunk_metadata(
+                text=context.clean_result.text,
+                base_metadata=base_metadata,
+            )
+            strategy = chunk_metadata["chunk_strategy_actual"]
+            chunker = ChunkerFactory.get_chunker(suffix, strategy=strategy)
+            context.chunk_result = chunker.chunk(
+                context.clean_result.text,
+                metadata=chunk_metadata,
+            )
+            self._clean_internal_metadata(context.chunk_result)
+            context.metadata["document_structure"] = chunk_metadata.get("document_structure")
+            context.metadata["chunking"] = {
+                "requested_strategy": chunk_metadata.get("chunk_strategy_requested"),
+                "actual_strategy": strategy,
+                "chunk_count": context.chunk_result.total_chunks,
+                "parent_count": sum(
+                    1
+                    for chunk in context.chunk_result.chunks
+                    if chunk.metadata.get("chunk_role") == "parent"
+                ),
+                "child_count": sum(
+                    1
+                    for chunk in context.chunk_result.chunks
+                    if chunk.metadata.get("chunk_role") == "child"
+                ),
+                "fallback_used": context.chunk_result.metadata.get("fallback_used", False),
+                "fallback_reason": context.chunk_result.metadata.get("fallback_reason"),
+            }
+        except Exception as exc:
+            fallback = ChunkerFactory.get_chunker(suffix, strategy="fixed")
+            context.chunk_result = fallback.chunk(
+                context.clean_result.text,
+                metadata={**base_metadata, "document_type": "plain_text"},
+            )
+            context.chunk_result.metadata["fallback_used"] = True
+            context.chunk_result.metadata["fallback_reason"] = str(exc)
+            context.chunk_result.metadata["fallback_chain"] = [
+                "advanced",
+                "fixed",
+            ]
+            context.metadata["chunking"] = {
+                "requested_strategy": settings.CHUNK_STRATEGY,
+                "actual_strategy": "fixed",
+                "chunk_count": context.chunk_result.total_chunks,
+                "fallback_used": True,
+                "fallback_reason": str(exc),
+            }
         return context
+
+    def _build_advanced_chunk_metadata(self, *, text: str, base_metadata: dict) -> dict:
+        if not settings.DOCUMENT_CLASSIFICATION_ENABLED:
+            return {
+                **base_metadata,
+                "document_type": "plain_text",
+                "chunk_strategy_requested": settings.CHUNK_STRATEGY,
+                "chunk_strategy_actual": "fixed",
+            }
+
+        classification = DocumentClassifier().classify(
+            text=text,
+            filename=base_metadata.get("original_filename") or base_metadata.get("filename"),
+            mime_type=base_metadata.get("mime_type"),
+            metadata=base_metadata,
+        )
+        structure = None
+        structure_metadata = {
+            "document_type": classification.document_type,
+            "parser": None,
+            "node_count": 0,
+            "max_depth": 0,
+            "parse_failed": False,
+        }
+        if settings.DOCUMENT_STRUCTURE_ENABLED:
+            try:
+                structure = StructureParserFactory.parse(
+                    text,
+                    {**base_metadata, "document_type": classification.document_type},
+                    classification.document_type,
+                )
+                structure_metadata = {
+                    "document_type": structure.document_type,
+                    "parser": StructureParserFactory.get_parser(
+                        classification.document_type
+                    ).__class__.__name__,
+                    "node_count": structure.metadata.get("node_count", len(structure.nodes)),
+                    "max_depth": structure.metadata.get("max_depth", 0),
+                    "parse_failed": structure.metadata.get("parse_failed", False),
+                }
+            except Exception as exc:
+                if not settings.DOCUMENT_STRUCTURE_FAIL_OPEN:
+                    raise
+                structure_metadata = {
+                    **structure_metadata,
+                    "parse_failed": True,
+                    "error": str(exc),
+                }
+        decision = ChunkStrategyRouter().route(
+            document_type=structure.document_type if structure else classification.document_type,
+            structure=structure,
+            metadata=base_metadata,
+        )
+        return {
+            **base_metadata,
+            "document_type": structure.document_type if structure else classification.document_type,
+            "document_classification": classification.model_dump(),
+            "document_structure": structure_metadata,
+            "_document_structure": structure,
+            **decision.to_metadata(),
+        }
+
+    def _clean_internal_metadata(self, chunk_result) -> None:
+        chunk_result.metadata.pop("_document_structure", None)
+        for chunk in chunk_result.chunks:
+            chunk.metadata.pop("_document_structure", None)
 
 
 class EmbeddingStep(PipelineStep):

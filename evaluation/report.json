@@ -1,12 +1,12 @@
 {
   "report_version": "2.0",
-  "run_id": "9fbc3c59-2fb4-44cd-bb44-7a3938ef92cd",
+  "run_id": "a79c22c7-b1e8-4b36-93e8-ffd102f6ebea",
   "suite_id": "real_smoke",
   "suite_name": "real smoke",
   "suite_version": "1.0",
-  "started_at": "2026-07-11T08:11:06.038251+00:00",
-  "finished_at": "2026-07-11T08:11:06.039640+00:00",
-  "duration_ms": 1.39,
+  "started_at": "2026-07-11T09:13:49.320361+00:00",
+  "finished_at": "2026-07-11T09:13:49.321850+00:00",
+  "duration_ms": 1.49,
   "passed": true,
   "pass_rate": 1.0,
   "total_cases": 1,
@@ -42,7 +42,7 @@
       "target": "tool",
       "status": "passed",
       "passed": true,
-      "duration_ms": 1.28,
+      "duration_ms": 1.38,
       "metrics": [
         {
           "name": "tool_success",
@@ -73,14 +73,14 @@
         "tool_call_count": 0,
         "trace_count": 0,
         "usage": {},
-        "duration_ms": 1.28
+        "duration_ms": 1.38
       },
       "error": null,
       "metadata": {
         "target_metadata": {
-          "started_at": "2026-07-11T08:11:06.038290+00:00",
-          "finished_at": "2026-07-11T08:11:06.039013+00:00",
-          "duration_ms": 0.72,
+          "started_at": "2026-07-11T09:13:49.320400+00:00",
+          "finished_at": "2026-07-11T09:13:49.321156+00:00",
+          "duration_ms": 0.76,
           "async_execution": true,
           "sync_fallback": false,
           "attempt_count": 1,

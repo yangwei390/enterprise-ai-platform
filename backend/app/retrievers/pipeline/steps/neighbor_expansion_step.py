@@ -172,11 +172,15 @@ class NeighborExpansionStep(BaseRetrieverStep):
             )
             if neighbor is None:
                 continue
+            scope = self._neighbor_scope(parent, neighbor)
+            if scope is None:
+                continue
             neighbor = self._mark_neighbor(
                 neighbor=neighbor,
                 parent=parent,
                 position=position,
                 distance=abs(neighbor_index - parent.chunk_index),
+                scope=scope,
             )
             seen_keys.add(neighbor_key)
             neighbors.append(neighbor)
@@ -189,6 +193,7 @@ class NeighborExpansionStep(BaseRetrieverStep):
         parent: RerankedChunk,
         position: str,
         distance: int,
+        scope: str,
     ) -> RerankedChunk:
         metadata = {
             **neighbor.metadata,
@@ -198,6 +203,7 @@ class NeighborExpansionStep(BaseRetrieverStep):
             "neighbor_position": position,
             "neighbor_distance": distance,
             "neighbor_expansion_provider": "metadata_lookup",
+            "neighbor_scope": scope,
             "inherited_from_rerank_rank": parent.metadata.get("rerank_rank"),
             "neighbor_parent_rerank_score": parent.rerank_score,
         }
@@ -229,3 +235,23 @@ class NeighborExpansionStep(BaseRetrieverStep):
 
     def _chunk_key(self, chunk: RerankedChunk) -> tuple[int | None, int | None, int | None]:
         return chunk.knowledge_base_id, chunk.document_id, chunk.chunk_index
+
+    def _neighbor_scope(self, parent: RerankedChunk, neighbor: RerankedChunk) -> str | None:
+        parent_metadata = parent.metadata or {}
+        neighbor_metadata = neighbor.metadata or {}
+        parent_chunk_id = parent_metadata.get("parent_chunk_id")
+        neighbor_parent_id = neighbor_metadata.get("parent_chunk_id")
+        if parent_chunk_id and neighbor_parent_id:
+            return "parent" if parent_chunk_id == neighbor_parent_id else None
+
+        parent_chapter = parent_metadata.get("chapter_number")
+        neighbor_chapter = neighbor_metadata.get("chapter_number")
+        if parent_chapter is not None and neighbor_chapter is not None:
+            return "chapter" if parent_chapter == neighbor_chapter else None
+
+        parent_path = parent_metadata.get("section_path")
+        neighbor_path = neighbor_metadata.get("section_path")
+        if isinstance(parent_path, list) and isinstance(neighbor_path, list) and parent_path:
+            return "section" if parent_path == neighbor_path else None
+
+        return "document"

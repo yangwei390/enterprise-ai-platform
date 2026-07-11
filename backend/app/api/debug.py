@@ -1,7 +1,11 @@
+from pathlib import Path
 from typing import Any, cast
 
 from backend.app.api.evaluation import evaluation_debug_state
-from backend.app.config.settings import settings
+from backend.app.chunkers import ChunkerFactory
+from backend.app.chunkers.router import ChunkStrategyRouter
+from backend.app.cleaners import CleanerFactory
+from backend.app.config.settings import PROJECT_ROOT, settings
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
 from backend.app.context_compression import (
     CompressionInput,
@@ -9,11 +13,15 @@ from backend.app.context_compression import (
     ContextCompressorFactory,
     get_context_compression_config,
 )
+from backend.app.db.session import get_db
 from backend.app.debug import RagTraceChunk, RagTraceResult
+from backend.app.documents import DocumentClassifier, StructureParserFactory
 from backend.app.logger import logger
 from backend.app.mcp.client_manager import get_mcp_client_manager
 from backend.app.memory.factory import MemoryFactory
+from backend.app.parsers import ParserFactory
 from backend.app.query.rewriter import SimpleQueryRewriter
+from backend.app.repositories.document import DocumentRepository
 from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory
 from backend.app.retrievers.hybrid import HybridRetrieveQuery
@@ -26,8 +34,9 @@ from backend.app.tools import get_tool_registry
 from backend.app.workflows.factory import WorkflowRuntimeFactory
 from backend.app.workflows.langgraph import list_workflow_definitions_v2
 from backend.app.workflows.langgraph.runtime import LangGraphWorkflowRuntime
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 
@@ -38,6 +47,10 @@ class RagTraceRequest(BaseModel):
     top_k: int = 10
     score_threshold: float | None = 0.0
     metadata_filter: dict | None = None
+
+
+class ChunkPreviewRequest(BaseModel):
+    strategy: str | None = None
 
 
 def _metadata_value(metadata: dict, key: str) -> Any | None:
@@ -426,6 +439,151 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
         metadata=metadata,
     )
     return success(data=result.model_dump())
+
+
+@router.get("/debug/documents/{document_id}/structure", response_model=ApiResponse)
+def debug_document_structure(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> ApiResponse:
+    preview = _build_document_chunk_preview(document_id=document_id, db=db, strategy="auto")
+    structure = preview["structure"]
+    nodes = structure.get("nodes", [])
+    summary_nodes = [
+        {
+            "id": node["id"],
+            "node_type": node["node_type"],
+            "title": node.get("title"),
+            "level": node.get("level"),
+            "path": node.get("path"),
+            "metadata": node.get("metadata"),
+        }
+        for node in nodes
+        if node["node_type"] in {"document", "chapter", "section", "heading"}
+    ]
+    return success(
+        data={
+            "document_id": document_id,
+            "document_type": structure.get("document_type"),
+            "node_count": structure.get("metadata", {}).get("node_count", len(nodes)),
+            "max_depth": structure.get("metadata", {}).get("max_depth", 0),
+            "nodes": summary_nodes[:200],
+            "metadata": structure.get("metadata", {}),
+        }
+    )
+
+
+@router.get("/debug/documents/{document_id}/chunks", response_model=ApiResponse)
+def debug_document_chunks(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> ApiResponse:
+    preview = _build_document_chunk_preview(document_id=document_id, db=db, strategy="auto")
+    return success(
+        data={
+            "document_id": document_id,
+            "strategy": preview["chunk_result"]["strategy"],
+            "total_chunks": preview["chunk_result"]["total_chunks"],
+            "chunks": preview["chunks"],
+            "metadata": preview["chunk_result"]["metadata"],
+        }
+    )
+
+
+@router.post("/debug/documents/{document_id}/chunk-preview", response_model=ApiResponse)
+def debug_document_chunk_preview(
+    document_id: int,
+    request: ChunkPreviewRequest,
+    db: Session = Depends(get_db),
+) -> ApiResponse:
+    return success(
+        data=_build_document_chunk_preview(
+            document_id=document_id,
+            db=db,
+            strategy=request.strategy or "auto",
+        )
+    )
+
+
+def _build_document_chunk_preview(document_id: int, db: Session, strategy: str) -> dict:
+    document = DocumentRepository(db).get(document_id)
+    if document is None:
+        return {"found": False, "document_id": document_id}
+    upload_dir = Path(settings.UPLOAD_DIR)
+    if not upload_dir.is_absolute():
+        upload_dir = PROJECT_ROOT / upload_dir
+    file_path = upload_dir / str(document.storage_path)
+    parser = ParserFactory.get_parser(file_path)
+    parse_result = parser.parse(file_path)
+    cleaner = CleanerFactory.get_cleaner(file_path.suffix.lower())
+    clean_result = cleaner.clean(parse_result.text)
+    base_metadata = {
+        "document_id": document.id,
+        "knowledge_base_id": document.knowledge_base_id,
+        "source": document.original_filename or document.filename,
+        "filename": document.filename,
+        "original_filename": document.original_filename,
+        "mime_type": document.mime_type,
+        "parser": parser.__class__.__name__,
+        "cleaner": cleaner.__class__.__name__,
+        "page_count": parse_result.page_count,
+        "suffix": file_path.suffix.lower(),
+    }
+    classification = DocumentClassifier().classify(
+        text=clean_result.text,
+        filename=document.original_filename or document.filename,
+        mime_type=document.mime_type,
+        metadata=base_metadata,
+    )
+    structure = StructureParserFactory.parse(
+        clean_result.text,
+        {**base_metadata, "document_type": classification.document_type},
+        classification.document_type,
+    )
+    decision = ChunkStrategyRouter().route(
+        document_type=structure.document_type,
+        structure=structure,
+        metadata=base_metadata,
+        requested_strategy=strategy,
+    )
+    chunk_metadata = {
+        **base_metadata,
+        "document_type": structure.document_type,
+        "_document_structure": structure,
+        "document_classification": classification.model_dump(),
+        "document_structure": structure.metadata,
+        **decision.to_metadata(),
+    }
+    chunker = ChunkerFactory.get_chunker(file_path.suffix.lower(), decision.actual_strategy)
+    chunk_result = chunker.chunk(clean_result.text, chunk_metadata)
+    for chunk in chunk_result.chunks:
+        chunk.metadata.pop("_document_structure", None)
+    return {
+        "found": True,
+        "document_id": document_id,
+        "classification": classification.model_dump(),
+        "structure": structure.model_dump(),
+        "chunk_result": {
+            **chunk_result.model_dump(exclude={"chunks"}),
+            "metadata": {
+                key: value
+                for key, value in chunk_result.metadata.items()
+                if key != "_document_structure"
+            },
+        },
+        "chunks": [
+            {
+                "chunk_index": chunk.chunk_index,
+                "chunk_uid": chunk.metadata.get("chunk_uid"),
+                "text_preview": chunk.text[:300],
+                "chunk_role": chunk.metadata.get("chunk_role"),
+                "parent_chunk_id": chunk.metadata.get("parent_chunk_id"),
+                "section_path": chunk.metadata.get("section_path"),
+                "metadata": chunk.metadata,
+            }
+            for chunk in chunk_result.chunks[:200]
+        ],
+    }
 
 
 @router.get("/debug/tools", response_model=ApiResponse)

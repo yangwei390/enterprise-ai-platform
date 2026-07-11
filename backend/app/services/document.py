@@ -138,6 +138,8 @@ class DocumentService(BaseService[DocumentRepository]):
                 "bm25_indexed_count": context.metadata.get("bm25_indexed_count", 0),
                 "bm25_index_path": context.metadata.get("bm25_index_path"),
                 "bm25_error": context.metadata.get("bm25_error"),
+                "document_structure": context.metadata.get("document_structure"),
+                "chunking": context.metadata.get("chunking"),
             },
             "original_length": clean_result.original_length,
             "cleaned_length": clean_result.cleaned_length,

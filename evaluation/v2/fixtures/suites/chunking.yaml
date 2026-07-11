@@ -1,0 +1,66 @@
+id: chunking
+name: Advanced Chunking Smoke
+version: "1.0"
+description: Chunk quality checks for legal, markdown, and recursive chunk metadata.
+default_metrics:
+  - structure_path_coverage
+  - tiny_chunk_rate
+  - oversized_chunk_rate
+default_thresholds:
+  structure_path_coverage:
+    min: 0.5
+  tiny_chunk_rate:
+    max: 0.5
+  oversized_chunk_rate:
+    max: 0.2
+cases:
+  - id: chunking_legal_structure
+    name: Legal structure metadata
+    target: rag
+    query: 劳动法第二章说什么
+    input:
+      knowledge_base_id: 4
+    expected:
+      articles:
+        - 10
+        - 11
+      max_chunk_chars: 1500
+    metrics:
+      - structure_path_coverage
+      - boundary_integrity
+      - chapter_purity
+      - article_coverage
+      - parent_child_link_rate
+      - chunk_length_distribution
+      - tiny_chunk_rate
+      - oversized_chunk_rate
+    thresholds:
+      structure_path_coverage:
+        min: 0.5
+      boundary_integrity:
+        min: 0.8
+      chapter_purity:
+        min: 0.8
+  - id: chunking_markdown_structure
+    name: Markdown heading metadata
+    target: rag
+    query: Retriever BM25
+    input:
+      knowledge_base_id: 4
+    expected:
+      max_chunk_chars: 1500
+    metrics:
+      - structure_path_coverage
+      - chunk_length_distribution
+  - id: chunking_recursive_plain_text
+    name: Plain text recursive chunks
+    target: rag
+    query: 普通文本
+    input:
+      knowledge_base_id: 4
+    expected:
+      max_chunk_chars: 1000
+    metrics:
+      - chunk_length_distribution
+      - tiny_chunk_rate
+      - oversized_chunk_rate

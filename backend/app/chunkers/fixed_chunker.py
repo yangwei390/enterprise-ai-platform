@@ -1,4 +1,5 @@
 from backend.app.chunkers.base import BaseChunker, Chunk, ChunkResult
+from backend.app.documents.metadata import ChunkMetadataBuilder
 
 
 class FixedChunker(BaseChunker):
@@ -21,13 +22,7 @@ class FixedChunker(BaseChunker):
             **source_metadata,
             "strategy": "fixed",
         }
-        chunk_metadata = {
-            "source": source_metadata.get("source"),
-            "parser": source_metadata.get("parser"),
-            "cleaner": source_metadata.get("cleaner"),
-            "page_count": source_metadata.get("page_count"),
-            "strategy": "fixed",
-        }
+        builder = ChunkMetadataBuilder()
 
         if not text:
             return ChunkResult(
@@ -49,18 +44,25 @@ class FixedChunker(BaseChunker):
         while start_offset < text_length:
             end_offset = min(start_offset + self.chunk_size, text_length)
             chunk_text = text[start_offset:end_offset]
-            chunks.append(
-                Chunk(
-                    document_id=source_metadata.get("document_id"),
-                    knowledge_base_id=source_metadata.get("knowledge_base_id"),
-                    chunk_index=chunk_index,
-                    text=chunk_text,
-                    start_offset=start_offset,
-                    end_offset=end_offset,
-                    token_count=len(chunk_text),
-                    metadata=chunk_metadata,
-                )
+            chunk = Chunk(
+                document_id=source_metadata.get("document_id"),
+                knowledge_base_id=source_metadata.get("knowledge_base_id"),
+                chunk_index=chunk_index,
+                text=chunk_text,
+                start_offset=start_offset,
+                end_offset=end_offset,
+                token_count=len(chunk_text),
+                metadata={},
             )
+            chunk.metadata = builder.build(
+                chunk=chunk,
+                source_metadata=source_metadata,
+                strategy="fixed",
+                structure_metadata={
+                    "document_type": source_metadata.get("document_type") or "plain_text",
+                },
+            )
+            chunks.append(chunk)
 
             if end_offset >= text_length:
                 break
