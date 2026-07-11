@@ -3,6 +3,7 @@ from typing import Any
 from backend.app.embeddings import EmbeddingFactory
 from backend.app.embeddings.config import get_embedding_config
 from backend.app.exceptions import BusinessException
+from backend.app.indexing import IndexVersionManager
 from backend.app.logger import logger
 from backend.app.pipeline import DocumentPipeline
 from backend.app.repositories.document import DocumentRepository
@@ -115,4 +116,8 @@ class KnowledgeBaseReindexService(BaseService[KnowledgeBaseRepository]):
             f"Knowledge base reindex finished | knowledge_base_id={knowledge_base_id} | "
             f"success_count={result['success_count']} | failed_count={result['failed_count']}"
         )
+        if result["success_count"] > 0:
+            result["knowledge_base_index_version"] = IndexVersionManager().bump_version(
+                knowledge_base_id
+            )
         return result

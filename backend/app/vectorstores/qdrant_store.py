@@ -5,7 +5,14 @@ from typing import Any, cast
 from backend.app.exceptions import BusinessException
 from backend.app.vector.qdrant_client import get_qdrant_client
 from backend.app.vectorstores.base import BaseVectorStore, VectorRecord, VectorStoreResult
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 
 
 class QdrantVectorStore(BaseVectorStore):
@@ -68,6 +75,92 @@ class QdrantVectorStore(BaseVectorStore):
                 distance=Distance.COSINE,
             ),
         )
+
+    def delete_by_document_id(self, document_id: int) -> dict:
+        try:
+            client = get_qdrant_client()
+            if not client.collection_exists(self.collection_name):
+                return {
+                    "vector_store": "qdrant",
+                    "collection_name": self.collection_name,
+                    "document_id": document_id,
+                    "matched_points": 0,
+                    "delete_status": "collection_not_found",
+                }
+
+            query_filter = self._document_filter(document_id)
+            matched_points = self._count_points_by_filter(query_filter)
+            result = client.delete(
+                collection_name=self.collection_name,
+                points_selector=query_filter,
+                wait=True,
+            )
+            return {
+                "vector_store": "qdrant",
+                "collection_name": self.collection_name,
+                "document_id": document_id,
+                "matched_points": matched_points,
+                "delete_status": getattr(result, "status", None),
+                "operation_id": getattr(result, "operation_id", None),
+            }
+        except BusinessException:
+            raise
+        except Exception as exc:
+            raise BusinessException(50004, "Qdrant文档向量删除失败") from exc
+
+    def list_document_ids(self) -> list[int]:
+        try:
+            client = get_qdrant_client()
+            if not client.collection_exists(self.collection_name):
+                return []
+            document_ids: set[int] = set()
+            offset = None
+            while True:
+                points, offset = client.scroll(
+                    collection_name=self.collection_name,
+                    limit=256,
+                    offset=offset,
+                    with_payload=["document_id"],
+                    with_vectors=False,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    document_id = payload.get("document_id")
+                    if isinstance(document_id, int):
+                        document_ids.add(document_id)
+                if offset is None:
+                    break
+            return sorted(document_ids)
+        except Exception as exc:
+            raise BusinessException(50004, "Qdrant文档ID扫描失败") from exc
+
+    def _document_filter(self, document_id: int) -> Filter:
+        return Filter(
+            must=[
+                FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id),
+                )
+            ]
+        )
+
+    def _count_points_by_filter(self, query_filter: Filter) -> int:
+        client = get_qdrant_client()
+        count = 0
+        offset = None
+        while True:
+            points, offset = client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=query_filter,
+                limit=256,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            count += len(points)
+            if offset is None:
+                break
+        return count
 
     def _get_collection_vector_size(self) -> int | None:
         client = get_qdrant_client()

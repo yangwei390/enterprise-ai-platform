@@ -16,6 +16,25 @@ class DenseRetrieveStep(BaseRetrieverStep):
             score_threshold=context.score_threshold,
             metadata_filter=context.metadata_filter,
         )
-        context.dense_chunks = self.dense_retriever.retrieve(query)
+        chunks = self.dense_retriever.retrieve(query)
+        candidate_ids = (
+            context.auto_filter_result.candidate_document_ids
+            if context.auto_filter_result is not None
+            else []
+        )
+        if candidate_ids:
+            allowed_ids = set(candidate_ids)
+            before_count = len(chunks)
+            chunks = [chunk for chunk in chunks if chunk.document_id in allowed_ids]
+            rejected_count = before_count - len(chunks)
+            retrieval_scope = context.metadata.setdefault("retrieval_scope", {})
+            retrieval_scope.update(
+                {
+                    "candidate_document_ids": candidate_ids,
+                    "dense_scope_applied": True,
+                    "dense_rejected_count": rejected_count,
+                }
+            )
+        context.dense_chunks = chunks
         context.metadata["dense_total"] = len(context.dense_chunks)
         return context

@@ -2,6 +2,7 @@ import hashlib
 import json
 
 from backend.app.config.settings import settings
+from backend.app.indexing import IndexVersionManager
 from backend.app.memory.provider import MemoryProvider
 from backend.app.memory.snapshot import MemorySnapshot
 from backend.app.memory.state import MemoryState
@@ -61,7 +62,14 @@ class MemoryManager:
         return self.provider.snapshot()
 
     def build_tool_cache_key(self, tool_name: str, arguments: dict) -> str:
-        raw = json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
+        cache_arguments = dict(arguments)
+        if tool_name == "knowledge_search":
+            knowledge_base_id = cache_arguments.get("knowledge_base_id")
+            version = IndexVersionManager().get_version(
+                knowledge_base_id if isinstance(knowledge_base_id, int) else None
+            )
+            cache_arguments["knowledge_base_index_version"] = version
+        raw = json.dumps(cache_arguments, sort_keys=True, ensure_ascii=False, default=str)
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
         return f"{tool_name}:{digest}"
 

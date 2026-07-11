@@ -31,12 +31,38 @@ class FusionStep(BaseRetrieverStep):
             )
             fusion_strategy = "rrf"
 
+        candidate_ids = (
+            context.auto_filter_result.candidate_document_ids
+            if context.auto_filter_result is not None
+            else []
+        )
+        fusion_rejected_count = 0
+        fusion_scope_guard_applied = False
+        if candidate_ids:
+            allowed_ids = set(candidate_ids)
+            before_count = len(context.fused_chunks)
+            context.fused_chunks = [
+                chunk for chunk in context.fused_chunks if chunk.document_id in allowed_ids
+            ]
+            fusion_rejected_count = before_count - len(context.fused_chunks)
+            fusion_scope_guard_applied = True
+            retrieval_scope = context.metadata.setdefault("retrieval_scope", {})
+            retrieval_scope.update(
+                {
+                    "candidate_document_ids": candidate_ids,
+                    "fusion_scope_guard_applied": True,
+                    "fusion_rejected_count": fusion_rejected_count,
+                }
+            )
+
         context.metadata.update(
             {
                 "retrieval_intent": retrieval_intent,
                 "sparse_boosted": sparse_boosted,
                 "fused_total": len(context.fused_chunks),
                 "fusion": fusion_strategy,
+                "fusion_scope_guard_applied": fusion_scope_guard_applied,
+                "fusion_rejected_count": fusion_rejected_count,
             }
         )
         return context

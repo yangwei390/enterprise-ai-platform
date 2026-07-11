@@ -58,6 +58,14 @@ class BM25IndexManager:
         ]
         self.rebuild(documents, save=save)
 
+    def list_document_ids(self) -> list[int]:
+        document_ids = {
+            document.document_id
+            for document in self.index.documents
+            if document.document_id is not None
+        }
+        return sorted(document_ids)
+
     def rebuild(self, documents: list[SparseDocument], save: bool = True) -> None:
         self.index = BM25Index()
         self.index.add_documents(documents)

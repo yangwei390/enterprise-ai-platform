@@ -1,3 +1,4 @@
+from backend.app.indexing import IndexVersionManager
 from backend.app.rag import RagChatInput, RagChatPipeline
 from backend.app.tools.base import BaseTool, ToolResult
 from backend.app.tools.schemas import KnowledgeSearchArgs, KnowledgeSearchOutput
@@ -10,6 +11,7 @@ class KnowledgeSearchTool(BaseTool):
 
     def run(self, arguments: dict) -> ToolResult:
         args = KnowledgeSearchArgs.model_validate(arguments)
+        index_version = IndexVersionManager().get_version(args.knowledge_base_id)
 
         try:
             rag_result = RagChatPipeline().run(
@@ -32,6 +34,7 @@ class KnowledgeSearchTool(BaseTool):
                 result=output.model_dump(),
                 metadata={
                     "knowledge_base_id": args.knowledge_base_id,
+                    "knowledge_base_index_version": index_version,
                     "conversation_id": args.conversation_id,
                     "failed": False,
                 },
@@ -43,6 +46,7 @@ class KnowledgeSearchTool(BaseTool):
                 error=str(exc),
                 metadata={
                     "knowledge_base_id": args.knowledge_base_id,
+                    "knowledge_base_index_version": index_version,
                     "conversation_id": args.conversation_id,
                     "failed": True,
                     "error": str(exc),

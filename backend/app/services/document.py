@@ -3,13 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.app.exceptions import BusinessException
+from backend.app.indexing import IndexVersionManager
 from backend.app.logger import logger
 from backend.app.models import Document
 from backend.app.pipeline import DocumentPipeline
 from backend.app.repositories.document import DocumentRepository
+from backend.app.retrievers.sparse import get_bm25_index_manager
 from backend.app.schemas.document import DocumentCreate, DocumentUpdate
 from backend.app.services.base import BaseService
 from backend.app.storage import LocalStorageService
+from backend.app.vectorstores import QdrantVectorStore
 from fastapi import UploadFile
 
 
@@ -105,6 +108,7 @@ class DocumentService(BaseService[DocumentRepository]):
             document,
             {"parse_status": "success", "parse_message": "解析成功"},
         )
+        index_version = IndexVersionManager().bump_version(document.knowledge_base_id)
 
         chunks_preview = [
             {
@@ -145,6 +149,7 @@ class DocumentService(BaseService[DocumentRepository]):
                 "bm25_error": context.metadata.get("bm25_error"),
                 "document_structure": context.metadata.get("document_structure"),
                 "chunking": context.metadata.get("chunking"),
+                "knowledge_base_index_version": index_version,
             },
             "original_length": clean_result.original_length,
             "cleaned_length": clean_result.cleaned_length,
@@ -200,8 +205,59 @@ class DocumentService(BaseService[DocumentRepository]):
     def delete(self, id: int) -> None:
         logger.info("Delete document started")
         document = self.get(id)
+        document_id = document.id
+        knowledge_base_id = document.knowledge_base_id
+        cleanup_metadata: dict = {
+            "document_id": document_id,
+            "knowledge_base_id": knowledge_base_id,
+            "failed_stage": None,
+            "index_inconsistent": False,
+        }
+
+        try:
+            cleanup_metadata["qdrant"] = QdrantVectorStore().delete_by_document_id(
+                document_id
+            )
+        except BusinessException as exc:
+            cleanup_metadata.update(
+                {
+                    "failed_stage": "qdrant",
+                    "index_inconsistent": False,
+                    "error": exc.message,
+                }
+            )
+            logger.warning(f"Delete document index cleanup failed | {cleanup_metadata}")
+            raise
+        except Exception as exc:
+            cleanup_metadata.update(
+                {
+                    "failed_stage": "qdrant",
+                    "index_inconsistent": False,
+                    "error": str(exc),
+                }
+            )
+            logger.exception("Delete document Qdrant cleanup crashed")
+            raise BusinessException(50004, "Qdrant文档向量删除失败") from exc
+
+        try:
+            get_bm25_index_manager().remove_document(document_id, save=True)
+            cleanup_metadata["bm25_removed"] = True
+        except Exception as exc:
+            cleanup_metadata.update(
+                {
+                    "failed_stage": "bm25",
+                    "index_inconsistent": True,
+                    "error": str(exc),
+                }
+            )
+            logger.exception(f"Delete document BM25 cleanup failed | {cleanup_metadata}")
+            raise BusinessException(50006, "BM25文档索引删除失败") from exc
+
+        cleanup_metadata["knowledge_base_index_version"] = (
+            IndexVersionManager().bump_version(knowledge_base_id)
+        )
         self.repository.delete(document)
-        logger.info("Delete document succeeded")
+        logger.info(f"Delete document succeeded | {cleanup_metadata}")
 
     def _validate_create(self, data: DocumentCreate) -> None:
         if data.knowledge_base_id is None:

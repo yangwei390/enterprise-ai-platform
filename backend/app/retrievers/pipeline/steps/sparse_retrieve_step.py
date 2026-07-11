@@ -16,6 +16,25 @@ class SparseRetrieveStep(BaseRetrieverStep):
             score_threshold=context.score_threshold,
             metadata_filter=context.metadata_filter,
         )
-        context.sparse_chunks = self.sparse_retriever.retrieve(query)
+        chunks = self.sparse_retriever.retrieve(query)
+        candidate_ids = (
+            context.auto_filter_result.candidate_document_ids
+            if context.auto_filter_result is not None
+            else []
+        )
+        if candidate_ids:
+            allowed_ids = set(candidate_ids)
+            before_count = len(chunks)
+            chunks = [chunk for chunk in chunks if chunk.document_id in allowed_ids]
+            rejected_count = before_count - len(chunks)
+            retrieval_scope = context.metadata.setdefault("retrieval_scope", {})
+            retrieval_scope.update(
+                {
+                    "candidate_document_ids": candidate_ids,
+                    "sparse_scope_applied": True,
+                    "sparse_rejected_count": rejected_count,
+                }
+            )
+        context.sparse_chunks = chunks
         context.metadata["sparse_total"] = len(context.sparse_chunks)
         return context

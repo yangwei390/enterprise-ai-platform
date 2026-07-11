@@ -24,3 +24,9 @@ class BaseVectorStore(ABC):
     @abstractmethod
     def upsert(self, records: list[VectorRecord]) -> VectorStoreResult:
         raise NotImplementedError
+
+    def delete_by_document_id(self, document_id: int) -> dict:
+        raise NotImplementedError
+
+    def list_document_ids(self) -> list[int]:
+        raise NotImplementedError

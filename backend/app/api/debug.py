@@ -16,6 +16,8 @@ from backend.app.context_compression import (
 from backend.app.db.session import get_db
 from backend.app.debug import RagTraceChunk, RagTraceResult
 from backend.app.documents import DocumentClassifier, StructureParserFactory
+from backend.app.exceptions import BusinessException
+from backend.app.indexing.consistency import IndexConsistencyService
 from backend.app.logger import logger
 from backend.app.mcp.client_manager import get_mcp_client_manager
 from backend.app.memory.factory import MemoryFactory
@@ -584,6 +586,25 @@ def _build_document_chunk_preview(document_id: int, db: Session, strategy: str) 
             for chunk in chunk_result.chunks[:200]
         ],
     }
+
+
+@router.get("/debug/index/orphans", response_model=ApiResponse)
+def debug_index_orphans() -> ApiResponse:
+    return success(data=IndexConsistencyService().detect_orphans())
+
+
+@router.delete("/debug/index/orphans/{document_id}", response_model=ApiResponse)
+def cleanup_debug_index_orphan(document_id: int) -> ApiResponse:
+    if settings.APP_ENV.lower() == "production":
+        raise BusinessException(40301, "生产环境禁止清理索引")
+    return success(data=IndexConsistencyService().cleanup_orphan(document_id))
+
+
+@router.post("/debug/index/orphans/cleanup", response_model=ApiResponse)
+def cleanup_debug_index_orphans() -> ApiResponse:
+    if settings.APP_ENV.lower() == "production":
+        raise BusinessException(40301, "生产环境禁止清理索引")
+    return success(data=IndexConsistencyService().cleanup_orphans())
 
 
 @router.get("/debug/tools", response_model=ApiResponse)

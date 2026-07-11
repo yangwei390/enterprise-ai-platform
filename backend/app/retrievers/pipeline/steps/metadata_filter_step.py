@@ -18,4 +18,13 @@ class MetadataFilterStep(BaseRetrieverStep):
         context.metadata["source_hints"] = auto_filter_result.source_hints
         context.metadata["soft_boost_enabled"] = auto_filter_result.soft_boost_enabled
         context.metadata["auto_filter"] = auto_filter_result.metadata
+        context.metadata["retrieval_scope"] = {
+            "candidate_document_ids": auto_filter_result.candidate_document_ids,
+            "dense_scope_applied": False,
+            "sparse_scope_applied": False,
+            "fusion_scope_guard_applied": False,
+            "dense_rejected_count": 0,
+            "sparse_rejected_count": 0,
+            "fusion_rejected_count": 0,
+        }
         return context

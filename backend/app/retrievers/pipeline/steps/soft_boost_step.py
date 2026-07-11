@@ -78,16 +78,28 @@ class SoftBoostStep(BaseRetrieverStep):
             return chunks, False, {"enabled": False}
         hint = StructureQueryHintParser().parse(query)
         metadata = hint.to_metadata()
-        metadata["enabled"] = True
+        metadata.update(
+            {
+                "enabled": True,
+                "requested_chapter_number": metadata.get("chapter_number"),
+                "requested_article_number": metadata.get("article_number"),
+                "matched_chunk_count": 0,
+                "matched_chunk_ids": [],
+                "applied": False,
+                "factor": settings.STRUCTURE_SOFT_BOOST_FACTOR,
+            }
+        )
         if not hint.has_hint:
             return chunks, False, metadata
 
         boosted_chunks: list[RetrievedChunk] = []
         applied = False
+        matched_chunk_ids: list[str] = []
         for chunk in chunks:
             if not self._matches_hint(chunk.metadata, metadata):
                 boosted_chunks.append(chunk)
                 continue
+            matched_chunk_ids.append(chunk.id)
             boosted_score = chunk.score * settings.STRUCTURE_SOFT_BOOST_FACTOR
             boosted_chunks.append(
                 chunk.model_copy(
@@ -103,6 +115,9 @@ class SoftBoostStep(BaseRetrieverStep):
                 )
             )
             applied = True
+        metadata["matched_chunk_count"] = len(matched_chunk_ids)
+        metadata["matched_chunk_ids"] = matched_chunk_ids[:20]
+        metadata["applied"] = applied
         boosted_chunks.sort(key=lambda item: item.score, reverse=True)
         return boosted_chunks[:top_k], applied, metadata
 
