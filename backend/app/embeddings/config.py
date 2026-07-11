@@ -10,6 +10,7 @@ class EmbeddingConfig(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     dimension: int | None = None
+    batch_size: int = 10
     metadata: dict = Field(default_factory=dict)
 
 
@@ -21,6 +22,7 @@ def get_embedding_config() -> EmbeddingConfig:
         api_key=settings.EMBEDDING_API_KEY,
         base_url=settings.EMBEDDING_BASE_URL,
         dimension=settings.EMBEDDING_DIMENSION,
+        batch_size=settings.EMBEDDING_BATCH_SIZE,
         metadata={
             "source": "settings",
         },

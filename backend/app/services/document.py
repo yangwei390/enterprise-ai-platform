@@ -82,10 +82,6 @@ class DocumentService(BaseService[DocumentRepository]):
             logger.exception("Parse document crashed")
             raise BusinessException(41003, "文档解析失败") from exc
 
-        self.repository.update(
-            document,
-            {"parse_status": "success", "parse_message": "解析成功"},
-        )
         parse_result = context.parse_result
         clean_result = context.clean_result
         chunk_result = context.chunk_result
@@ -99,7 +95,16 @@ class DocumentService(BaseService[DocumentRepository]):
             or vector_store_result is None
         ):
             logger.warning("Document pipeline result is incomplete")
+            self.repository.update(
+                document,
+                {"parse_status": "failed", "parse_message": "文档解析失败"},
+            )
             raise BusinessException(41003, "文档解析失败")
+
+        self.repository.update(
+            document,
+            {"parse_status": "success", "parse_message": "解析成功"},
+        )
 
         chunks_preview = [
             {

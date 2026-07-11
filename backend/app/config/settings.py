@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     EMBEDDING_API_KEY: str | None = None
     EMBEDDING_BASE_URL: str | None = None
     EMBEDDING_DIMENSION: int | None = None
+    EMBEDDING_BATCH_SIZE: int = 10
 
     CHUNK_STRATEGY: str = "auto"
     DOCUMENT_CLASSIFICATION_ENABLED: bool = True

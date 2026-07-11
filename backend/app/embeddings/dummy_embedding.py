@@ -1,17 +1,20 @@
 import hashlib
 
-from backend.app.chunkers import Chunk
-from backend.app.embeddings.base import BaseEmbedding, EmbeddingItem, EmbeddingResult
+from backend.app.embeddings.base import BaseEmbedding
 from backend.app.embeddings.config import get_embedding_config
 
 
 class DummyEmbedding(BaseEmbedding):
     default_dimension = 8
     model_name = "dummy-embedding"
+    provider_name = "dummy"
     config = get_embedding_config()
     dimension = config.dimension or default_dimension
 
-    def embed_text(self, text: str) -> list[float]:
+    def embed_text_batch(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed_one(text) for text in texts]
+
+    def _embed_one(self, text: str) -> list[float]:
         values: list[float] = []
         seed = text.encode("utf-8")
         counter = 0
@@ -28,28 +31,3 @@ class DummyEmbedding(BaseEmbedding):
             counter += 1
 
         return values
-
-    def embed_chunks(self, chunks: list[Chunk]) -> EmbeddingResult:
-        items = [
-            EmbeddingItem(
-                chunk_index=chunk.chunk_index,
-                text=chunk.text,
-                vector=self.embed_text(chunk.text),
-                document_id=chunk.document_id,
-                knowledge_base_id=chunk.knowledge_base_id,
-                metadata=chunk.metadata,
-            )
-            for chunk in chunks
-        ]
-
-        return EmbeddingResult(
-            items=items,
-            total_items=len(items),
-            model_name=self.model_name,
-            dimension=self.dimension,
-            metadata={
-                "embedding_provider": "dummy",
-                "embedding_model": self.model_name,
-                "embedding_dimension": self.dimension,
-            },
-        )
