@@ -1,3 +1,4 @@
+import argparse
 import time
 from pathlib import Path
 from typing import Any
@@ -6,6 +7,7 @@ from backend.app.chat import ChatRequest, ChatService
 
 from evaluation.evaluator import EvaluationQuestion, Evaluator
 from evaluation.report import build_report, print_summary, write_report
+from evaluation.v2.runner import EvaluationRunnerV2
 
 DEFAULT_DATASET_PATH = Path(__file__).parent / "datasets" / "questions.yaml"
 DEFAULT_REPORT_PATH = Path(__file__).parent / "report.json"
@@ -153,5 +155,59 @@ def _float(value: Any) -> float:
     return 0.0
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Enterprise AI Platform evaluation")
+    parser.add_argument("--suite", default=None)
+    parser.add_argument("--case", action="append", dest="case_ids", default=[])
+    parser.add_argument("--target", default=None)
+    parser.add_argument("--tags", action="append", default=[])
+    parser.add_argument("--baseline", default=None)
+    parser.add_argument("--save-baseline", default=None)
+    parser.add_argument("--compare", action="store_true")
+    parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--concurrency", type=int, default=None)
+    parser.add_argument("--output", default=None)
+    args = parser.parse_args(argv)
+
+    if not args.suite:
+        report = run_evaluation()
+        return 0 if int(report.get("fail", 0)) == 0 else 1
+
+    suite = _resolve_suite_arg(args.suite)
+    tags = [*args.tags]
+    if args.target:
+        tags.append(args.target)
+    report_v2 = EvaluationRunnerV2(
+        concurrency=args.concurrency,
+        fail_fast=args.fail_fast,
+    ).run_suite(
+        suite,
+        case_ids=args.case_ids,
+        tags=tags,
+        baseline=args.baseline,
+        compare=args.compare,
+        save_baseline=args.save_baseline,
+        output=args.output,
+    )
+    _print_v2_summary(report_v2.model_dump(mode="json"))
+    return 0 if report_v2.passed else 1
+
+
+def _resolve_suite_arg(suite: str) -> str:
+    if "/" in suite or suite.endswith((".yaml", ".yml", ".json")):
+        return suite
+    return str(Path("evaluation/v2/fixtures/suites") / f"{suite}.yaml")
+
+
+def _print_v2_summary(report: dict[str, Any]) -> None:
+    print("\nEvaluation Summary V2")
+    print("=====================")
+    print(f"PASS {report.get('passed_cases', 0)}")
+    print(f"FAIL {report.get('failed_cases', 0)}")
+    print(f"SKIP {report.get('skipped_cases', 0)}")
+    print(f"Pass Rate {round(float(report.get('pass_rate', 0)) * 100, 2)}%")
+    print(f"Duration {report.get('duration_ms', 0)}ms")
+
+
 if __name__ == "__main__":
-    run_evaluation()
+    raise SystemExit(main())

@@ -1,0 +1,117 @@
+id: smoke
+name: Evaluation V2 Smoke
+version: "2.0"
+description: Minimal mixed-target smoke suite for Evaluation 2.0.
+default_metrics:
+  - latency_ms
+default_thresholds: {}
+concurrency: 2
+timeout_seconds: 60
+cases:
+  - id: rag_smoke_001
+    name: RAG retrieval smoke
+    target: rag
+    query: 劳动法第二章说什么
+    input:
+      mode: retrieval-only
+      knowledge_base_id: 4
+      top_k: 5
+      score_threshold: 0
+    expected:
+      keywords:
+        - 劳动法
+    metrics:
+      - retrieved_count
+      - keyword_coverage
+    thresholds:
+      retrieved_count:
+        min: 0
+    tags:
+      - rag
+  - id: rag_smoke_002
+    name: RAG answer smoke
+    target: rag
+    query: ViewModel 是什么
+    input:
+      mode: rag-answer
+      knowledge_base_id: 4
+      top_k: 3
+      score_threshold: 0
+    expected:
+      keywords:
+        - ViewModel
+    metrics:
+      - keyword_coverage
+    thresholds:
+      keyword_coverage:
+        min: 0
+    tags:
+      - rag
+  - id: agent_smoke_001
+    name: Agent tool selection smoke
+    target: agent
+    query: 1+2等于多少
+    input: {}
+    expected:
+      tools:
+        - calculator
+      keywords:
+        - "3"
+    metrics:
+      - tool_selection_accuracy
+      - final_answer_keyword_coverage
+    thresholds:
+      tool_selection_accuracy:
+        min: 0
+      final_answer_keyword_coverage:
+        min: 0
+    tags:
+      - agent
+  - id: tool_smoke_001
+    name: Tool calculator smoke
+    target: tool
+    input:
+      tool_name: calculator
+      arguments:
+        expression: 1+2
+    expected:
+      contains: "3"
+    metrics:
+      - tool_success
+      - result_contains
+    thresholds:
+      tool_success: true
+    tags:
+      - tool
+  - id: mcp_smoke_001
+    name: MCP tool smoke
+    target: mcp
+    requires:
+      - mcp
+    input:
+      tool_name: mcp__local_demo__mcp_echo
+      arguments:
+        text: hello
+    expected:
+      contains: hello
+    metrics:
+      - mcp_tool_available
+      - mcp_call_success
+    tags:
+      - mcp
+  - id: workflow_smoke_001
+    name: Workflow smoke
+    target: workflow
+    query: 1+2等于多少
+    input:
+      workflow_id: default_knowledge_workflow
+    expected:
+      status: completed
+    metrics:
+      - workflow_status_match
+      - step_count
+    thresholds:
+      step_count:
+        min: 0
+    tags:
+      - workflow

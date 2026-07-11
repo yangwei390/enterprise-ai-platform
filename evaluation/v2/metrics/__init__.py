@@ -1,0 +1,136 @@
+from evaluation.v2.metrics.agent import (
+    AgentStepCountMetric,
+    FinalAnswerKeywordCoverageMetric,
+    ToolCallSuccessRateMetric,
+    ToolSelectionAccuracyMetric,
+    ToolSequenceMatchMetric,
+    UnnecessaryToolCallsMetric,
+)
+from evaluation.v2.metrics.base import BaseMetric
+from evaluation.v2.metrics.generation import (
+    AnswerLengthMetric,
+    CitationCountMetric,
+    ContainsKeywordsMetric,
+    EmptyAnswerMetric,
+    ExactMatchMetric,
+    KeywordCoverageMetric,
+    SourceCoverageMetric,
+)
+from evaluation.v2.metrics.retrieval import (
+    ChunkRecallMetric,
+    ContextPrecisionProxyMetric,
+    HitRateAtKMetric,
+    MRRMetric,
+    RetrievedCountMetric,
+    RetrieverHitMetric,
+)
+from evaluation.v2.metrics.runtime import EstimatedCostMetric, LatencyMetric, TokenUsageMetric
+from evaluation.v2.metrics.tool import (
+    CacheHitMetric,
+    MCPCallSuccessMetric,
+    MCPToolAvailableMetric,
+    ResultContainsMetric,
+    ResultMatchMetric,
+    RetryCountMetric,
+    TimeoutMetric,
+    ToolSuccessMetric,
+)
+from evaluation.v2.metrics.workflow import (
+    FallbackUsedMetric,
+    InterruptExpectedMetric,
+    NodeContainsMetric,
+    NodePathMatchMetric,
+    StepCountMetric,
+    WorkflowCompletedMetric,
+    WorkflowStatusMatchMetric,
+)
+
+
+def get_metric(name: str) -> BaseMetric:
+    metrics: dict[str, BaseMetric] = {
+        "retriever_hit": RetrieverHitMetric(),
+        "chunk_recall": ChunkRecallMetric(),
+        "keyword_coverage": KeywordCoverageMetric(),
+        "mrr": MRRMetric(),
+        "hit_rate_at_k": HitRateAtKMetric(),
+        "context_precision_proxy": ContextPrecisionProxyMetric(),
+        "retrieved_count": RetrievedCountMetric(),
+        "exact_match": ExactMatchMetric(),
+        "contains_keywords": ContainsKeywordsMetric(),
+        "answer_length": AnswerLengthMetric(),
+        "citation_count": CitationCountMetric(),
+        "source_coverage": SourceCoverageMetric(),
+        "empty_answer": EmptyAnswerMetric(),
+        "latency_ms": LatencyMetric(),
+        "token_usage": TokenUsageMetric(),
+        "estimated_cost": EstimatedCostMetric(),
+        "tool_selection_accuracy": ToolSelectionAccuracyMetric(),
+        "tool_call_success_rate": ToolCallSuccessRateMetric(),
+        "tool_sequence_match": ToolSequenceMatchMetric(),
+        "unnecessary_tool_calls": UnnecessaryToolCallsMetric(),
+        "agent_step_count": AgentStepCountMetric(),
+        "final_answer_keyword_coverage": FinalAnswerKeywordCoverageMetric(),
+        "tool_success": ToolSuccessMetric(),
+        "result_match": ResultMatchMetric(),
+        "result_contains": ResultContainsMetric(),
+        "timeout": TimeoutMetric(),
+        "retry_count": RetryCountMetric(),
+        "cache_hit": CacheHitMetric(),
+        "mcp_tool_available": MCPToolAvailableMetric(),
+        "mcp_call_success": MCPCallSuccessMetric(),
+        "workflow_completed": WorkflowCompletedMetric(),
+        "workflow_status_match": WorkflowStatusMatchMetric(),
+        "node_path_match": NodePathMatchMetric(),
+        "node_contains": NodeContainsMetric(),
+        "step_count": StepCountMetric(),
+        "interrupt_expected": InterruptExpectedMetric(),
+        "fallback_used": FallbackUsedMetric(),
+    }
+    return metrics[name]
+
+
+def list_metrics() -> list[str]:
+    return sorted(
+        [
+            "retriever_hit",
+            "chunk_recall",
+            "keyword_coverage",
+            "mrr",
+            "hit_rate_at_k",
+            "context_precision_proxy",
+            "retrieved_count",
+            "exact_match",
+            "contains_keywords",
+            "answer_length",
+            "citation_count",
+            "source_coverage",
+            "empty_answer",
+            "latency_ms",
+            "token_usage",
+            "estimated_cost",
+            "tool_selection_accuracy",
+            "tool_call_success_rate",
+            "tool_sequence_match",
+            "unnecessary_tool_calls",
+            "agent_step_count",
+            "final_answer_keyword_coverage",
+            "tool_success",
+            "result_match",
+            "result_contains",
+            "timeout",
+            "retry_count",
+            "cache_hit",
+            "mcp_tool_available",
+            "mcp_call_success",
+            "workflow_completed",
+            "workflow_status_match",
+            "node_path_match",
+            "node_contains",
+            "step_count",
+            "interrupt_expected",
+            "fallback_used",
+        ]
+    )
+
+
+__all__ = ["get_metric", "list_metrics", "BaseMetric"]

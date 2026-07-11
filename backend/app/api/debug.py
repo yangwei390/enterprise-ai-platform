@@ -1,5 +1,6 @@
 from typing import Any, cast
 
+from backend.app.api.evaluation import evaluation_debug_state
 from backend.app.config.settings import settings
 from backend.app.context import ContextBuilderFactory, ContextBuildRequest
 from backend.app.context_compression import (
@@ -591,3 +592,8 @@ async def debug_mcp_refresh() -> ApiResponse:
 @router.get("/debug/mcp/health", response_model=ApiResponse)
 async def debug_mcp_health() -> ApiResponse:
     return success(data=await get_mcp_client_manager().health_all())
+
+
+@router.get("/debug/evaluation", response_model=ApiResponse)
+def debug_evaluation() -> ApiResponse:
+    return success(data=evaluation_debug_state())

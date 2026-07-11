@@ -1,0 +1,6 @@
+providers:
+  - provider: dummy
+    model: dummy-llm
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    currency: USD
