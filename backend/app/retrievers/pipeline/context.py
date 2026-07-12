@@ -4,6 +4,7 @@ from backend.app.context import ContextChunk
 from backend.app.rerankers import RerankedChunk
 from backend.app.retrievers.base import RetrievedChunk
 from backend.app.retrievers.metadata_filter import AutoMetadataFilterResult
+from backend.app.retrievers.planning import RetrievalPlan
 
 
 @dataclass
@@ -24,6 +25,7 @@ class RetrieverPipelineContext:
     metadata: dict = field(default_factory=dict)
     errors: list[dict] = field(default_factory=list)
     auto_filter_result: AutoMetadataFilterResult | None = None
+    retrieval_plan: RetrievalPlan | None = None
 
     @property
     def active_query(self) -> str:

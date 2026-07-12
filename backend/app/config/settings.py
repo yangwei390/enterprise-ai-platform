@@ -70,6 +70,16 @@ class Settings(BaseSettings):
     CHUNK_EMBED_PARENT: bool = False
     STRUCTURE_QUERY_HINT_ENABLED: bool = True
     STRUCTURE_SOFT_BOOST_FACTOR: float = 1.3
+    RETRIEVAL_PLANNER_ENABLED: bool = True
+    RETRIEVAL_PLANNER_LLM_ENABLED: bool = False
+    RETRIEVAL_PLANNER_TIMEOUT_MS: int = 100
+    RETRIEVAL_PLANNER_FAIL_OPEN: bool = True
+    RETRIEVAL_DEFAULT_STRATEGY: str = "hybrid"
+    RETRIEVAL_STRUCTURED_STRATEGY: str = "structured_hybrid"
+    RETRIEVAL_DENSE_WEIGHT: float = 0.5
+    RETRIEVAL_SPARSE_WEIGHT: float = 0.5
+    RETRIEVAL_DENSE_HEAVY_WEIGHT: float = 0.7
+    RETRIEVAL_SPARSE_HEAVY_WEIGHT: float = 0.7
 
     RERANK_PROVIDER: str = "dummy"
     RERANK_MODEL: str = "gte-rerank-v2"

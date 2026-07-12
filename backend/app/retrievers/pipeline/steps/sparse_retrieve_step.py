@@ -9,14 +9,32 @@ class SparseRetrieveStep(BaseRetrieverStep):
         self.sparse_retriever = sparse_retriever or BM25SparseRetriever()
 
     def run(self, context: RetrieverPipelineContext) -> RetrieverPipelineContext:
+        plan = context.retrieval_plan
+        if plan is not None and not plan.sparse_enabled:
+            context.sparse_chunks = []
+            context.metadata["sparse_total"] = 0
+            context.metadata["sparse_disabled_by_plan"] = True
+            return context
         query = HybridRetrieveQuery(
             query=context.active_query,
             knowledge_base_id=context.knowledge_base_id,
             top_k=context.top_k,
             score_threshold=context.score_threshold,
             metadata_filter=context.metadata_filter,
+            constraints=plan.constraints if plan is not None else [],
         )
         chunks = self.sparse_retriever.retrieve(query)
+        if not chunks and plan is not None and plan.use_structure_filter:
+            chunks = self.sparse_retriever.retrieve(query.model_copy(update={"constraints": []}))
+            plan.fallback_used = True
+            plan.fallback_reason = "sparse_constraint_no_match"
+            context.metadata["retrieval_planning"]["fallback_used"] = True
+            context.metadata["retrieval_planning"]["fallback_reason"] = (
+                "sparse_constraint_no_match"
+            )
+        if plan is not None and plan.constraints:
+            constraint_scope = context.metadata.setdefault("constraint_scope", {})
+            constraint_scope["sparse_applied"] = bool(plan.use_structure_filter)
         candidate_ids = (
             context.auto_filter_result.candidate_document_ids
             if context.auto_filter_result is not None

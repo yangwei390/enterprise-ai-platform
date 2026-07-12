@@ -15,6 +15,7 @@ class DenseRetriever:
                 top_k=query.top_k,
                 score_threshold=query.score_threshold,
                 metadata_filter=query.metadata_filter,
+                constraints=query.constraints,
             )
         )
         return result.chunks

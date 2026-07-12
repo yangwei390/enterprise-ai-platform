@@ -1,3 +1,4 @@
+from backend.app.retrievers.planning import RetrievalConstraint
 from pydantic import BaseModel, Field
 
 
@@ -15,6 +16,7 @@ class SparseSearchQuery(BaseModel):
     knowledge_base_id: int | None = None
     top_k: int = 5
     metadata_filter: dict | None = None
+    constraints: list[RetrievalConstraint] = Field(default_factory=list)
 
 
 class SparseSearchResult(BaseModel):

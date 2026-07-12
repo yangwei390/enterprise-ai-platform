@@ -11,6 +11,9 @@ from backend.app.retrievers.pipeline.steps.neighbor_expansion_step import (
 )
 from backend.app.retrievers.pipeline.steps.query_rewrite_step import QueryRewriteStep
 from backend.app.retrievers.pipeline.steps.rerank_step import RerankStep
+from backend.app.retrievers.pipeline.steps.retrieval_planning_step import (
+    RetrievalPlanningStep,
+)
 from backend.app.retrievers.pipeline.steps.soft_boost_step import SoftBoostStep
 from backend.app.retrievers.pipeline.steps.sparse_retrieve_step import SparseRetrieveStep
 
@@ -24,6 +27,7 @@ __all__ = [
     "NeighborExpansionStep",
     "QueryRewriteStep",
     "RerankStep",
+    "RetrievalPlanningStep",
     "SoftBoostStep",
     "SparseRetrieveStep",
 ]

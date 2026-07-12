@@ -2,6 +2,7 @@ import math
 import re
 from collections import Counter
 
+from backend.app.retrievers.planning import RetrievalPlanningFactory
 from backend.app.retrievers.sparse.base import (
     SparseDocument,
     SparseSearchQuery,
@@ -99,6 +100,14 @@ class BM25Index:
         for key, value in (query.metadata_filter or {}).items():
             if document.metadata.get(key) != value:
                 return False
+
+        if query.constraints:
+            return RetrievalPlanningFactory.get_constraint_engine().matches_metadata(
+                document.metadata,
+                query.constraints,
+                document_id=document.document_id,
+                knowledge_base_id=document.knowledge_base_id,
+            )
 
         return True
 

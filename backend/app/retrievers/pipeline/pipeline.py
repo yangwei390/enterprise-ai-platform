@@ -10,6 +10,7 @@ from backend.app.retrievers.pipeline.steps import (
     NeighborExpansionStep,
     QueryRewriteStep,
     RerankStep,
+    RetrievalPlanningStep,
     SoftBoostStep,
     SparseRetrieveStep,
 )
@@ -20,6 +21,7 @@ class RetrieverPipeline:
         self.steps = steps or [
             QueryRewriteStep(),
             MetadataFilterStep(),
+            RetrievalPlanningStep(),
             DenseRetrieveStep(),
             SparseRetrieveStep(),
             FusionStep(),

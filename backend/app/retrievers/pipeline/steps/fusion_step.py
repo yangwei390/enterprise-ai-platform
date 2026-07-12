@@ -13,10 +13,21 @@ class FusionStep(BaseRetrieverStep):
     )
 
     def run(self, context: RetrieverPipelineContext) -> RetrieverPipelineContext:
-        retrieval_intent = self._detect_retrieval_intent(context.active_query)
+        plan = context.retrieval_plan
+        retrieval_intent = (
+            plan.intent if plan is not None else self._detect_retrieval_intent(context.active_query)
+        )
         sparse_boosted = retrieval_intent == "sparse"
+        if retrieval_intent == "lexical":
+            sparse_boosted = True
 
-        if sparse_boosted:
+        if plan is not None and plan.strategy == "dense":
+            context.fused_chunks = context.dense_chunks[: context.top_k]
+            fusion_strategy = "dense"
+        elif plan is not None and plan.strategy == "sparse":
+            context.fused_chunks = context.sparse_chunks[: context.top_k]
+            fusion_strategy = "sparse"
+        elif sparse_boosted:
             context.fused_chunks = self._sparse_first_fusion(
                 dense_chunks=context.dense_chunks,
                 sparse_chunks=context.sparse_chunks,
@@ -55,12 +66,17 @@ class FusionStep(BaseRetrieverStep):
                 }
             )
 
+        if plan is not None and plan.constraints:
+            constraint_scope = context.metadata.setdefault("constraint_scope", {})
+            constraint_scope["matched_chunk_count"] = len(context.fused_chunks)
+
         context.metadata.update(
             {
                 "retrieval_intent": retrieval_intent,
                 "sparse_boosted": sparse_boosted,
                 "fused_total": len(context.fused_chunks),
                 "fusion": fusion_strategy,
+                "fusion_plan": plan.model_dump() if plan is not None else None,
                 "fusion_scope_guard_applied": fusion_scope_guard_applied,
                 "fusion_rejected_count": fusion_rejected_count,
             }

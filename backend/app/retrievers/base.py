@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+from backend.app.retrievers.planning import RetrievalConstraint
 from pydantic import BaseModel, Field
 
 
@@ -9,6 +10,7 @@ class RetrieveQuery(BaseModel):
     top_k: int = 5
     score_threshold: float | None = None
     metadata_filter: dict | None = None
+    constraints: list[RetrievalConstraint] = Field(default_factory=list)
 
 
 class RetrievedChunk(BaseModel):

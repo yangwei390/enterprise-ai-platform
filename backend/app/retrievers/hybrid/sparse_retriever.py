@@ -15,6 +15,7 @@ class BM25SparseRetriever:
                 knowledge_base_id=query.knowledge_base_id,
                 top_k=query.top_k,
                 metadata_filter=query.metadata_filter,
+                constraints=query.constraints,
             )
         )
         return [

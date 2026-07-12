@@ -4,7 +4,9 @@ from backend.app.embeddings import EmbeddingFactory
 from backend.app.exceptions import BusinessException
 from backend.app.logger import logger
 from backend.app.retrievers.base import BaseRetriever, RetrievedChunk, RetrieveQuery, RetrieveResult
+from backend.app.retrievers.planning import RetrievalPlanningFactory
 from backend.app.vectorstores import QdrantVectorStore
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 
 class QdrantRetriever(BaseRetriever):
@@ -18,6 +20,7 @@ class QdrantRetriever(BaseRetriever):
             query_vector=query_vector,
             knowledge_base_id=query.knowledge_base_id,
             metadata_filter=query.metadata_filter,
+            constraints=query.constraints,
             limit=query.top_k,
         )
         chunks = [self._to_retrieved_chunk(point) for point in points]
@@ -47,33 +50,28 @@ class QdrantRetriever(BaseRetriever):
         self,
         knowledge_base_id: int | None,
         metadata_filter: dict | None,
-    ) -> dict | None:
+        constraints: list,
+    ) -> Filter | None:
         must_conditions = []
 
         if knowledge_base_id is not None:
             must_conditions.append(
-                {
-                    "key": "knowledge_base_id",
-                    "match": {
-                        "value": knowledge_base_id,
-                    },
-                }
+                FieldCondition(
+                    key="knowledge_base_id",
+                    match=MatchValue(value=knowledge_base_id),
+                )
             )
 
         for key, value in (metadata_filter or {}).items():
             must_conditions.append(
-                {
-                    "key": f"metadata.{key}",
-                    "match": {
-                        "value": value,
-                    },
-                }
+                FieldCondition(key=f"metadata.{key}", match=MatchValue(value=value))
             )
 
-        if not must_conditions:
-            return None
-
-        return {"must": must_conditions}
+        base_filter = Filter(must=must_conditions) if must_conditions else None
+        return RetrievalPlanningFactory.get_constraint_engine().to_qdrant_filter(
+            constraints,
+            base_filter=base_filter,
+        )
 
     def _to_retrieved_chunk(self, point) -> RetrievedChunk:
         if isinstance(point, dict):
@@ -100,6 +98,7 @@ class QdrantRetriever(BaseRetriever):
         query_vector: list[float],
         knowledge_base_id: int | None,
         metadata_filter: dict | None,
+        constraints: list,
         limit: int,
     ) -> list:
         body = {
@@ -111,9 +110,10 @@ class QdrantRetriever(BaseRetriever):
         query_filter = self._build_filter(
             knowledge_base_id=knowledge_base_id,
             metadata_filter=metadata_filter,
+            constraints=constraints,
         )
         if query_filter is not None:
-            body["filter"] = query_filter
+            body["filter"] = query_filter.model_dump(mode="json", exclude_none=True)
 
         url = (
             f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"

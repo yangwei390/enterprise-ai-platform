@@ -1,4 +1,5 @@
 from backend.app.retrievers.base import RetrievedChunk
+from backend.app.retrievers.planning import RetrievalConstraint
 from pydantic import BaseModel, Field
 
 
@@ -8,6 +9,7 @@ class HybridRetrieveQuery(BaseModel):
     top_k: int = 5
     score_threshold: float | None = None
     metadata_filter: dict | None = None
+    constraints: list[RetrievalConstraint] = Field(default_factory=list)
 
 
 class HybridRetrieveResult(BaseModel):
