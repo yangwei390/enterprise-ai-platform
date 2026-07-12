@@ -76,13 +76,18 @@ export type AgentResult = {
 };
 
 export type AgentTraceStep = {
-  step: string;
-  name: string;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
-  duration_ms: number;
-  status: string;
+  step?: string | number;
+  node?: string;
+  name?: string;
+  action?: string;
+  tool_name?: string;
+  input?: Record<string, unknown> | unknown;
+  output?: Record<string, unknown> | unknown;
+  duration_ms?: number;
+  duration?: number;
+  status?: string;
   error?: string | null;
+  metadata?: Record<string, unknown>;
 };
 
 export type AgentChatResponseData = {
@@ -94,4 +99,32 @@ export type AgentChatResponseData = {
   citations: Array<Record<string, unknown>>;
   metadata: Record<string, unknown>;
   trace: AgentTraceStep[];
+};
+
+export type MemoryDebugSnapshot = {
+  provider?: string;
+  session_count?: number | null;
+  cache_count?: number | null;
+  checkpoint_count?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type CacheDebugSnapshot = {
+  provider?: string;
+  cache_count?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type CheckpointsDebugSnapshot = {
+  checkpoints: string[];
+};
+
+export type McpDebugSnapshot = {
+  enabled?: boolean;
+  configured_servers?: Array<Record<string, unknown>>;
+  health?: Record<string, unknown> | Array<Record<string, unknown>>;
+  discovered_tool_count?: number;
+  tools?: Array<Record<string, unknown>>;
+  registry_version?: string | number | null;
+  audit?: Array<Record<string, unknown>>;
 };

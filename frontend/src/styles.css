@@ -334,6 +334,145 @@ pre {
   background: #fee2e2;
 }
 
+.status-neutral {
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #374151;
+  background: #e5e7eb;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.studio-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 430px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+  margin-bottom: 18px;
+}
+
+.studio-run-card,
+.studio-answer-card {
+  min-height: 100%;
+}
+
+.studio-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.studio-panels > .card {
+  min-width: 0;
+}
+
+.timeline-list {
+  position: relative;
+}
+
+.timeline-step {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.timeline-index {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #2563eb;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.timeline-body {
+  min-width: 0;
+}
+
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 8px 0;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.metric-row span {
+  overflow-wrap: anywhere;
+}
+
+.state-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.compact-grid {
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  margin-bottom: 12px;
+}
+
+.metric-card {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f9fafb;
+  min-width: 0;
+}
+
+.metric-card span {
+  color: #6b7280;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.metric-card strong {
+  color: #111827;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.state-wide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.tool-timeline {
+  display: grid;
+  gap: 12px;
+}
+
+.tool-timeline-item {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f9fafb;
+}
+
+.tool-timeline-item h4 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.compact-button {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.empty-state {
+  margin: 0;
+  padding: 12px 0;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     display: block;
@@ -348,6 +487,13 @@ pre {
   }
 
   .compare-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .studio-grid,
+  .studio-panels,
+  .state-grid,
+  .compact-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -1,4 +1,10 @@
 import { apiRequest } from "./client";
+import type {
+  CacheDebugSnapshot,
+  CheckpointsDebugSnapshot,
+  McpDebugSnapshot,
+  MemoryDebugSnapshot
+} from "../types/common";
 
 export type RagTraceChunk = {
   id: string | null;
@@ -50,4 +56,20 @@ export function runRetrieverCompare(request: RagTraceRequest) {
     method: "POST",
     body: request
   });
+}
+
+export function getMemoryDebug() {
+  return apiRequest<MemoryDebugSnapshot>("/debug/memory");
+}
+
+export function getCacheDebug() {
+  return apiRequest<CacheDebugSnapshot>("/debug/cache");
+}
+
+export function getCheckpointsDebug() {
+  return apiRequest<CheckpointsDebugSnapshot>("/debug/checkpoints");
+}
+
+export function getMcpDebug() {
+  return apiRequest<McpDebugSnapshot>("/debug/mcp");
 }
