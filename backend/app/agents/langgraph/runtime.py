@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
 from time import perf_counter
+from typing import Any
 
 from backend.app.agents.langgraph.graph import LangGraphUnavailable, build_agent_graph
 from backend.app.agents.langgraph.state import AgentState, create_initial_state
@@ -168,6 +170,111 @@ class LangGraphAgentRuntime:
                 reason=str(exc),
             )
 
+    async def astream_events(
+        self,
+        request: AgentRuntimeRequest,
+    ) -> AsyncIterator[dict]:
+        started_at = perf_counter()
+        yield {
+            "event": "status",
+            "data": {"status": "analyzing", "message": "正在分析问题"},
+        }
+
+        if not settings.AGENT_ASYNC_ENABLED:
+            result = await asyncio.to_thread(self.run, request)
+            yield {"event": "result", "data": {"result": result.model_dump()}}
+            return
+
+        try:
+            graph_app = self.graph_app or build_agent_graph(async_mode=True)
+            event_queue: asyncio.Queue[dict] = asyncio.Queue()
+            session_id = self._session_id(request)
+            session_state = self._load_session(session_id)
+            state = create_initial_state(
+                query=request.query,
+                conversation_id=request.conversation_id,
+                knowledge_base_id=request.knowledge_base_id,
+                memory_context=request.memory_context,
+                metadata=self._metadata_with_session(
+                    {
+                        **request.metadata,
+                        "_agent_stream_answer_enabled": True,
+                        "_agent_stream_event_queue": event_queue,
+                    },
+                    session_id=session_id,
+                    session_state=session_state,
+                ),
+            )
+            self._inject_session_state(state, session_state)
+
+            async def run_graph() -> None:
+                try:
+                    result_state: dict[str, Any] = dict(state)
+                    last_status: str | None = "analyzing"
+                    async with asyncio.timeout(settings.AGENT_ASYNC_TIMEOUT_SECONDS):
+                        async for update in self._astream_graph(graph_app, state):
+                            node_name, update_state = self._extract_stream_state(update)
+                            if update_state is not None:
+                                result_state = update_state
+                            status_event = self._status_from_node(node_name, result_state)
+                            if status_event and status_event["status"] != last_status:
+                                last_status = status_event["status"]
+                                await event_queue.put(
+                                    {"event": "status", "data": status_event}
+                                )
+                    self._save_session(session_id, result_state)
+                    result = self._to_result(result_state)
+                    result.metadata.setdefault("async_runtime", {})
+                    result.metadata["async_runtime"].update(
+                        {
+                            "enabled": True,
+                            "runtime": "langgraph",
+                            "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                            "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
+                            "timed_out": False,
+                            "cancelled": False,
+                            "failed": False,
+                            "error": None,
+                        }
+                    )
+                    await event_queue.put(
+                        {"event": "result", "data": {"result": result.model_dump()}}
+                    )
+                except BaseException as exc:  # noqa: BLE001 - re-raised by consumer
+                    await event_queue.put({"event": "_exception", "data": {"error": exc}})
+
+            graph_task = asyncio.create_task(run_graph())
+            while True:
+                event = await event_queue.get()
+                if event.get("event") == "_exception":
+                    raise event["data"]["error"]
+                yield event
+                if event.get("event") == "result":
+                    break
+            await graph_task
+        except asyncio.CancelledError:
+            logger.info("LangGraph agent stream cancelled")
+            raise
+        except Exception as exc:
+            logger.exception("LangGraph agent stream failed")
+            result = await self._fallback_from_async_error(
+                request=request,
+                started_at=started_at,
+                async_metadata={
+                    "enabled": settings.AGENT_ASYNC_ENABLED,
+                    "runtime": "langgraph",
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                    "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
+                    "timed_out": isinstance(exc, TimeoutError),
+                    "cancelled": False,
+                    "sync_fallback_used": True,
+                    "failed": True,
+                    "error": str(exc),
+                },
+                reason=str(exc),
+            )
+            yield {"event": "result", "data": {"result": result.model_dump()}}
+
     async def _fallback_from_async_error(
         self,
         *,
@@ -215,6 +322,49 @@ class LangGraphAgentRuntime:
             if "config" not in str(exc):
                 raise
             return await graph_app.ainvoke(state)
+
+    async def _astream_graph(self, graph_app, state: AgentState):
+        try:
+            async for update in graph_app.astream(
+                state,
+                config={"recursion_limit": settings.AGENT_MAX_STEPS + 8},
+            ):
+                yield update
+        except TypeError as exc:
+            if "config" not in str(exc):
+                raise
+            async for update in graph_app.astream(state):
+                yield update
+
+    def _extract_stream_state(self, update) -> tuple[str | None, dict | None]:
+        if not isinstance(update, dict):
+            return None, None
+        if "metadata" in update or "messages" in update:
+            return None, update
+        for node_name, node_state in update.items():
+            if isinstance(node_state, dict):
+                return str(node_name), node_state
+        return None, None
+
+    def _status_from_node(self, node_name: str | None, state: dict) -> dict | None:
+        if node_name == "planner":
+            return {"status": "analyzing", "message": "正在分析问题"}
+        if node_name == "tool":
+            selected_tools = [
+                str(item.get("tool_name") or item.get("name") or "")
+                for item in state.get("tool_calls", [])
+                if isinstance(item, dict)
+            ]
+            if "knowledge_search" in selected_tools:
+                return {"status": "retrieving", "message": "正在查询知识库"}
+            return {"status": "processing", "message": "正在处理任务"}
+        if node_name == "observation":
+            return {"status": "processing", "message": "正在处理任务结果"}
+        if node_name == "reflection":
+            return {"status": "processing", "message": "正在调整处理思路"}
+        if node_name == "final":
+            return {"status": "answering", "message": "正在整理答案"}
+        return None
 
     def _session_id(self, request: AgentRuntimeRequest) -> str:
         metadata_session_id = request.metadata.get("session_id")
@@ -304,6 +454,9 @@ class LangGraphAgentRuntime:
 
     def _to_result(self, state: dict) -> AgentRuntimeResult:
         metadata = dict(state.get("metadata", {}))
+        for key in list(metadata):
+            if key.startswith("_agent_stream_"):
+                metadata.pop(key, None)
         trace = [
             AgentTraceStep.model_validate(item)
             for item in metadata.pop("trace", [])

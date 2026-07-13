@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from backend.app.chat import ChatRequest, ChatResponse, ChatService
 from backend.app.conversations import ConversationRepository, ConversationService
 from backend.app.db.session import get_db
+from backend.app.logger import logger
 from backend.app.schemas import ApiResponse, success
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -37,23 +38,24 @@ def chat_stream(
     request: ChatRequest,
     service: ChatService = Depends(get_chat_service),
 ) -> StreamingResponse:
-    response = service.chat(request)
     return StreamingResponse(
-        _stream_chat_response(response),
+        _stream_chat_events(service, request),
         media_type="text/event-stream",
     )
 
 
-def _stream_chat_response(response: ChatResponse) -> Iterator[str]:
-    for content in response.answer:
-        payload = json.dumps({"content": content}, ensure_ascii=False)
-        yield f"event: delta\ndata: {payload}\n\n"
-
-    done_payload = json.dumps(
-        {
-            "conversation_id": response.conversation_id,
-            "message_id": response.message_id,
-        },
-        ensure_ascii=False,
-    )
-    yield f"event: done\ndata: {done_payload}\n\n"
+def _stream_chat_events(service: ChatService, request: ChatRequest) -> Iterator[str]:
+    try:
+        for item in service.stream_chat_events(request):
+            event = item.get("event", "message")
+            payload = json.dumps(item.get("data", {}), ensure_ascii=False, default=str)
+            yield f"event: {event}\ndata: {payload}\n\n"
+    except GeneratorExit:
+        raise
+    except Exception:
+        logger.exception("Streaming chat failed")
+        payload = json.dumps(
+            {"message": "生成回答时发生错误，请稍后重试。"},
+            ensure_ascii=False,
+        )
+        yield f"event: error\ndata: {payload}\n\n"

@@ -20,3 +20,21 @@ class AgentChatRequest(BaseModel):
 
 class AgentChatResponseData(AgentRuntimeResult):
     pass
+
+
+class AgentStreamRequest(AgentChatRequest):
+    agent_id: str | None = None
+
+
+class AgentAssistant(BaseModel):
+    id: str
+    name: str
+    description: str
+    capabilities: list[str] = Field(default_factory=list)
+    recommended: bool = False
+    metadata: dict = Field(default_factory=dict)
+
+
+class AgentAssistantListResponse(BaseModel):
+    items: list[AgentAssistant]
+    total: int

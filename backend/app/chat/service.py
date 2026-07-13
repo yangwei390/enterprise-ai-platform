@@ -17,7 +17,7 @@ from backend.app.rag import RagChatInput, RagChatPipeline
 from backend.app.rerankers import RerankerFactory, RerankQuery
 from backend.app.retrievers import RetrieverFactory
 from backend.app.retrievers.hybrid import HybridRetrieveQuery
-from backend.app.retrievers.pipeline import RetrieverPipelineContext
+from backend.app.retrievers.pipeline import RetrieverPipeline, RetrieverPipelineContext
 from backend.app.retrievers.pipeline.steps import MMRStep, NeighborExpansionStep
 from backend.app.schemas.conversation import ConversationCreate
 from backend.app.tools import ToolCall, ToolExecutor, get_tool_registry
@@ -338,6 +338,155 @@ class ChatService:
             metadata=metadata,
         )
 
+    def stream_chat_events(self, request: ChatRequest):
+        conversation_id, history_loaded_count = self._prepare_conversation(request)
+        memory_context = self._build_memory_context(request, conversation_id)
+        rewrite_result = SimpleQueryRewriter().rewrite(request.query)
+
+        if self.conversation_service is not None and conversation_id is not None:
+            self.conversation_service.add_user_message(
+                conversation_id=conversation_id,
+                content=request.query,
+                metadata={
+                    "original_query": rewrite_result.original_query,
+                    "rewritten_query": rewrite_result.rewritten_query,
+                    "query_rewrite_changed": rewrite_result.changed,
+                },
+            )
+
+        yield {
+            "event": "message_start",
+            "data": {
+                "conversation_id": conversation_id,
+                "role": "assistant",
+            },
+        }
+
+        pipeline_context = RetrieverPipeline().run(
+            RetrieverPipelineContext(
+                query=request.query,
+                knowledge_base_id=request.knowledge_base_id,
+                top_k=request.top_k,
+                score_threshold=request.score_threshold,
+                metadata_filter=request.metadata_filter,
+            )
+        )
+        context_text = pipeline_context.context_text
+        context_chunks = pipeline_context.context_chunks
+        sources = self._build_sources(context_chunks)
+        citations = self._build_citations(context_chunks)
+
+        if not context_text.strip() or not context_chunks:
+            answer = "根据当前知识库内容无法回答该问题。"
+            yield {"event": "answer_delta", "data": {"delta": answer}}
+            metadata = {
+                "guardrail_triggered": True,
+                "guardrail_reason": "empty_context",
+                "llm_called": False,
+                "history_loaded_count": history_loaded_count,
+                **pipeline_context.metadata,
+                **self._build_memory_metadata(request, memory_context),
+            }
+            assistant_message = self._save_assistant_message(
+                conversation_id=conversation_id,
+                content=answer,
+                metadata={**metadata, "sources": [], "citations": []},
+            )
+            self._update_memory_summary(request, conversation_id)
+            yield {
+                "event": "completed",
+                "data": {
+                    "conversation_id": conversation_id,
+                    "message_id": assistant_message.id if assistant_message else None,
+                    "answer": answer,
+                    "citations": [],
+                    "sources": [],
+                },
+            }
+            return
+
+        prompt_result = PromptBuilderFactory.get_builder().build(
+            PromptBuildRequest(query=request.query, context_text=context_text)
+        )
+        prompt_messages = [
+            LLMMessage(role=message.role, content=message.content)
+            for message in prompt_result.messages
+        ]
+        prompt_messages = self._inject_memory_messages(prompt_messages, memory_context)
+        llm_request = LLMRequest(
+            messages=prompt_messages,
+            metadata={
+                "rag_chat_pipeline": True,
+                "streaming": True,
+            },
+        )
+
+        answer_parts: list[str] = []
+        llm = LLMFactory.get_llm()
+        for delta in llm.stream(llm_request):
+            if not delta:
+                continue
+            answer_parts.append(delta)
+            yield {"event": "answer_delta", "data": {"delta": delta}}
+
+        answer = "".join(answer_parts)
+        citation_payload = [citation.model_dump() for citation in citations]
+        source_payload = [source.model_dump() for source in sources]
+        yield {
+            "event": "citations",
+            "data": {
+                "citations": citation_payload,
+                "sources": source_payload,
+            },
+        }
+
+        metadata = {
+            "retrieved_total": len(pipeline_context.fused_chunks),
+            "reranked_total": len(pipeline_context.reranked_chunks),
+            "context_total_chunks": len(context_chunks),
+            "context_total_chars": len(context_text),
+            "original_query": pipeline_context.original_query or request.query,
+            "rewritten_query": pipeline_context.rewritten_query
+            or pipeline_context.active_query,
+            "query_rewrite_changed": bool(
+                (pipeline_context.rewritten_query or pipeline_context.active_query)
+                != (pipeline_context.original_query or request.query)
+            ),
+            "metadata_filter": request.metadata_filter,
+            "metadata_filter_applied": bool(request.metadata_filter),
+            "guardrail_triggered": False,
+            "llm_called": True,
+            "llm_metadata": {
+                "streaming": True,
+                "model": getattr(getattr(llm, "config", None), "model", None),
+            },
+            "tools_enabled": request.enable_tools,
+            "tool_results": [],
+            "history_loaded_count": history_loaded_count,
+            **pipeline_context.metadata,
+            **self._build_memory_metadata(request, memory_context),
+        }
+        assistant_message = self._save_assistant_message(
+            conversation_id=conversation_id,
+            content=answer,
+            metadata={
+                **metadata,
+                "sources": source_payload,
+                "citations": citation_payload,
+            },
+        )
+        self._update_memory_summary(request, conversation_id)
+        yield {
+            "event": "completed",
+            "data": {
+                "conversation_id": conversation_id,
+                "message_id": assistant_message.id if assistant_message else None,
+                "answer": answer,
+                "citations": citation_payload,
+                "sources": source_payload,
+            },
+        }
+
     def _call_llm_with_tool_fallback(self, llm, request: LLMRequest):
         if not request.tools:
             return llm.chat(request)
@@ -568,6 +717,35 @@ class ChatService:
             else:
                 lines.append(f"{result.get('name')}: {result.get('error')}")
         return "\n".join(lines)
+
+    def _build_sources(self, chunks: list) -> list[ChatSource]:
+        return [
+            ChatSource(
+                id=chunk.id,
+                text=chunk.text,
+                document_id=chunk.document_id,
+                knowledge_base_id=chunk.knowledge_base_id,
+                chunk_index=chunk.chunk_index,
+                score=chunk.score,
+                source=chunk.source,
+                metadata=chunk.metadata,
+            )
+            for chunk in chunks
+        ]
+
+    def _build_citations(self, chunks: list) -> list[CitationItem]:
+        return [
+            CitationItem(
+                source=chunk.source,
+                document_id=chunk.document_id,
+                knowledge_base_id=chunk.knowledge_base_id,
+                chunk_index=chunk.chunk_index,
+                score=chunk.score,
+                text_preview=chunk.text[:120] if chunk.text else None,
+                metadata=chunk.metadata,
+            )
+            for chunk in chunks
+        ]
 
     def _compress_context(
         self,

@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+
 from backend.app.llms.base import LLMRequest, LLMResponse
 from backend.app.llms.clients.base_client import BaseLLMClient
 from backend.app.llms.config import LLMConfig
@@ -26,6 +28,11 @@ class DummyLLMClient(BaseLLMClient):
                 "has_context": "上下文：" in user_message,
             },
         )
+
+    def stream(self, request: LLMRequest) -> Iterator[str]:
+        response = self.chat(request)
+        for index in range(0, len(response.answer), 8):
+            yield response.answer[index : index + 8]
 
     def _get_last_user_message(self, request: LLMRequest) -> str:
         for message in reversed(request.messages):

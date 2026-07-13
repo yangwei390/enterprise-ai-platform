@@ -5,6 +5,10 @@ from inspect import isawaitable
 from time import perf_counter
 from typing import Any, cast
 
+from backend.app.agents.final_answer import (
+    build_final_answer_request,
+    collect_streaming_answer,
+)
 from backend.app.agents.langgraph.budget import (
     AgentExecutionBudget,
     budget_remaining,
@@ -366,7 +370,9 @@ class FinalNode:
         started_at = perf_counter()
         _ensure_state_defaults(state)
         state["step_count"] = int(state.get("step_count", 0)) + 1
-        if not state.get("final_answer"):
+        if self._streaming_enabled(state) and self._can_stream_final_answer(state):
+            state["final_answer"] = await self._stream_answer(state)
+        elif not state.get("final_answer"):
             state["final_answer"] = self._build_answer(state)
         if not state.get("termination_reason"):
             state["termination_reason"] = "final_answer"
@@ -387,6 +393,48 @@ class FinalNode:
 
     def __call__(self, state: AgentState) -> AgentState:
         return asyncio.run(self.acall(state))
+
+    def _streaming_enabled(self, state: AgentState) -> bool:
+        return bool(state.get("metadata", {}).get("_agent_stream_answer_enabled"))
+
+    def _can_stream_final_answer(self, state: AgentState) -> bool:
+        if state.get("metadata", {}).get("_agent_stream_answer_done"):
+            return False
+        if state.get("termination_reason") and "exceeded" in str(state.get("termination_reason")):
+            return False
+        if state.get("metadata", {}).get("reflection", {}).get("last_decision", {}).get(
+            "status"
+        ) in {"final", "fail"}:
+            return False
+        return bool(
+            state.get("observations")
+            or state.get("knowledge")
+            or not state.get("final_answer")
+        )
+
+    async def _stream_answer(self, state: AgentState) -> str:
+        queue = state.get("metadata", {}).get("_agent_stream_event_queue")
+        delta_count = 0
+        request = build_final_answer_request(
+            query=state["query"],
+            observations=state.get("observations", []),
+            knowledge=state.get("knowledge") if isinstance(state.get("knowledge"), dict) else None,
+            fallback_answer=self._build_answer(state),
+        )
+
+        async def on_delta(delta: str) -> None:
+            nonlocal delta_count
+            delta_count += 1
+            if queue is not None:
+                await queue.put({"event": "answer_delta", "data": {"delta": delta}})
+
+        answer = await collect_streaming_answer(request, on_delta=on_delta)
+        state["metadata"]["_agent_stream_answer_done"] = True
+        state["metadata"]["answer_stream_delta_count"] = (
+            state["metadata"].get("answer_stream_delta_count", 0)
+            + delta_count
+        )
+        return answer or self._build_answer(state)
 
     def _build_answer(self, state: AgentState) -> str:
         knowledge = state.get("knowledge")

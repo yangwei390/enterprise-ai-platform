@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+
 from backend.app.llms.base import BaseLLM, LLMRequest, LLMResponse
 from backend.app.llms.clients.openai_client import OpenAIClient
 from backend.app.llms.config import LLMConfig
@@ -14,3 +16,6 @@ class OpenAIProvider(BaseLLM):
         response = self.client.chat(request)
         response.metadata["provider"] = "openai"
         return response
+
+    def stream(self, request: LLMRequest) -> Iterator[str]:
+        yield from self.client.stream(request)

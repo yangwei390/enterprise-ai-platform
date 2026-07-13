@@ -1,5 +1,8 @@
-from backend.app.agents import AgentRuntimeResult
+import asyncio
+
+from backend.app.agents import AgentRuntime, AgentRuntimeRequest, AgentRuntimeResult
 from backend.app.agents.trace import AgentTraceStep
+from backend.app.api.agent import get_conversation_service
 from backend.app.api.agent import router as agent_router
 from backend.app.api.chat import get_chat_service
 from backend.app.api.chat import router as chat_router
@@ -45,6 +48,25 @@ class FakeAgentRuntime:
         )
 
 
+class FakeStreamingAgentRuntime:
+    async def astream_events(self, request):
+        yield {"event": "status", "data": {"status": "answering", "message": "正在整理答案"}}
+        yield {"event": "answer_delta", "data": {"delta": "流式"}}
+        yield {"event": "answer_delta", "data": {"delta": "回答"}}
+        yield {
+            "event": "result",
+            "data": {
+                "result": AgentRuntimeResult(
+                    answer="流式回答",
+                    action="direct_answer",
+                    sources=[{"source": "source.pdf"}],
+                    citations=[{"source": "source.pdf"}],
+                    metadata={"answer_stream_delta_count": 2},
+                ).model_dump()
+            },
+        }
+
+
 class FakeChatService:
     def chat(self, request: ChatRequest) -> ChatResponse:
         return ChatResponse(
@@ -61,6 +83,37 @@ class FakeChatService:
         )
 
 
+class FakeConversation:
+    def __init__(self, id: int) -> None:
+        self.id = id
+
+
+class FakeMessage:
+    def __init__(self, id: int, content: str, metadata: dict | None = None) -> None:
+        self.id = id
+        self.content = content
+        self.message_metadata = metadata or {}
+
+
+class FakeConversationService:
+    def __init__(self) -> None:
+        self.assistant_messages: list[FakeMessage] = []
+
+    def create_conversation(self, data):
+        return FakeConversation(901)
+
+    def get_conversation(self, id: int):
+        return FakeConversation(id)
+
+    def add_user_message(self, conversation_id: int, content: str, metadata=None):
+        return FakeMessage(1, content, metadata)
+
+    def add_assistant_message(self, conversation_id: int, content: str, metadata=None):
+        message = FakeMessage(2, content, metadata)
+        self.assistant_messages.append(message)
+        return message
+
+
 def _agent_client(monkeypatch) -> TestClient:
     FakeAgentRuntime.called = False
     FakeAgentRuntime.last_request = None
@@ -71,6 +124,22 @@ def _agent_client(monkeypatch) -> TestClient:
     app = FastAPI()
     app.include_router(agent_router)
     return TestClient(app)
+
+
+def _parse_sse_events(text: str) -> list[dict]:
+    events = []
+    for raw_event in text.strip().split("\n\n"):
+        event_name = "message"
+        data = "{}"
+        for line in raw_event.splitlines():
+            if line.startswith("event:"):
+                event_name = line.removeprefix("event:").strip()
+            if line.startswith("data:"):
+                data = line.removeprefix("data:").strip()
+        import json
+
+        events.append({"event": event_name, "data": json.loads(data)})
+    return events
 
 
 def test_agent_chat_api_returns_success(monkeypatch):
@@ -140,3 +209,72 @@ def test_chat_api_still_works():
     assert response.status_code == 200
     assert body["code"] == 0
     assert body["data"]["answer"] == "chat answer"
+
+
+def test_agent_runtime_stream_uses_llm_stream(monkeypatch):
+    class StreamingLLM:
+        stream_called = False
+
+        def stream(self, request):
+            StreamingLLM.stream_called = True
+            yield "甲"
+            yield "乙"
+            yield "丙"
+
+        def chat(self, request):  # pragma: no cover - should not be used by stream path
+            raise AssertionError("chat should not be used for streaming final answer")
+
+    monkeypatch.setattr(
+        "backend.app.agents.final_answer.LLMFactory.get_llm",
+        lambda: StreamingLLM(),
+    )
+    events = asyncio.run(
+        _collect_agent_events(
+            AgentRuntime().astream_events(AgentRuntimeRequest(query="你好"))
+        )
+    )
+
+    deltas = [event["data"]["delta"] for event in events if event["event"] == "answer_delta"]
+    completed = next(event for event in events if event["event"] == "result")
+
+    assert StreamingLLM.stream_called is True
+    assert deltas == ["甲", "乙", "丙"]
+    assert completed["data"]["result"]["answer"] == "甲乙丙"
+
+
+def test_agent_stream_api_returns_multiple_answer_deltas(monkeypatch):
+    service = FakeConversationService()
+    monkeypatch.setattr(
+        "backend.app.api.agent.AgentRuntimeFactory.get_runtime",
+        lambda: FakeStreamingAgentRuntime(),
+    )
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_conversation_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/agent/chat/stream",
+        json={"agent_id": "general_agent", "query": "你好"},
+    )
+    events = _parse_sse_events(response.text)
+
+    event_names = [event["event"] for event in events]
+    deltas = [event["data"]["delta"] for event in events if event["event"] == "answer_delta"]
+    completed = next(event for event in events if event["event"] == "completed")
+
+    assert response.status_code == 200
+    assert "message_start" in event_names
+    assert "status" in event_names
+    assert deltas == ["流式", "回答"]
+    assert "".join(deltas) == "流式回答"
+    assert completed["data"]["answer"] == "流式回答"
+    assert service.assistant_messages[0].content == "流式回答"
+    assert service.assistant_messages[0].message_metadata["citations"] == [{"source": "source.pdf"}]
+
+
+async def _collect_agent_events(event_stream):
+    events = []
+    async for event in event_stream:
+        events.append(event)
+    return events

@@ -8,9 +8,14 @@ const navItems = [
   { to: "/history", label: "History" }
 ];
 
-export default function Sidebar() {
+type SidebarProps = {
+  open?: boolean;
+  onNavigate?: () => void;
+};
+
+export default function Sidebar({ open = false, onNavigate }: SidebarProps) {
   return (
-    <aside className="sidebar">
+    <aside className={open ? "sidebar open" : "sidebar"}>
       <div className="brand">
         <div className="brand-mark">AI</div>
         <div>
@@ -25,6 +30,7 @@ export default function Sidebar() {
             to={item.to}
             end={item.to === "/"}
             className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}
+            onClick={onNavigate}
           >
             {item.label}
           </NavLink>

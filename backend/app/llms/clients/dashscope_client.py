@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from typing import Any
 
 from backend.app.exceptions import BusinessException
@@ -83,6 +84,30 @@ class DashScopeClient(BaseLLMClient):
                 "response_id": getattr(response, "id", None),
             },
         )
+
+    def stream(self, request: LLMRequest) -> Iterator[str]:
+        try:
+            create_kwargs: dict[str, Any] = {
+                "model": self.config.model,
+                "messages": [_message_to_chat_payload(message) for message in request.messages],
+                "temperature": request.temperature,
+                "stream": True,
+            }
+            if self.config.max_tokens is not None:
+                create_kwargs["max_tokens"] = self.config.max_tokens
+
+            stream = self.client.chat.completions.create(**create_kwargs)
+            for chunk in stream:
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None)
+                if content:
+                    yield content
+        except Exception as exc:
+            logger.exception("dashscope streaming model call failed")
+            raise BusinessException(50010, "dashscope流式模型调用失败") from exc
 
 
 def _parse_tool_calls(raw_tool_calls: Any) -> list[LLMToolCall]:

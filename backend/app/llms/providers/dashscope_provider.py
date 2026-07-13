@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+
 from backend.app.llms.base import BaseLLM, LLMRequest, LLMResponse
 from backend.app.llms.clients.dashscope_client import DashScopeClient
 from backend.app.llms.config import LLMConfig
@@ -14,3 +16,6 @@ class DashScopeProvider(BaseLLM):
         response = self.client.chat(request)
         response.metadata["provider"] = "dashscope"
         return response
+
+    def stream(self, request: LLMRequest) -> Iterator[str]:
+        yield from self.client.stream(request)

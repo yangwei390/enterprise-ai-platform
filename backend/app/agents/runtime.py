@@ -1,7 +1,12 @@
 import re
+from collections.abc import AsyncIterator
 from time import perf_counter
 from typing import Protocol
 
+from backend.app.agents.final_answer import (
+    build_final_answer_request,
+    stream_final_answer,
+)
 from backend.app.agents.state import (
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -109,6 +114,71 @@ class AgentRuntime:
         self.planner = planner or SimplePlanner()
         self.tool_executor = tool_executor or ToolExecutor()
 
+    async def astream_events(
+        self,
+        request: AgentRuntimeRequest,
+    ) -> AsyncIterator[dict]:
+        state = AgentState(
+            query=request.query,
+            conversation_id=request.conversation_id,
+            knowledge_base_id=request.knowledge_base_id,
+            memory_context=request.memory_context,
+            metadata={**request.metadata, "answer_streamed": True},
+        )
+        trace: list[AgentTraceStep] = []
+
+        yield {
+            "event": "status",
+            "data": {"status": "analyzing", "message": "正在分析问题"},
+        }
+        decision = self._run_planner(request, state, trace)
+        if decision.action == "tool" and decision.tool_name:
+            yield {"event": "status", "data": self._status_from_tool(decision.tool_name)}
+            self._run_tool(request, state, decision, trace)
+        else:
+            yield {
+                "event": "status",
+                "data": {"status": "answering", "message": "正在整理答案"},
+            }
+
+        answer_parts: list[str] = []
+        if state.errors:
+            if state.final_answer:
+                answer_parts.append(state.final_answer)
+                yield {"event": "answer_delta", "data": {"delta": state.final_answer}}
+        else:
+            yield {
+                "event": "status",
+                "data": {"status": "answering", "message": "正在整理答案"},
+            }
+            final_request = build_final_answer_request(
+                query=request.query,
+                observations=state.observations,
+                fallback_answer=state.final_answer,
+            )
+            async for delta in stream_final_answer(final_request):
+                answer_parts.append(delta)
+                yield {"event": "answer_delta", "data": {"delta": delta}}
+
+        state.final_answer = "".join(answer_parts) or state.final_answer or ""
+        state.metadata["answer_stream_delta_count"] = len(answer_parts)
+        self._record_final_answer(state, trace)
+        yield {
+            "event": "result",
+            "data": {
+                "result": AgentRuntimeResult(
+                    answer=state.final_answer,
+                    action=decision.action,
+                    tool_calls=state.tool_calls,
+                    observations=state.observations,
+                    sources=state.metadata.get("sources", []),
+                    citations=state.metadata.get("citations", []),
+                    metadata=state.metadata,
+                    trace=trace,
+                ).model_dump()
+            },
+        }
+
     def run(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
         state = AgentState(
             query=request.query,
@@ -136,6 +206,11 @@ class AgentRuntime:
             metadata=state.metadata,
             trace=trace,
         )
+
+    def _status_from_tool(self, tool_name: str) -> dict:
+        if tool_name == "knowledge_search":
+            return {"status": "retrieving", "message": "正在查询知识库"}
+        return {"status": "processing", "message": "正在处理任务"}
 
     def _run_planner(
         self,
