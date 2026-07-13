@@ -1,5 +1,10 @@
 import pytest
-from backend.app.context.base import ContextChunk
+from backend.app.context import (
+    BasicContextBuilder,
+    ContextBuildRequest,
+    ContextChunk,
+    format_context_chunks,
+)
 from backend.app.context_compression import CompressionInput
 from backend.app.context_compression.config import ContextCompressionConfig
 from backend.app.context_compression.factory import ContextCompressorFactory
@@ -8,6 +13,7 @@ from backend.app.context_compression.rule_based_compressor import (
     RuleBasedContextCompressor,
 )
 from backend.app.llms import LLMRequest, LLMResponse
+from backend.app.rerankers import RerankedChunk
 from backend.app.retrievers.pipeline.context import RetrieverPipelineContext
 from backend.app.retrievers.pipeline.steps.context_compression_step import (
     ContextCompressionStep,
@@ -36,27 +42,46 @@ def _context_chunk(
     text: str,
     rerank_score: float,
     rerank_rank: int,
+    source: str = "source.txt",
+    document_id: int = 10,
+    knowledge_base_id: int = 20,
+    structure_metadata: dict | None = None,
 ) -> ContextChunk:
+    metadata = {
+        "source": source,
+        "document_id": document_id,
+        "knowledge_base_id": knowledge_base_id,
+        "chunk_index": rerank_rank,
+        "score": rerank_score,
+        "rerank_score": rerank_score,
+        "rerank_rank": rerank_rank,
+        "rerank_provider": "dummy",
+        "rerank_model": "dummy-reranker",
+        "custom": f"custom-{chunk_id}",
+        **(structure_metadata or {}),
+    }
     return ContextChunk(
         id=chunk_id,
         text=text,
-        document_id=10,
-        knowledge_base_id=20,
+        document_id=document_id,
+        knowledge_base_id=knowledge_base_id,
         chunk_index=rerank_rank,
         score=rerank_score,
-        source="source.txt",
-        metadata={
-            "source": "source.txt",
-            "document_id": 10,
-            "knowledge_base_id": 20,
-            "chunk_index": rerank_rank,
-            "score": rerank_score,
-            "rerank_score": rerank_score,
-            "rerank_rank": rerank_rank,
-            "rerank_provider": "dummy",
-            "rerank_model": "dummy-reranker",
-            "custom": f"custom-{chunk_id}",
-        },
+        source=source,
+        metadata=metadata,
+    )
+
+
+def _reranked_from_context_chunk(chunk: ContextChunk) -> RerankedChunk:
+    return RerankedChunk(
+        id=chunk.id,
+        original_score=chunk.score or 0,
+        rerank_score=chunk.score or 0,
+        text=chunk.text,
+        document_id=chunk.document_id,
+        knowledge_base_id=chunk.knowledge_base_id,
+        chunk_index=chunk.chunk_index,
+        metadata=chunk.metadata,
     )
 
 
@@ -97,6 +122,46 @@ def test_compression_disabled_returns_original_context(monkeypatch: pytest.Monke
     assert result.metadata["context_compression"]["compressed_chunk_count"] == 1
 
 
+def test_rule_based_compressor_uses_basic_context_builder_format():
+    structure_metadata = {
+        "section_path": ["中华人民共和国劳动法", "第二章 促进就业"],
+        "chapter_label": "第二章",
+        "chapter_title": "促进就业",
+        "article_label": "第十二条",
+    }
+    chunk = _context_chunk(
+        chunk_id="law-12",
+        text="第十二条 劳动者就业，不因民族、种族、性别、宗教信仰不同而受歧视。",
+        rerank_score=0.95,
+        rerank_rank=3,
+        source="中国劳动法.pdf",
+        document_id=12,
+        knowledge_base_id=1,
+        structure_metadata=structure_metadata,
+    )
+    builder_result = BasicContextBuilder().build(
+        ContextBuildRequest(
+            query="劳动法第二章讲的是什么？",
+            chunks=[_reranked_from_context_chunk(chunk)],
+        )
+    )
+
+    result = RuleBasedContextCompressor(max_chunk_chars=1200).compress(
+        CompressionInput(
+            query="劳动法第二章讲的是什么？",
+            chunks=[chunk],
+            max_chars=6000,
+        )
+    )
+
+    assert result.metadata["context_text"] == builder_result.context_text
+    assert result.metadata["context_text"] == format_context_chunks(result.compressed_chunks)
+    assert "Section Path: 中华人民共和国劳动法 > 第二章 促进就业" in result.metadata["context_text"]
+    assert "Chapter: 第二章" in result.metadata["context_text"]
+    assert "Chapter Title: 促进就业" in result.metadata["context_text"]
+    assert "Article: 第十二条" in result.metadata["context_text"]
+
+
 def test_rule_based_compression_respects_max_chars():
     low_score_chunk = _context_chunk(
         chunk_id="low",
@@ -133,6 +198,54 @@ def test_rule_based_compression_respects_max_chars():
     assert result.compressed_chunks[0].metadata["rerank_provider"] == "dummy"
     assert result.compressed_chunks[0].metadata["rerank_model"] == "dummy-reranker"
     assert result.compressed_chunks[0].metadata["custom"] == "custom-high"
+
+
+def test_llm_compressor_uses_basic_context_builder_format():
+    text = "第十二条 劳动者就业，不因民族、种族、性别、宗教信仰不同而受歧视。"
+    structure_metadata = {
+        "section_path": ["中华人民共和国劳动法", "第二章 促进就业"],
+        "chapter_label": "第二章",
+        "chapter_title": "促进就业",
+        "article_label": "第十二条",
+    }
+    fake_llm = FakeLLM([text])
+    chunk = _context_chunk(
+        chunk_id="law-12",
+        text=text,
+        rerank_score=0.95,
+        rerank_rank=3,
+        source="中国劳动法.pdf",
+        document_id=12,
+        knowledge_base_id=1,
+        structure_metadata=structure_metadata,
+    )
+    builder_result = BasicContextBuilder().build(
+        ContextBuildRequest(
+            query="劳动法第二章讲的是什么？",
+            chunks=[_reranked_from_context_chunk(chunk)],
+        )
+    )
+    compressor = LLMContextCompressor(
+        model="qwen-turbo",
+        max_chunk_chars=1200,
+        max_calls=8,
+        llm=fake_llm,
+    )
+
+    result = compressor.compress(
+        CompressionInput(
+            query="劳动法第二章讲的是什么？",
+            chunks=[chunk],
+            max_chars=6000,
+        )
+    )
+
+    assert result.metadata["context_text"] == builder_result.context_text
+    assert result.metadata["context_text"] == format_context_chunks(result.compressed_chunks)
+    assert "Section Path: 中华人民共和国劳动法 > 第二章 促进就业" in result.metadata["context_text"]
+    assert "Chapter: 第二章" in result.metadata["context_text"]
+    assert "Chapter Title: 促进就业" in result.metadata["context_text"]
+    assert "Article: 第十二条" in result.metadata["context_text"]
 
 
 def test_compression_fail_open_returns_original_context(monkeypatch: pytest.MonkeyPatch):

@@ -6,6 +6,7 @@ from backend.app.context.base import (
 )
 from backend.app.context.builder import BasicContextBuilder
 from backend.app.context.factory import ContextBuilderFactory
+from backend.app.context.formatter import format_context_chunk, format_context_chunks
 
 __all__ = [
     "BaseContextBuilder",
@@ -14,4 +15,6 @@ __all__ = [
     "ContextBuildRequest",
     "ContextBuildResult",
     "ContextChunk",
+    "format_context_chunk",
+    "format_context_chunks",
 ]

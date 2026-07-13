@@ -1,6 +1,7 @@
 import time
 from typing import Any
 
+from backend.app.context.formatter import format_context_chunks
 from backend.app.context_compression.base import (
     BaseContextCompressor,
     CompressionInput,
@@ -207,13 +208,7 @@ class LLMContextCompressor(BaseContextCompressor):
         return chunk
 
     def _build_context_text(self, chunks: list[Any]) -> str:
-        return "\n\n".join(self._format_context_chunk(chunk) for chunk in chunks)
-
-    def _format_context_chunk(self, chunk: Any) -> str:
-        return (
-            f"[来源: {self._chunk_source(chunk)}, 文档ID: {self._chunk_document_id(chunk)}, "
-            f"Chunk: {self._chunk_index(chunk)}]\n{self._chunk_text(chunk)}"
-        )
+        return format_context_chunks(chunks)
 
     def _chunk_rank_score(self, chunk: Any) -> float:
         score = self._chunk_rerank_score(chunk)

@@ -1,6 +1,7 @@
 import re
 from typing import Any
 
+from backend.app.context.formatter import format_context_chunk, format_context_chunks
 from backend.app.context_compression.base import (
     BaseContextCompressor,
     CompressionInput,
@@ -40,7 +41,7 @@ class RuleBasedContextCompressor(BaseContextCompressor):
                 text=compressed_text,
                 metadata=chunk_metadata,
             )
-            context_part = self._format_context_chunk(compressed_chunk)
+            context_part = format_context_chunk(compressed_chunk)
             separator_chars = 2 if context_parts else 0
             next_chars = current_chars + separator_chars + len(context_part)
             if next_chars > input.max_chars:
@@ -110,13 +111,7 @@ class RuleBasedContextCompressor(BaseContextCompressor):
         return keywords
 
     def _build_context_text(self, chunks: list[Any]) -> str:
-        return "\n\n".join(self._format_context_chunk(chunk) for chunk in chunks)
-
-    def _format_context_chunk(self, chunk: Any) -> str:
-        return (
-            f"[来源: {self._chunk_source(chunk)}, 文档ID: {self._chunk_document_id(chunk)}, "
-            f"Chunk: {self._chunk_index(chunk)}]\n{self._chunk_text(chunk)}"
-        )
+        return format_context_chunks(chunks)
 
     def _copy_chunk(self, chunk: Any, text: str, metadata: dict) -> Any:
         if hasattr(chunk, "model_copy"):

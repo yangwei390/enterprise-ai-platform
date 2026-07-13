@@ -4,6 +4,7 @@ from backend.app.context.base import (
     ContextBuildResult,
     ContextChunk,
 )
+from backend.app.context.formatter import format_context_chunk
 
 
 class BasicContextBuilder(BaseContextBuilder):
@@ -25,7 +26,7 @@ class BasicContextBuilder(BaseContextBuilder):
                 continue
 
             source = chunk.metadata.get("source")
-            chunk_text = self._format_chunk(chunk, source)
+            chunk_text = self._format_chunk(chunk)
             next_context = "\n\n".join([*context_parts, chunk_text])
             if len(next_context) > request.max_context_chars:
                 skipped_chunks += 1
@@ -60,37 +61,5 @@ class BasicContextBuilder(BaseContextBuilder):
             },
         )
 
-    def _format_chunk(self, chunk, source: str | None) -> str:
-        metadata_lines = self._format_structure_metadata(chunk.metadata)
-        header_lines = [
-            f"Document: {source}",
-            f"Document ID: {chunk.document_id}",
-            f"Chunk: {chunk.chunk_index}",
-            *metadata_lines,
-            "",
-            "正文:",
-            chunk.text,
-        ]
-        return "\n".join(header_lines)
-
-    def _format_structure_metadata(self, metadata: dict) -> list[str]:
-        lines: list[str] = []
-        structure_fields = [
-            ("section_path", "Section Path"),
-            ("chapter_label", "Chapter"),
-            ("chapter_title", "Chapter Title"),
-            ("article_label", "Article"),
-        ]
-        for key, label in structure_fields:
-            value = metadata.get(key)
-            if value in (None, "", []):
-                continue
-            if key == "section_path":
-                value = self._format_section_path(value)
-            lines.append(f"{label}: {value}")
-        return lines
-
-    def _format_section_path(self, value) -> str:
-        if isinstance(value, list):
-            return " > ".join(str(item) for item in value if item not in (None, ""))
-        return str(value)
+    def _format_chunk(self, chunk) -> str:
+        return format_context_chunk(chunk)
