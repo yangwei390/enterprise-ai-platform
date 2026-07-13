@@ -61,7 +61,36 @@ class BasicContextBuilder(BaseContextBuilder):
         )
 
     def _format_chunk(self, chunk, source: str | None) -> str:
-        return (
-            f"[来源: {source}, 文档ID: {chunk.document_id}, "
-            f"Chunk: {chunk.chunk_index}]\n{chunk.text}"
-        )
+        metadata_lines = self._format_structure_metadata(chunk.metadata)
+        header_lines = [
+            f"Document: {source}",
+            f"Document ID: {chunk.document_id}",
+            f"Chunk: {chunk.chunk_index}",
+            *metadata_lines,
+            "",
+            "正文:",
+            chunk.text,
+        ]
+        return "\n".join(header_lines)
+
+    def _format_structure_metadata(self, metadata: dict) -> list[str]:
+        lines: list[str] = []
+        structure_fields = [
+            ("section_path", "Section Path"),
+            ("chapter_label", "Chapter"),
+            ("chapter_title", "Chapter Title"),
+            ("article_label", "Article"),
+        ]
+        for key, label in structure_fields:
+            value = metadata.get(key)
+            if value in (None, "", []):
+                continue
+            if key == "section_path":
+                value = self._format_section_path(value)
+            lines.append(f"{label}: {value}")
+        return lines
+
+    def _format_section_path(self, value) -> str:
+        if isinstance(value, list):
+            return " > ".join(str(item) for item in value if item not in (None, ""))
+        return str(value)
