@@ -260,7 +260,7 @@ export default function AgentChatPage() {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack agent-chat-page-stack">
       <PageHeader
         eyebrow="Agent Chat"
         title={agent?.name ?? "AI Assistant"}

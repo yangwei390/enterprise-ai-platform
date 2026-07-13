@@ -336,7 +336,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack chat-page-stack">
       <PageHeader
         eyebrow="Chat"
         title="Workspace Chat"
