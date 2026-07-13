@@ -1,0 +1,292 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #172033;
+  background: #eef3f8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 264px;
+  flex: 0 0 264px;
+  padding: 22px 16px;
+  color: #f8fafc;
+  background: #101827;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 24px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  color: #0f172a;
+  background: #67e8f9;
+  font-weight: 800;
+}
+
+.brand strong,
+.brand span {
+  display: block;
+}
+
+.brand strong {
+  font-size: 16px;
+}
+
+.brand span {
+  margin-top: 3px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.nav-list {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-item {
+  display: block;
+  border-radius: 8px;
+  padding: 11px 13px;
+  color: #cbd5e1;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  color: #ffffff;
+  background: #1f2a3d;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+.topbar {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 62px;
+  padding: 0 28px;
+  border-bottom: 1px solid #dde5ef;
+  background: #ffffff;
+}
+
+.topbar div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.topbar strong {
+  color: #334155;
+}
+
+.page {
+  padding: 28px;
+}
+
+.page-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.page-header {
+  display: grid;
+  gap: 8px;
+}
+
+.eyebrow {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.2;
+}
+
+.page-header p {
+  max-width: 760px;
+  margin: 0;
+  color: #64748b;
+  line-height: 1.65;
+}
+
+.hero-panel,
+.workspace-panel,
+.card {
+  border: 1px solid #dde5ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 0.05);
+}
+
+.hero-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 18px;
+  align-items: stretch;
+  padding: 22px;
+}
+
+.hero-panel h2,
+.card h3 {
+  margin: 0 0 8px;
+}
+
+.hero-panel p,
+.card p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.card {
+  padding: 18px;
+}
+
+.workspace-panel {
+  min-height: 360px;
+  padding: 18px;
+}
+
+.chat-shell {
+  display: grid;
+  grid-template-rows: minmax(240px, 1fr) auto;
+  gap: 14px;
+}
+
+.message-list {
+  display: grid;
+  place-items: center;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.composer input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 11px 12px;
+  color: #334155;
+  background: #ffffff;
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 16px;
+  color: #ffffff;
+  background: #2563eb;
+  font-weight: 800;
+}
+
+button:disabled,
+input:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.state-box {
+  display: grid;
+  gap: 8px;
+  align-content: center;
+  justify-items: start;
+  min-height: 120px;
+  border-radius: 8px;
+  padding: 16px;
+  color: #475569;
+  background: #f8fafc;
+}
+
+.state-box strong {
+  color: #172033;
+}
+
+.state-box.error {
+  color: #991b1b;
+  background: #fff1f2;
+}
+
+.state-box.empty {
+  border: 1px dashed #cbd5e1;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #cbd5e1;
+  border-top-color: #2563eb;
+  border-radius: 999px;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    display: block;
+  }
+
+  .sidebar {
+    width: 100%;
+  }
+
+  .hero-panel,
+  .card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .page {
+    padding: 20px;
+  }
+}
