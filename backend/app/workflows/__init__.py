@@ -18,14 +18,6 @@ from backend.app.workflows.langgraph import (
 from backend.app.workflows.planner import SimpleWorkflowPlanner
 from backend.app.workflows.runtime import WorkflowRuntime
 from backend.app.workflows.service import WorkflowService
-from backend.app.workflows.v1 import (
-    WorkflowRunRequest,
-    WorkflowRunResult,
-    WorkflowRuntimeV1,
-    WorkflowTraceStep,
-    WorkflowV1Definition,
-    WorkflowV1Node,
-)
 
 __all__ = [
     "NodeStatus",
@@ -37,17 +29,11 @@ __all__ = [
     "WorkflowNodeType",
     "WorkflowResult",
     "WorkflowRuntime",
-    "WorkflowRuntimeV1",
     "WorkflowDefinitionV2",
     "WorkflowResumeRequest",
-    "WorkflowRunRequest",
     "WorkflowRunRequestV2",
-    "WorkflowRunResult",
     "WorkflowRunResultV2",
     "WorkflowService",
     "WorkflowState",
     "WorkflowStatus",
-    "WorkflowTraceStep",
-    "WorkflowV1Definition",
-    "WorkflowV1Node",
 ]

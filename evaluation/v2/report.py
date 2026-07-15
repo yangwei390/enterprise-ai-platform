@@ -63,8 +63,8 @@ def build_report(
             "app_env": settings.APP_ENV,
             "llm_provider": settings.LLM_PROVIDER,
             "llm_model": settings.LLM_MODEL,
-            "agent_runtime": settings.AGENT_RUNTIME,
-            "workflow_runtime": settings.WORKFLOW_RUNTIME,
+            "agent_runtime": "langgraph_v2",
+            "workflow_runtime": "langgraph_v2",
         },
         config={
             "max_concurrency": settings.EVALUATION_MAX_CONCURRENCY,

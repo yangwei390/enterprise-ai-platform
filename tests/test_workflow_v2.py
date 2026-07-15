@@ -25,7 +25,6 @@ from backend.app.workflows.langgraph.schemas import (
     WorkflowRunRequestV2,
 )
 from backend.app.workflows.langgraph.validator import WorkflowDefinitionValidator
-from backend.app.workflows.v1 import WorkflowRuntimeV1
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -171,18 +170,15 @@ def run_v2(definition: WorkflowDefinitionV2, query: str = "hello"):
     )
 
 
-def test_workflow_factory_returns_v1(monkeypatch):
-    monkeypatch.setattr(settings, "WORKFLOW_RUNTIME", "v1")
+def test_workflow_factory_returns_langgraph_for_legacy_provider(monkeypatch):
     WorkflowRuntimeFactory.reset()
 
-    runtime = WorkflowRuntimeFactory.get_runtime()
+    runtime = WorkflowRuntimeFactory.get_runtime("v1")
 
-    assert isinstance(runtime, WorkflowRuntimeV1)
+    assert isinstance(runtime, LangGraphWorkflowRuntime)
 
 
 def test_workflow_factory_returns_langgraph_v2(monkeypatch):
-    monkeypatch.setattr(settings, "WORKFLOW_RUNTIME", "langgraph")
-    monkeypatch.setattr(settings, "WORKFLOW_V2_ENABLED", True)
     WorkflowRuntimeFactory.reset()
 
     runtime = WorkflowRuntimeFactory.get_runtime()
@@ -822,26 +818,7 @@ def test_debug_workflow_api():
     response = client.get("/debug/workflows")
 
     assert response.status_code == 200
-    assert response.json()["data"]["runtime"] in {"v1", "langgraph"}
-
-
-def test_v1_workflow_still_works():
-    from backend.app.workflows.v1 import WorkflowRunRequest, WorkflowRuntimeV1
-
-    result = WorkflowRuntimeV1().run(
-        WorkflowRunRequest(
-            query="hello",
-            definition={
-                "id": "v1_echo",
-                "name": "v1 echo",
-                "nodes": [
-                    {"id": "final", "type": "echo", "input": {"text": "{{query}}"}},
-                ],
-            },
-        )
-    )
-
-    assert result.answer == "hello"
+    assert response.json()["data"]["runtime"] == "langgraph_v2"
 
 
 def test_real_langgraph_workflow_smoke():
@@ -851,7 +828,7 @@ def test_real_langgraph_workflow_smoke():
 
     assert result.status == "completed"
     assert result.answer == "real smoke"
-    assert result.metadata["workflow_runtime"]["runtime"] == "langgraph"
+    assert result.metadata["workflow_runtime"]["runtime"] == "langgraph_v2"
     unregister_test_tools()
 
 

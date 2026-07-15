@@ -3,7 +3,7 @@ import hashlib
 import json
 from inspect import isawaitable
 from time import perf_counter
-from typing import Any, cast
+from typing import cast
 
 from backend.app.agents.final_answer import (
     build_final_answer_request,
@@ -27,9 +27,6 @@ from backend.app.tools import ToolCall, ToolExecutor, ToolResult
 
 
 class PlannerNode:
-    def __init__(self, planner=None) -> None:
-        self.legacy_planner = planner
-
     async def acall(self, state: AgentState) -> AgentState:
         started_at = perf_counter()
         _ensure_state_defaults(state)
@@ -50,11 +47,7 @@ class PlannerNode:
             return state
 
         state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
-        if self.legacy_planner is not None:
-            decision = await self._legacy_decision(state)
-            state.setdefault("metadata", {})["legacy_planner"] = True
-        else:
-            decision = await get_planner_strategy().adecide(state)
+        decision = await get_planner_strategy().adecide(state)
         state["current_action"] = decision.action
         state["pending_tool_calls"] = [
             tool_call.model_dump() for tool_call in decision.tool_calls
@@ -73,7 +66,7 @@ class PlannerNode:
         _update_planner_metadata(state, decision.metadata)
         _append_trace(
             state,
-            event="planner" if state["metadata"].get("legacy_planner") else "planner_completed",
+            event="planner_completed",
             node="planner",
             input_data={"query": state["query"]},
             output_data=decision.model_dump(),
@@ -84,52 +77,6 @@ class PlannerNode:
     def __call__(self, state: AgentState) -> AgentState:
         return asyncio.run(self.acall(state))
 
-    async def _legacy_decision(self, state: AgentState):
-        from backend.app.agents.langgraph.tool_calling import AgentDecision, AgentToolCall
-
-        planner = self.legacy_planner
-        aplan = getattr(planner, "aplan", None)
-        if callable(aplan):
-            plan_result = aplan(
-                query=state["query"],
-                knowledge_base_id=state.get("knowledge_base_id"),
-                conversation_id=state.get("conversation_id"),
-                memory_context=state.get("memory_context"),
-            )
-            plan = cast(
-                Any,
-                await plan_result if isawaitable(plan_result) else plan_result,
-            )
-        else:
-            if planner is None:
-                raise RuntimeError("legacy planner is not configured")
-            plan = cast(
-                Any,
-                await asyncio.to_thread(
-                    planner.plan,
-                    query=state["query"],
-                    knowledge_base_id=state.get("knowledge_base_id"),
-                    conversation_id=state.get("conversation_id"),
-                    memory_context=state.get("memory_context"),
-                ),
-            )
-        state["plan"] = plan.model_dump()
-        calls = [
-            AgentToolCall(
-                id=f"legacy_{index}",
-                tool_name=step.tool,
-                arguments=step.args,
-                index=index,
-            )
-            for index, step in enumerate(plan.steps)
-        ]
-        return AgentDecision(
-            action="tool_calls" if calls else "final",
-            content=None,
-            tool_calls=calls,
-            metadata={**plan.metadata, "actual_strategy": "json_plan"},
-        )
-
 
 class ToolNode:
     def __init__(self, tool_executor: ToolExecutor | None = None) -> None:
@@ -139,8 +86,6 @@ class ToolNode:
         started_at = perf_counter()
         _ensure_state_defaults(state)
         state["step_count"] = int(state.get("step_count", 0)) + 1
-        if not state.get("pending_tool_calls"):
-            state["pending_tool_calls"] = _pending_from_legacy_plan(state)
         pending = [
             AgentToolCall.model_validate(item)
             for item in state.get("pending_tool_calls", [])
@@ -191,15 +136,14 @@ class ToolNode:
         for tool_call, result, call_started_at in results:
             self._record_result(state, tool_call, result, call_started_at)
         state["pending_tool_calls"] = []
-        if not state.get("metadata", {}).get("legacy_planner"):
-            _append_trace(
-                state,
-                event="tool_completed",
-                node="tool",
-                input_data={"tool_call_count": len(pending)},
-                output_data={"executed": len(results)},
-                started_at=started_at,
-            )
+        _append_trace(
+            state,
+            event="tool_completed",
+            node="tool",
+            input_data={"tool_call_count": len(pending)},
+            output_data={"executed": len(results)},
+            started_at=started_at,
+        )
         return state
 
     def __call__(self, state: AgentState) -> AgentState:
@@ -259,11 +203,7 @@ class ToolNode:
         state.setdefault("tool_results", []).append(result_dump)
         if tool_call.tool_name == "knowledge_search" and isinstance(result.result, dict):
             state["knowledge"] = result.result
-        event = (
-            "tool_call"
-            if state.get("metadata", {}).get("legacy_planner")
-            else ("tool_completed" if result.success else "tool_failed")
-        )
+        event = "tool_completed" if result.success else "tool_failed"
         _append_trace(
             state,
             event=event,
@@ -301,16 +241,15 @@ class ObservationNode:
         if should_reflect:
             state["metadata"].setdefault("reflection", {})["triggered"] = True
             state["metadata"].setdefault("reflection", {})["last_reason"] = reason
-        if not state.get("metadata", {}).get("legacy_planner"):
-            _append_trace(
-                state,
-                event="observation_created",
-                node="observation",
-                input_data={"tool_results": len(state.get("tool_results", []))},
-                output_data={"observations": observations, "reflect": should_reflect},
-                started_at=started_at,
-                status="success",
-            )
+        _append_trace(
+            state,
+            event="observation_created",
+            node="observation",
+            input_data={"tool_results": len(state.get("tool_results", []))},
+            output_data={"observations": observations, "reflect": should_reflect},
+            started_at=started_at,
+            status="success",
+        )
         state["tool_results"] = []
         return state
 
@@ -470,8 +409,6 @@ def route_after_planner(state: AgentState) -> str:
 
 
 def route_after_observation(state: AgentState) -> str:
-    if state.get("metadata", {}).get("legacy_planner"):
-        return "final"
     if (
         state.get("metadata", {})
         .get("agent_loop", {})
@@ -531,27 +468,6 @@ def _tool_result_to_observation(result: dict) -> dict:
         "metadata": _sanitize_metadata(result.get("metadata", {})),
         "error": result.get("error"),
     }
-
-
-def _pending_from_legacy_plan(state: AgentState) -> list[dict]:
-    plan = state.get("plan", {})
-    steps = plan.get("steps", []) if isinstance(plan, dict) else []
-    pending = []
-    for index, step in enumerate(steps):
-        if not isinstance(step, dict):
-            continue
-        tool_name = step.get("tool")
-        args = step.get("args")
-        if isinstance(tool_name, str) and isinstance(args, dict):
-            pending.append(
-                AgentToolCall(
-                    id=f"legacy_plan_{index}",
-                    tool_name=tool_name,
-                    arguments=args,
-                    index=index,
-                ).model_dump()
-            )
-    return pending
 
 
 def _update_repeat_guard(state: AgentState, tool_call: AgentToolCall) -> str | None:

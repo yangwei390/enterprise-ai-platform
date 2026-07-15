@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator
 from time import perf_counter
 from typing import Any, cast
 
-from backend.app.config.settings import settings
 from backend.app.logger import logger
 from backend.app.workflows.langgraph.checkpoint import (
     WorkflowCheckpointAdapter,
@@ -24,23 +23,15 @@ from backend.app.workflows.langgraph.schemas import (
     WorkflowRunResultV2,
 )
 from backend.app.workflows.langgraph.validator import WorkflowDefinitionValidator
-from backend.app.workflows.v1 import (
-    WorkflowRunRequest as WorkflowRunV1Request,
-)
-from backend.app.workflows.v1 import (
-    WorkflowRuntimeV1,
-)
 from langgraph.types import Command
 
 
 class LangGraphWorkflowRuntime:
     def __init__(
         self,
-        fallback_runtime: WorkflowRuntimeV1 | None = None,
         graph_builder: WorkflowGraphBuilder | None = None,
         checkpoint_adapter: WorkflowCheckpointAdapter | None = None,
     ) -> None:
-        self.fallback_runtime = fallback_runtime or WorkflowRuntimeV1()
         self.graph_builder = graph_builder or WorkflowGraphBuilder()
         self.checkpoint_adapter = checkpoint_adapter or WorkflowCheckpointAdapter()
         self.validator = WorkflowDefinitionValidator()
@@ -91,8 +82,6 @@ class LangGraphWorkflowRuntime:
                     started_at=started_at,
                     resumed=False,
                 )
-            if settings.WORKFLOW_FAIL_OPEN_TO_V1:
-                return await self._fallback_to_v1(request, started_at, str(exc))
             raise
 
     async def aresume(self, request: WorkflowResumeRequest) -> WorkflowRunResultV2:
@@ -173,7 +162,7 @@ class LangGraphWorkflowRuntime:
         metadata = {
             **request.metadata,
             "workflow_runtime": {
-                "runtime": "langgraph",
+                "runtime": "langgraph_v2",
                 "workflow_version": definition.version,
                 "thread_id": thread_id,
                 "run_id": run_id,
@@ -239,7 +228,7 @@ class LangGraphWorkflowRuntime:
         workflow_metadata = metadata.setdefault("workflow_runtime", {})
         workflow_metadata.update(
             {
-                "runtime": "langgraph",
+                "runtime": "langgraph_v2",
                 "workflow_version": definition.version,
                 "thread_id": state.get("thread_id"),
                 "run_id": state.get("run_id"),
@@ -270,41 +259,4 @@ class LangGraphWorkflowRuntime:
             trace=state.get("trace", []),
             metadata=metadata,
             interrupt=interrupt_payload if isinstance(interrupt_payload, dict) else None,
-        )
-
-    async def _fallback_to_v1(
-        self,
-        request: WorkflowRunRequestV2,
-        started_at: float,
-        reason: str,
-    ) -> WorkflowRunResultV2:
-        result = await asyncio.to_thread(
-            self.fallback_runtime.run,
-            WorkflowRunV1Request(
-                workflow_id="default_knowledge_workflow",
-                query=request.query,
-                knowledge_base_id=request.knowledge_base_id,
-                inputs=request.inputs,
-            ),
-        )
-        run_id = str(uuid.uuid4())
-        thread_id = request.thread_id or str(uuid.uuid4())
-        return WorkflowRunResultV2(
-            workflow_id=request.workflow_id or "default_agent_workflow_v2",
-            run_id=run_id,
-            thread_id=thread_id,
-            status="completed" if not result.metadata.get("failed") else "failed",
-            answer=result.answer,
-            output=result.output,
-            node_outputs=result.node_outputs,
-            trace=[item.model_dump() for item in result.trace],
-            metadata={
-                **result.metadata,
-                "workflow_runtime": {
-                    "runtime": "v1",
-                    "fallback": True,
-                    "fallback_reason": reason,
-                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
-                },
-            },
         )

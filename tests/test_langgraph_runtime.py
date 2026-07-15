@@ -1,9 +1,8 @@
-from backend.app.agents import AgentRuntime
 from backend.app.agents.langgraph import AgentRuntimeFactory, LangGraphAgentRuntime, LLMPlanner
 from backend.app.agents.langgraph.graph import build_agent_graph
 from backend.app.agents.langgraph.nodes import FinalNode, PlannerNode, ToolNode
-from backend.app.agents.langgraph.planner import AgentPlan, PlanStep
 from backend.app.agents.langgraph.state import create_initial_state
+from backend.app.agents.langgraph.tool_calling import AgentDecision, AgentToolCall
 from backend.app.agents.state import AgentRuntimeRequest
 from backend.app.llms import LLMResponse
 from backend.app.rag import RagChatResult
@@ -41,28 +40,23 @@ class FakeToolExecutor:
         )
 
 
-class SmokePlanner:
-    def plan(
-        self,
-        *,
-        query,
-        knowledge_base_id=None,
-        conversation_id=None,
-        memory_context=None,
-    ):
-        return AgentPlan(
-            steps=[
-                PlanStep(
-                    tool="knowledge_search",
-                    args={
-                        "query": query,
-                        "knowledge_base_id": knowledge_base_id,
-                        "conversation_id": conversation_id,
-                        "memory_context": memory_context,
+class SmokePlannerStrategy:
+    async def adecide(self, state):
+        return AgentDecision(
+            action="tool_calls",
+            tool_calls=[
+                AgentToolCall(
+                    id="smoke_call",
+                    tool_name="knowledge_search",
+                    arguments={
+                        "query": state["query"],
+                        "knowledge_base_id": state.get("knowledge_base_id"),
+                        "conversation_id": state.get("conversation_id"),
+                        "memory_context": state.get("memory_context"),
                     },
                 )
             ],
-            metadata={"smoke": True},
+            metadata={"actual_strategy": "native_tool_calling", "smoke": True},
         )
 
 
@@ -148,15 +142,16 @@ def test_factory_creates_langgraph_runtime():
     assert isinstance(runtime, LangGraphAgentRuntime)
 
 
-def test_factory_defaults_to_v1(monkeypatch):
-    monkeypatch.setattr(
-        "backend.app.agents.langgraph.factory.settings.AGENT_RUNTIME",
-        "v1",
-    )
-
+def test_factory_defaults_to_langgraph_v2():
     runtime = AgentRuntimeFactory.get_runtime()
 
-    assert isinstance(runtime, AgentRuntime)
+    assert isinstance(runtime, LangGraphAgentRuntime)
+
+
+def test_factory_does_not_create_v1_runtime_for_legacy_provider():
+    runtime = AgentRuntimeFactory.get_runtime("v1")
+
+    assert isinstance(runtime, LangGraphAgentRuntime)
 
 
 def test_planner_returns_plan(monkeypatch):
@@ -182,14 +177,14 @@ def test_tool_node_calls_tool_executor():
         memory_context=None,
         metadata={},
     )
-    state["plan"] = {
-        "steps": [
-            {
-                "tool": "knowledge_search",
-                "args": {"query": "劳动法第二章说什么", "knowledge_base_id": 4},
-            }
-        ]
-    }
+    state["pending_tool_calls"] = [
+        {
+            "id": "test_call",
+            "tool_name": "knowledge_search",
+            "arguments": {"query": "劳动法第二章说什么", "knowledge_base_id": 4},
+            "index": 0,
+        }
+    ]
 
     result_state = ToolNode(tool_executor=executor)(state)
 
@@ -222,11 +217,15 @@ def test_langgraph_runtime_returns_final_answer():
     assert result.trace[0].step == "final_answer"
 
 
-def test_real_langgraph_graph_compiles_and_invokes():
+def test_real_langgraph_graph_compiles_and_invokes(monkeypatch):
     registry = ToolRegistry()
     registry.register(SmokeKnowledgeTool())
+    monkeypatch.setattr(
+        "backend.app.agents.langgraph.nodes.get_planner_strategy",
+        lambda: SmokePlannerStrategy(),
+    )
     graph_app = build_agent_graph(
-        planner_node=PlannerNode(planner=SmokePlanner()),
+        planner_node=PlannerNode(),
         tool_node=ToolNode(tool_executor=ToolExecutor(registry=registry)),
         final_node=FinalNode(),
     )
@@ -239,31 +238,28 @@ def test_real_langgraph_graph_compiles_and_invokes():
     assert result.sources[0]["source"] == "smoke.pdf"
     assert result.citations[0]["source"] == "smoke.pdf"
     assert result.metadata.get("runtime_fallback") is None
-    assert [step.step for step in result.trace] == [
-        "planner",
-        "tool_call",
-        "final_answer",
-    ]
+    assert "planner_completed" in [step.step for step in result.trace]
+    assert "tool_completed" in [step.step for step in result.trace]
+    assert result.trace[-1].step == "final_answer"
 
 
-def test_config_switch_to_langgraph(monkeypatch):
-    monkeypatch.setattr(
-        "backend.app.agents.langgraph.factory.settings.AGENT_RUNTIME",
-        "langgraph",
-    )
-
-    runtime = AgentRuntimeFactory.get_runtime()
+def test_factory_unknown_provider_still_uses_langgraph_v2():
+    runtime = AgentRuntimeFactory.get_runtime("unknown")
 
     assert isinstance(runtime, LangGraphAgentRuntime)
 
 
-def test_v1_runtime_not_affected(monkeypatch):
-    monkeypatch.setattr(
-        "backend.app.agents.runtime.LLMFactory.get_llm",
-        lambda: FakePlannerLLM(),
+def test_langgraph_failure_returns_structured_error_without_v1_fallback():
+    class BrokenGraphApp:
+        def invoke(self, state, config=None):
+            raise RuntimeError("graph failed")
+
+    result = LangGraphAgentRuntime(graph_app=BrokenGraphApp()).run(
+        AgentRuntimeRequest(query="你好")
     )
 
-    result = AgentRuntime().run(AgentRuntimeRequest(query="你好"))
-
-    assert result.action in {"direct_answer", "tool"}
-    assert result.trace
+    assert result.action == "failed"
+    assert result.metadata["runtime"] == "langgraph_v2"
+    assert result.metadata["runtime_error"]["type"] == "runtime_error"
+    assert result.metadata.get("runtime_fallback") is None
+    assert result.trace == []

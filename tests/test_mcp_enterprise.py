@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from backend.app.agents import AgentRuntime
 from backend.app.agents.langgraph.planner import LLMPlanner
 from backend.app.api.debug import router as debug_router
 from backend.app.config.settings import settings
@@ -393,14 +392,6 @@ def test_v1_tools_still_work():
     names = {tool.name for tool in BuiltinToolProvider().discover()}
 
     assert {"calculator", "echo", "get_current_time", "knowledge_search"} <= names
-
-
-def test_agent_v1_still_works():
-    from backend.app.agents.state import AgentRuntimeRequest
-
-    result = AgentRuntime().run(AgentRuntimeRequest(query="你好"))
-
-    assert result.answer
 
 
 def test_langgraph_agent_selects_mcp_tool(monkeypatch):

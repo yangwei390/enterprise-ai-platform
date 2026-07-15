@@ -6,7 +6,6 @@ from typing import Any
 
 from backend.app.agents.langgraph.graph import LangGraphUnavailable, build_agent_graph
 from backend.app.agents.langgraph.state import AgentState, create_initial_state
-from backend.app.agents.runtime import AgentRuntime
 from backend.app.agents.state import AgentRuntimeRequest, AgentRuntimeResult
 from backend.app.agents.trace import AgentTraceStep
 from backend.app.config.settings import settings
@@ -18,13 +17,12 @@ from backend.app.memory.state import MemoryState
 class LangGraphAgentRuntime:
     def __init__(
         self,
-        fallback_runtime: AgentRuntime | None = None,
         graph_app=None,
     ) -> None:
-        self.fallback_runtime = fallback_runtime or AgentRuntime()
         self.graph_app = graph_app
 
     def run(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
+        started_at = perf_counter()
         try:
             graph_app = self.graph_app or build_agent_graph()
             session_id = self._session_id(request)
@@ -45,23 +43,27 @@ class LangGraphAgentRuntime:
             self._save_session(session_id, result_state)
             return self._to_result(result_state)
         except LangGraphUnavailable as exc:
-            logger.warning(f"LangGraph unavailable, fallback to AgentRuntime(V1): {exc}")
-            result = self.fallback_runtime.run(request)
-            result.metadata["runtime_fallback"] = "v1"
-            result.metadata["runtime_fallback_reason"] = str(exc)
-            return result
+            logger.exception("LangGraph V2 runtime unavailable")
+            return self._failure_result(
+                request=request,
+                started_at=started_at,
+                reason=str(exc),
+                error_type="langgraph_unavailable",
+            )
         except Exception as exc:
-            logger.exception("LangGraph runtime failed, fallback to AgentRuntime(V1)")
-            result = self.fallback_runtime.run(request)
-            result.metadata["runtime_fallback"] = "v1"
-            result.metadata["runtime_fallback_reason"] = str(exc)
-            return result
+            logger.exception("LangGraph V2 runtime failed")
+            return self._failure_result(
+                request=request,
+                started_at=started_at,
+                reason=str(exc),
+                error_type="runtime_error",
+            )
 
     async def arun(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
         started_at = perf_counter()
         async_metadata = {
             "enabled": settings.AGENT_ASYNC_ENABLED,
-            "runtime": "langgraph",
+            "runtime": "langgraph_v2",
             "duration_ms": 0,
             "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
             "timed_out": False,
@@ -115,7 +117,7 @@ class LangGraphAgentRuntime:
             runtime_metadata.update(
                 {
                     "enabled": True,
-                    "runtime": "langgraph",
+                    "runtime": "langgraph_v2",
                     "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                     "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
                     "timed_out": False,
@@ -134,40 +136,46 @@ class LangGraphAgentRuntime:
             logger.info("LangGraph async runtime cancelled")
             raise
         except TimeoutError as exc:
-            return await self._fallback_from_async_error(
+            return self._failure_result(
                 request=request,
                 started_at=started_at,
+                reason=str(exc) or "agent async runtime timed out",
+                error_type="timeout",
                 async_metadata={
                     **async_metadata,
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                     "timed_out": True,
                     "failed": True,
                     "error": str(exc) or "agent async runtime timed out",
                 },
-                reason="agent async runtime timed out",
             )
         except LangGraphUnavailable as exc:
-            logger.warning(f"LangGraph unavailable, fallback to AgentRuntime(V1): {exc}")
-            return await self._fallback_from_async_error(
+            logger.exception("LangGraph V2 async runtime unavailable")
+            return self._failure_result(
                 request=request,
                 started_at=started_at,
+                reason=str(exc),
+                error_type="langgraph_unavailable",
                 async_metadata={
                     **async_metadata,
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                     "failed": True,
                     "error": str(exc),
                 },
-                reason=str(exc),
             )
         except Exception as exc:
-            logger.exception("LangGraph async runtime failed")
-            return await self._fallback_from_async_error(
+            logger.exception("LangGraph V2 async runtime failed")
+            return self._failure_result(
                 request=request,
                 started_at=started_at,
+                reason=str(exc),
+                error_type="runtime_error",
                 async_metadata={
                     **async_metadata,
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                     "failed": True,
                     "error": str(exc),
                 },
-                reason=str(exc),
             )
 
     async def astream_events(
@@ -228,7 +236,7 @@ class LangGraphAgentRuntime:
                     result.metadata["async_runtime"].update(
                         {
                             "enabled": True,
-                            "runtime": "langgraph",
+                            "runtime": "langgraph_v2",
                             "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                             "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
                             "timed_out": False,
@@ -255,51 +263,36 @@ class LangGraphAgentRuntime:
         except asyncio.CancelledError:
             logger.info("LangGraph agent stream cancelled")
             raise
-        except Exception as exc:
-            logger.exception("LangGraph agent stream failed")
-            result = await self._fallback_from_async_error(
-                request=request,
-                started_at=started_at,
-                async_metadata={
-                    "enabled": settings.AGENT_ASYNC_ENABLED,
-                    "runtime": "langgraph",
-                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
-                    "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
-                    "timed_out": isinstance(exc, TimeoutError),
-                    "cancelled": False,
-                    "sync_fallback_used": True,
-                    "failed": True,
-                    "error": str(exc),
-                },
-                reason=str(exc),
-            )
-            yield {"event": "result", "data": {"result": result.model_dump()}}
+        except Exception:
+            logger.exception("LangGraph V2 agent stream failed")
+            raise
 
-    async def _fallback_from_async_error(
+    def _failure_result(
         self,
         *,
         request: AgentRuntimeRequest,
         started_at: float,
-        async_metadata: dict,
         reason: str,
+        error_type: str,
+        async_metadata: dict | None = None,
     ) -> AgentRuntimeResult:
-        async_metadata["duration_ms"] = round((perf_counter() - started_at) * 1000, 2)
-        if not settings.AGENT_ASYNC_FAIL_OPEN:
-            return AgentRuntimeResult(
-                answer=f"Agent 异步执行失败：{reason}",
-                action="failed",
-                metadata={"async_runtime": async_metadata},
-                trace=[],
-            )
-
-        result = await asyncio.to_thread(self.fallback_runtime.run, request)
-        result.metadata["runtime_fallback"] = "v1"
-        result.metadata["runtime_fallback_reason"] = reason
-        result.metadata["async_runtime"] = {
-            **async_metadata,
-            "sync_fallback_used": True,
+        metadata = {
+            "runtime": "langgraph_v2",
+            "runtime_error": {
+                "type": error_type,
+                "message": reason,
+                "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+            },
+            "errors": [reason],
         }
-        return result
+        if async_metadata is not None:
+            metadata["async_runtime"] = async_metadata
+        return AgentRuntimeResult(
+            answer=f"Agent V2 执行失败：{reason}",
+            action="failed",
+            metadata=metadata,
+            trace=[],
+        )
 
     def _invoke_graph(self, graph_app, state: AgentState) -> dict:
         try:
@@ -391,6 +384,7 @@ class LangGraphAgentRuntime:
     ) -> dict:
         return {
             **metadata,
+            "runtime": "langgraph_v2",
             "memory": {
                 **metadata.get("memory", {}),
                 "provider": MemoryFactory.get_manager().provider.name,
@@ -430,7 +424,7 @@ class LangGraphAgentRuntime:
                 workflow_state={},
                 trace_id=state.get("metadata", {}).get("trace_id"),
                 session_metadata={
-                    "runtime": "langgraph",
+                    "runtime": "langgraph_v2",
                     "final_answer": state.get("final_answer"),
                     "termination_reason": state.get("termination_reason"),
                     "step_count": state.get("step_count"),
@@ -454,6 +448,7 @@ class LangGraphAgentRuntime:
 
     def _to_result(self, state: dict) -> AgentRuntimeResult:
         metadata = dict(state.get("metadata", {}))
+        metadata["runtime"] = "langgraph_v2"
         for key in list(metadata):
             if key.startswith("_agent_stream_"):
                 metadata.pop(key, None)

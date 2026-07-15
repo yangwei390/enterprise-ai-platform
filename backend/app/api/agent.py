@@ -5,7 +5,6 @@ from typing import Any, cast
 
 from backend.app.agents import (
     AgentRunRequest,
-    AgentRuntime,
     AgentRuntimeFactory,
     AgentRuntimeRequest,
 )
@@ -28,8 +27,6 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 router = APIRouter()
-
-V1_AGENT_RUNTIME_CLASS = AgentRuntime
 
 
 def get_conversation_service(db: Session = Depends(get_db)) -> ConversationService:

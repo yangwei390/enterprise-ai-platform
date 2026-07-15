@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-from backend.app.agents import AgentRuntime
 from backend.app.agents.langgraph.graph import build_agent_graph
 from backend.app.agents.langgraph.nodes import ToolNode
 from backend.app.agents.langgraph.planner import LLMPlanner
@@ -378,17 +377,6 @@ def test_existing_builtin_tools_still_work():
 
     assert result.success is True
     assert result.result["value"] == 7
-
-
-def test_agent_v1_still_works(monkeypatch):
-    monkeypatch.setattr(
-        "backend.app.agents.runtime.LLMFactory.get_llm",
-        lambda: FakeDirectLLM(),
-    )
-
-    result = AgentRuntime().run(AgentRuntimeRequest(query="你好"))
-
-    assert result.answer == "ok"
 
 
 def test_langgraph_agent_selects_dynamic_tool(monkeypatch):

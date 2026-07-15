@@ -240,8 +240,6 @@ class EvaluationRunnerV2:
         for requirement in case.requires:
             if requirement == "mcp" and not settings.MCP_ENABLED:
                 return "requires MCP, but MCP_ENABLED=false"
-            if requirement == "workflow_v2" and not settings.WORKFLOW_V2_ENABLED:
-                return "requires Workflow V2, but WORKFLOW_V2_ENABLED=false"
         return None
 
     def _skipped_case_result(self, case: EvaluationCase, reason: str) -> EvaluationCaseResult:

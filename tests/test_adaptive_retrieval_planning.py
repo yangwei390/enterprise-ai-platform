@@ -401,5 +401,5 @@ def test_existing_structure_soft_boost_remains_compatible() -> None:
 def test_chat_agent_workflow_runtime_configs_remain_compatible() -> None:
     from backend.app.config.settings import settings
 
-    assert settings.AGENT_RUNTIME in {"v1", "langgraph"}
-    assert settings.WORKFLOW_RUNTIME in {"v1", "langgraph"}
+    assert not hasattr(settings, "AGENT_RUNTIME")
+    assert not hasattr(settings, "WORKFLOW_RUNTIME")

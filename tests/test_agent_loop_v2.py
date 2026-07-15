@@ -632,12 +632,6 @@ def test_agent_api_response_compatible(monkeypatch):
     assert response.json()["data"]["answer"] == "ok"
 
 
-def test_agent_v1_still_works():
-    from backend.app.agents.runtime import AgentRuntime
-
-    result = AgentRuntime().run(AgentRuntimeRequest(query="你好"))
-
-    assert result.action == "direct_answer"
 
 
 def test_workflow_v2_agent_node_still_works():

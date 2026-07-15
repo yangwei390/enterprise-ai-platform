@@ -58,7 +58,7 @@ class AgentCatalog:
 
     def _public_metadata(self, registry_version: int) -> dict:
         return {
-            "runtime": settings.AGENT_RUNTIME,
+            "runtime": "langgraph_v2",
             "async_enabled": settings.AGENT_ASYNC_ENABLED,
             "registry_version": registry_version,
         }

@@ -183,7 +183,6 @@ class Settings(BaseSettings):
 
     MEMORY_PROVIDER: str = "redis"
 
-    AGENT_RUNTIME: str = "v1"
     AGENT_ASYNC_ENABLED: bool = True
     AGENT_ASYNC_TIMEOUT_SECONDS: int = 60
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
@@ -222,8 +221,6 @@ class Settings(BaseSettings):
     WORKFLOW_TOOL_PROVIDER_ENABLED: bool = True
     MCP_TOOL_PROVIDER_ENABLED: bool = False
 
-    WORKFLOW_RUNTIME: str = "v1"
-    WORKFLOW_V2_ENABLED: bool = True
     WORKFLOW_DEFAULT_TIMEOUT_SECONDS: int = 120
     WORKFLOW_MAX_STEPS_DEFAULT: int = 20
     WORKFLOW_MAX_CONCURRENCY: int = 4
@@ -237,7 +234,6 @@ class Settings(BaseSettings):
     WORKFLOW_APPROVAL_FAIL_OPEN: bool = False
     WORKFLOW_APPROVAL_DEFAULT_TIMEOUT_SECONDS: int = 86400
     WORKFLOW_STREAMING_ENABLED: bool = True
-    WORKFLOW_FAIL_OPEN_TO_V1: bool = True
 
     UPLOAD_DIR: str
 
@@ -266,6 +262,7 @@ class Settings(BaseSettings):
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",
     )
 
 

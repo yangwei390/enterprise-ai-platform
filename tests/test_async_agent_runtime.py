@@ -1,11 +1,12 @@
 import asyncio
 from time import perf_counter
 
-from backend.app.agents import AgentRuntime, AgentRuntimeResult
+from backend.app.agents import AgentRuntimeResult
 from backend.app.agents.langgraph.graph import build_agent_graph
 from backend.app.agents.langgraph.nodes import FinalNode, PlannerNode, ToolNode
 from backend.app.agents.langgraph.planner import AgentPlan, PlanStep
 from backend.app.agents.langgraph.runtime import LangGraphAgentRuntime
+from backend.app.agents.langgraph.tool_calling import AgentDecision, AgentToolCall
 from backend.app.agents.state import AgentRuntimeRequest
 from backend.app.agents.trace import AgentTraceStep
 from backend.app.api.agent import router as agent_router
@@ -148,6 +149,24 @@ class AsyncPlanner:
     async def aplan(self, **kwargs) -> AgentPlan:
         await asyncio.sleep(0)
         return AgentPlan(steps=self.steps, metadata={"async": True})
+
+
+class AsyncPlannerStrategy:
+    async def adecide(self, state):
+        await asyncio.sleep(0)
+        return AgentDecision(
+            action="tool_calls",
+            tool_calls=[
+                AgentToolCall(
+                    id=f"async_{index}",
+                    tool_name=step.tool,
+                    arguments=step.args,
+                    index=index,
+                )
+                for index, step in enumerate(AsyncPlanner().steps)
+            ],
+            metadata={"actual_strategy": "native_tool_calling", "async": True},
+        )
 
 
 class FakeAsyncGraph:
@@ -350,14 +369,13 @@ def test_parallel_tool_execution(monkeypatch):
     registry = ToolRegistry()
     registry.register(SlowAsyncTool())
     tool_node = ToolNode(tool_executor=ToolExecutor(registry=registry))
-    steps = [
-        {"tool": "slow", "args": {"delay": 0.1}},
-        {"tool": "slow", "args": {"delay": 0.1}},
-    ]
     state = {
         "messages": [],
         "query": "parallel",
-        "plan": {"steps": steps},
+        "pending_tool_calls": [
+            {"id": "slow_1", "tool_name": "slow", "arguments": {"delay": 0.1}, "index": 0},
+            {"id": "slow_2", "tool_name": "slow", "arguments": {"delay": 0.1}, "index": 1},
+        ],
         "tool_calls": [],
         "tool_results": [],
         "metadata": {"trace": [], "async_runtime": {}},
@@ -381,14 +399,12 @@ def test_tool_concurrency_limit(monkeypatch):
     state = {
         "messages": [],
         "query": "limit",
-        "plan": {
-            "steps": [
-                {"tool": "counting", "args": {}},
-                {"tool": "counting", "args": {}},
-                {"tool": "counting", "args": {}},
-                {"tool": "counting", "args": {}},
-            ]
-        },
+        "pending_tool_calls": [
+            {"id": "counting_1", "tool_name": "counting", "arguments": {}, "index": 0},
+            {"id": "counting_2", "tool_name": "counting", "arguments": {}, "index": 1},
+            {"id": "counting_3", "tool_name": "counting", "arguments": {}, "index": 2},
+            {"id": "counting_4", "tool_name": "counting", "arguments": {}, "index": 3},
+        ],
         "tool_calls": [],
         "tool_results": [],
         "metadata": {"trace": [], "async_runtime": {}},
@@ -414,18 +430,6 @@ def test_async_runtime_cancellation(monkeypatch):
         return False
 
     assert asyncio.run(run_and_cancel()) is True
-
-
-def test_v1_sync_runtime_still_works(monkeypatch):
-    monkeypatch.setattr(
-        "backend.app.agents.runtime.LLMFactory.get_llm",
-        lambda: FakeDirectAnswerLLM(),
-    )
-
-    result = AgentRuntime().run(AgentRuntimeRequest(query="你好"))
-
-    assert result.answer == "ok"
-    assert result.trace
 
 
 def test_chat_and_workflow_api_still_work(monkeypatch):
@@ -457,10 +461,14 @@ def test_chat_and_workflow_api_still_work(monkeypatch):
 
 def test_real_langgraph_async_smoke(monkeypatch):
     monkeypatch.setattr(settings, "AGENT_ASYNC_ENABLED", True)
+    monkeypatch.setattr(
+        "backend.app.agents.langgraph.nodes.get_planner_strategy",
+        lambda: AsyncPlannerStrategy(),
+    )
     registry = ToolRegistry()
     registry.register(AsyncKnowledgeTool())
     graph_app = build_agent_graph(
-        planner_node=PlannerNode(planner=AsyncPlanner()),
+        planner_node=PlannerNode(),
         tool_node=ToolNode(tool_executor=ToolExecutor(registry=registry)),
         final_node=FinalNode(),
         async_mode=True,
@@ -477,8 +485,6 @@ def test_real_langgraph_async_smoke(monkeypatch):
     assert result.citations[0]["source"] == "async.pdf"
     assert result.metadata.get("runtime_fallback") is None
     assert result.metadata["async_runtime"]["enabled"] is True
-    assert [step.step for step in result.trace] == [
-        "planner",
-        "tool_call",
-        "final_answer",
-    ]
+    assert "planner_completed" in [step.step for step in result.trace]
+    assert "tool_completed" in [step.step for step in result.trace]
+    assert result.trace[-1].step == "final_answer"

@@ -670,7 +670,7 @@ def debug_workflows() -> ApiResponse:
     definitions = list_workflow_definitions_v2()
     return success(
         data={
-            "runtime": settings.WORKFLOW_RUNTIME,
+            "runtime": "langgraph_v2",
             "workflows": [
                 {
                     "id": definition.id,

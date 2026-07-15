@@ -1,11 +1,9 @@
-import asyncio
 from collections.abc import Awaitable, Callable
 from time import perf_counter
 from typing import Any, cast
 
 from backend.app.workflows.factory import WorkflowRuntimeFactory
 from backend.app.workflows.langgraph import WorkflowRunRequestV2
-from backend.app.workflows.v1 import WorkflowRunRequest
 
 from evaluation.v2.schemas import EvaluationCase, EvaluationContext, EvaluationTargetResult
 from evaluation.v2.targets.base import BaseEvaluationTarget, elapsed_ms
@@ -36,15 +34,15 @@ class WorkflowEvaluationTarget(BaseEvaluationTarget):
                     )
                 )
             else:
-                sync_run = cast(Callable[[WorkflowRunRequest], Any], runtime.run)
-                result = await asyncio.to_thread(
-                    sync_run,
-                    WorkflowRunRequest(
+                sync_run = cast(Callable[[WorkflowRunRequestV2], Any], runtime.run)
+                result = sync_run(
+                    WorkflowRunRequestV2(
                         workflow_id=workflow_id,
                         query=case.query or str(case.input.get("query", "")),
                         knowledge_base_id=case.input.get("knowledge_base_id"),
                         inputs=case.input.get("inputs", {}),
-                    ),
+                        metadata=case.input.get("metadata", {}),
+                    )
                 )
             return EvaluationTargetResult(
                 target=self.name,

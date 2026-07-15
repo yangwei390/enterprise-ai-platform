@@ -1,6 +1,5 @@
-import asyncio
-
-from backend.app.agents import AgentRuntime, AgentRuntimeRequest, AgentRuntimeResult
+from backend.app.agents import AgentRuntimeResult
+from backend.app.agents.langgraph.runtime import LangGraphAgentRuntime
 from backend.app.agents.trace import AgentTraceStep
 from backend.app.api.agent import get_conversation_service
 from backend.app.api.agent import router as agent_router
@@ -188,6 +187,33 @@ def test_agent_chat_api_uses_agent_runtime(monkeypatch):
     assert FakeAgentRuntime.last_request.metadata == {"source": "test"}
 
 
+def test_agent_chat_api_enters_langgraph_runtime(monkeypatch):
+    called = {}
+
+    async def fake_arun(self, request):
+        called["runtime"] = self
+        called["request"] = request
+        return AgentRuntimeResult(
+            answer="v2 answer",
+            action="direct_answer",
+            metadata={"runtime": "langgraph_v2"},
+        )
+
+    monkeypatch.setattr(LangGraphAgentRuntime, "arun", fake_arun)
+    app = FastAPI()
+    app.include_router(agent_router)
+    client = TestClient(app)
+
+    response = client.post("/agent/chat", json={"query": "你好"})
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["data"]["answer"] == "v2 answer"
+    assert body["data"]["metadata"]["runtime"] == "langgraph_v2"
+    assert isinstance(called["runtime"], LangGraphAgentRuntime)
+    assert called["request"].query == "你好"
+
+
 def test_agent_chat_api_rejects_empty_query(monkeypatch):
     client = _agent_client(monkeypatch)
 
@@ -209,37 +235,6 @@ def test_chat_api_still_works():
     assert response.status_code == 200
     assert body["code"] == 0
     assert body["data"]["answer"] == "chat answer"
-
-
-def test_agent_runtime_stream_uses_llm_stream(monkeypatch):
-    class StreamingLLM:
-        stream_called = False
-
-        def stream(self, request):
-            StreamingLLM.stream_called = True
-            yield "甲"
-            yield "乙"
-            yield "丙"
-
-        def chat(self, request):  # pragma: no cover - should not be used by stream path
-            raise AssertionError("chat should not be used for streaming final answer")
-
-    monkeypatch.setattr(
-        "backend.app.agents.final_answer.LLMFactory.get_llm",
-        lambda: StreamingLLM(),
-    )
-    events = asyncio.run(
-        _collect_agent_events(
-            AgentRuntime().astream_events(AgentRuntimeRequest(query="你好"))
-        )
-    )
-
-    deltas = [event["data"]["delta"] for event in events if event["event"] == "answer_delta"]
-    completed = next(event for event in events if event["event"] == "result")
-
-    assert StreamingLLM.stream_called is True
-    assert deltas == ["甲", "乙", "丙"]
-    assert completed["data"]["result"]["answer"] == "甲乙丙"
 
 
 def test_agent_stream_api_returns_multiple_answer_deltas(monkeypatch):
@@ -273,8 +268,40 @@ def test_agent_stream_api_returns_multiple_answer_deltas(monkeypatch):
     assert service.assistant_messages[0].message_metadata["citations"] == [{"source": "source.pdf"}]
 
 
-async def _collect_agent_events(event_stream):
-    events = []
-    async for event in event_stream:
-        events.append(event)
-    return events
+def test_agent_stream_api_enters_langgraph_runtime(monkeypatch):
+    service = FakeConversationService()
+    called = {}
+
+    async def fake_astream_events(self, request):
+        called["runtime"] = self
+        called["request"] = request
+        yield {"event": "status", "data": {"status": "answering", "message": "正在整理答案"}}
+        yield {
+            "event": "result",
+            "data": {
+                "result": AgentRuntimeResult(
+                    answer="v2 stream answer",
+                    action="direct_answer",
+                    metadata={"runtime": "langgraph_v2"},
+                ).model_dump()
+            },
+        }
+
+    monkeypatch.setattr(LangGraphAgentRuntime, "astream_events", fake_astream_events)
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_conversation_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/agent/chat/stream",
+        json={"agent_id": "general_agent", "query": "你好"},
+    )
+    events = _parse_sse_events(response.text)
+    completed = next(event for event in events if event["event"] == "completed")
+
+    assert response.status_code == 200
+    assert completed["data"]["answer"] == "v2 stream answer"
+    assert isinstance(called["runtime"], LangGraphAgentRuntime)
+    assert called["request"].query == "你好"
+    assert called["request"].metadata["agent_id"] == "general_agent"

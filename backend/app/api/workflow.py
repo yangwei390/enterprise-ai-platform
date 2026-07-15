@@ -2,14 +2,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from backend.app.config.settings import settings
 from backend.app.schemas import ApiResponse, success
 from backend.app.workflows import (
     WorkflowDefinition,
     WorkflowService,
-)
-from backend.app.workflows import (
-    WorkflowRunRequest as WorkflowRunV1Request,
 )
 from backend.app.workflows.factory import WorkflowRuntimeFactory
 from backend.app.workflows.langgraph import WorkflowResumeRequest, WorkflowRunRequestV2
@@ -30,20 +26,14 @@ class WorkflowPlanAndRunRequest(BaseModel):
 
 
 @router.post("/workflow/run", response_model=ApiResponse)
-async def run_workflow_v1(request: WorkflowRunV1Request) -> ApiResponse:
+async def run_workflow_v1(request: WorkflowRunRequestV2) -> ApiResponse:
     runtime = WorkflowRuntimeFactory.get_runtime()
     arun = getattr(runtime, "arun", None)
     if callable(arun):
         async_run = cast(Callable[[WorkflowRunRequestV2], Awaitable[Any]], arun)
-        workflow_id = request.workflow_id
-        if settings.WORKFLOW_RUNTIME.lower() == "langgraph" and workflow_id in (
-            None,
-            "default_knowledge_workflow",
-        ):
-            workflow_id = "default_agent_workflow_v2"
         result = await async_run(
             WorkflowRunRequestV2(
-                workflow_id=workflow_id,
+                workflow_id=_normalize_workflow_id(request.workflow_id),
                 query=request.query,
                 knowledge_base_id=request.knowledge_base_id,
                 inputs=request.inputs,
@@ -52,9 +42,15 @@ async def run_workflow_v1(request: WorkflowRunV1Request) -> ApiResponse:
             )
         )
     else:
-        sync_run = cast(Callable[[WorkflowRunV1Request], Any], runtime.run)
+        sync_run = cast(Callable[[WorkflowRunRequestV2], Any], runtime.run)
         result = await asyncio.to_thread(sync_run, request)
     return success(data=result)
+
+
+def _normalize_workflow_id(workflow_id: str | None) -> str:
+    if workflow_id in (None, "default_knowledge_workflow"):
+        return "default_agent_workflow_v2"
+    return workflow_id
 
 
 @router.post("/workflow/resume", response_model=ApiResponse)

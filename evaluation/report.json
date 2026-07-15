@@ -104,8 +104,8 @@
     "app_env": "dev",
     "llm_provider": "dashscope",
     "llm_model": "qwen-max",
-    "agent_runtime": "v1",
-    "workflow_runtime": "v1"
+    "agent_runtime": "langgraph_v2",
+    "workflow_runtime": "langgraph_v2"
   },
   "config": {
     "max_concurrency": 4,
