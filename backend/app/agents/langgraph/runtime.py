@@ -4,6 +4,11 @@ from collections.abc import AsyncIterator
 from time import perf_counter
 from typing import Any
 
+from backend.app.agents.definition import (
+    AgentDefinition,
+    AgentDefinitionError,
+    get_agent_definition_registry,
+)
 from backend.app.agents.langgraph.graph import LangGraphUnavailable, build_agent_graph
 from backend.app.agents.langgraph.state import AgentState, create_initial_state
 from backend.app.agents.state import AgentRuntimeRequest, AgentRuntimeResult
@@ -24,24 +29,28 @@ class LangGraphAgentRuntime:
     def run(self, request: AgentRuntimeRequest) -> AgentRuntimeResult:
         started_at = perf_counter()
         try:
+            definition = self._load_definition(request)
             graph_app = self.graph_app or build_agent_graph()
             session_id = self._session_id(request)
             session_state = self._load_session(session_id)
-            state = create_initial_state(
-                query=request.query,
-                conversation_id=request.conversation_id,
-                knowledge_base_id=request.knowledge_base_id,
-                memory_context=request.memory_context,
-                metadata=self._metadata_with_session(
-                    request.metadata,
-                    session_id=session_id,
-                    session_state=session_state,
-                ),
+            state = self._create_state(
+                request=request,
+                definition=definition,
+                session_id=session_id,
+                session_state=session_state,
             )
             self._inject_session_state(state, session_state)
             result_state = self._invoke_graph(graph_app, state)
             self._save_session(session_id, result_state)
             return self._to_result(result_state)
+        except AgentDefinitionError as exc:
+            logger.warning(f"Agent definition rejected request: {exc}")
+            return self._failure_result(
+                request=request,
+                started_at=started_at,
+                reason=str(exc),
+                error_type="agent_definition_error",
+            )
         except LangGraphUnavailable as exc:
             logger.exception("LangGraph V2 runtime unavailable")
             return self._failure_result(
@@ -91,25 +100,19 @@ class LangGraphAgentRuntime:
             return result
 
         try:
+            definition = self._load_definition(request)
             graph_app = self.graph_app or build_agent_graph(async_mode=True)
             session_id = self._session_id(request)
             session_state = self._load_session(session_id)
-            state = create_initial_state(
-                query=request.query,
-                conversation_id=request.conversation_id,
-                knowledge_base_id=request.knowledge_base_id,
-                memory_context=request.memory_context,
-                metadata=self._metadata_with_session(
-                    {
-                        **request.metadata,
-                        "async_runtime": async_metadata,
-                    },
-                    session_id=session_id,
-                    session_state=session_state,
-                ),
+            state = self._create_state(
+                request=request,
+                definition=definition,
+                session_id=session_id,
+                session_state=session_state,
+                extra_metadata={"async_runtime": async_metadata},
             )
             self._inject_session_state(state, session_state)
-            async with asyncio.timeout(settings.AGENT_ASYNC_TIMEOUT_SECONDS):
+            async with asyncio.timeout(definition.timeout_seconds):
                 result_state = await self._ainvoke_graph(graph_app, state)
             self._save_session(session_id, result_state)
             result = self._to_result(result_state)
@@ -119,7 +122,7 @@ class LangGraphAgentRuntime:
                     "enabled": True,
                     "runtime": "langgraph_v2",
                     "duration_ms": round((perf_counter() - started_at) * 1000, 2),
-                    "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
+                    "timeout_seconds": definition.timeout_seconds,
                     "timed_out": False,
                     "cancelled": False,
                     "failed": False,
@@ -135,6 +138,20 @@ class LangGraphAgentRuntime:
         except asyncio.CancelledError:
             logger.info("LangGraph async runtime cancelled")
             raise
+        except AgentDefinitionError as exc:
+            logger.warning(f"Agent definition rejected async request: {exc}")
+            return self._failure_result(
+                request=request,
+                started_at=started_at,
+                reason=str(exc),
+                error_type="agent_definition_error",
+                async_metadata={
+                    **async_metadata,
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                    "failed": True,
+                    "error": str(exc),
+                },
+            )
         except TimeoutError as exc:
             return self._failure_result(
                 request=request,
@@ -194,24 +211,20 @@ class LangGraphAgentRuntime:
             return
 
         try:
+            definition = self._load_definition(request)
             graph_app = self.graph_app or build_agent_graph(async_mode=True)
             event_queue: asyncio.Queue[dict] = asyncio.Queue()
             session_id = self._session_id(request)
             session_state = self._load_session(session_id)
-            state = create_initial_state(
-                query=request.query,
-                conversation_id=request.conversation_id,
-                knowledge_base_id=request.knowledge_base_id,
-                memory_context=request.memory_context,
-                metadata=self._metadata_with_session(
-                    {
-                        **request.metadata,
-                        "_agent_stream_answer_enabled": True,
-                        "_agent_stream_event_queue": event_queue,
-                    },
-                    session_id=session_id,
-                    session_state=session_state,
-                ),
+            state = self._create_state(
+                request=request,
+                definition=definition,
+                session_id=session_id,
+                session_state=session_state,
+                extra_metadata={
+                    "_agent_stream_answer_enabled": True,
+                    "_agent_stream_event_queue": event_queue,
+                },
             )
             self._inject_session_state(state, session_state)
 
@@ -219,7 +232,7 @@ class LangGraphAgentRuntime:
                 try:
                     result_state: dict[str, Any] = dict(state)
                     last_status: str | None = "analyzing"
-                    async with asyncio.timeout(settings.AGENT_ASYNC_TIMEOUT_SECONDS):
+                    async with asyncio.timeout(definition.timeout_seconds):
                         async for update in self._astream_graph(graph_app, state):
                             node_name, update_state = self._extract_stream_state(update)
                             if update_state is not None:
@@ -238,7 +251,7 @@ class LangGraphAgentRuntime:
                             "enabled": True,
                             "runtime": "langgraph_v2",
                             "duration_ms": round((perf_counter() - started_at) * 1000, 2),
-                            "timeout_seconds": settings.AGENT_ASYNC_TIMEOUT_SECONDS,
+                            "timeout_seconds": definition.timeout_seconds,
                             "timed_out": False,
                             "cancelled": False,
                             "failed": False,
@@ -278,6 +291,7 @@ class LangGraphAgentRuntime:
     ) -> AgentRuntimeResult:
         metadata = {
             "runtime": "langgraph_v2",
+            "agent_id": request.agent_id or request.metadata.get("agent_id"),
             "runtime_error": {
                 "type": error_type,
                 "message": reason,
@@ -298,7 +312,7 @@ class LangGraphAgentRuntime:
         try:
             return graph_app.invoke(
                 state,
-                config={"recursion_limit": settings.AGENT_MAX_STEPS + 8},
+                config={"recursion_limit": self._recursion_limit(state)},
             )
         except TypeError as exc:
             if "config" not in str(exc):
@@ -309,7 +323,7 @@ class LangGraphAgentRuntime:
         try:
             return await graph_app.ainvoke(
                 state,
-                config={"recursion_limit": settings.AGENT_MAX_STEPS + 8},
+                config={"recursion_limit": self._recursion_limit(state)},
             )
         except TypeError as exc:
             if "config" not in str(exc):
@@ -320,7 +334,7 @@ class LangGraphAgentRuntime:
         try:
             async for update in graph_app.astream(
                 state,
-                config={"recursion_limit": settings.AGENT_MAX_STEPS + 8},
+                config={"recursion_limit": self._recursion_limit(state)},
             ):
                 yield update
         except TypeError as exc:
@@ -328,6 +342,53 @@ class LangGraphAgentRuntime:
                 raise
             async for update in graph_app.astream(state):
                 yield update
+
+    def _load_definition(self, request: AgentRuntimeRequest) -> AgentDefinition:
+        return get_agent_definition_registry().get(request.agent_id)
+
+    def _create_state(
+        self,
+        *,
+        request: AgentRuntimeRequest,
+        definition: AgentDefinition,
+        session_id: str,
+        session_state: MemoryState | None,
+        extra_metadata: dict | None = None,
+    ) -> AgentState:
+        knowledge_base_id = (
+            request.knowledge_base_id
+            if request.knowledge_base_id is not None
+            else definition.default_knowledge_base_id
+        )
+        state = create_initial_state(
+            query=request.query,
+            conversation_id=request.conversation_id,
+            knowledge_base_id=knowledge_base_id,
+            memory_context=request.memory_context,
+            metadata=self._metadata_with_session(
+                {
+                    **request.metadata,
+                    **(extra_metadata or {}),
+                },
+                definition=definition,
+                session_id=session_id,
+                session_state=session_state,
+            ),
+        )
+        state["messages"].insert(
+            0,
+            {
+                "role": "system",
+                "content": definition.instructions,
+            },
+        )
+        if request.agent_id is not None:
+            state["budget"]["max_steps"] = definition.max_steps
+        return state
+
+    def _recursion_limit(self, state: AgentState) -> int:
+        budget = state.get("budget") or {}
+        return int(budget.get("max_steps") or settings.AGENT_MAX_STEPS) + 8
 
     def _extract_stream_state(self, update) -> tuple[str | None, dict | None]:
         if not isinstance(update, dict):
@@ -365,7 +426,9 @@ class LangGraphAgentRuntime:
             return str(metadata_session_id)
         if request.conversation_id is not None:
             return f"conversation:{request.conversation_id}"
-        digest = hashlib.sha256(request.query.encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha256(
+            f"{request.agent_id or ''}:{request.query}".encode()
+        ).hexdigest()[:16]
         return f"agent:{digest}"
 
     def _load_session(self, session_id: str) -> MemoryState | None:
@@ -379,12 +442,41 @@ class LangGraphAgentRuntime:
         self,
         metadata: dict,
         *,
+        definition: AgentDefinition,
         session_id: str,
         session_state: MemoryState | None,
     ) -> dict:
         return {
             **metadata,
             "runtime": "langgraph_v2",
+            "agent_id": definition.id,
+            "agent_definition_version": definition.version,
+            "planner_strategy": definition.planner_strategy,
+            "max_steps": definition.max_steps,
+            "timeout_seconds": definition.timeout_seconds,
+            "tool_allowlist": list(definition.tool_allowlist),
+            "workflow_allowlist": list(definition.workflow_allowlist),
+            "memory_policy": definition.memory_policy,
+            "retrieval_policy": definition.retrieval_policy,
+            "model_config_keys": sorted(definition.model_settings),
+            "default_knowledge_base_id": definition.default_knowledge_base_id,
+            "output_mode": definition.output_mode,
+            "safety_policy": definition.safety_policy,
+            "agent_definition": {
+                "id": definition.id,
+                "name": definition.name,
+                "version": definition.version,
+                "planner_strategy": definition.planner_strategy,
+                "tool_allowlist": list(definition.tool_allowlist),
+                "workflow_allowlist": list(definition.workflow_allowlist),
+                "memory_policy": definition.memory_policy,
+                "retrieval_policy": definition.retrieval_policy,
+                "model_config": definition.model_settings,
+                "max_steps": definition.max_steps,
+                "timeout_seconds": definition.timeout_seconds,
+                "output_mode": definition.output_mode,
+                "safety_policy": definition.safety_policy,
+            },
             "memory": {
                 **metadata.get("memory", {}),
                 "provider": MemoryFactory.get_manager().provider.name,
@@ -449,6 +541,14 @@ class LangGraphAgentRuntime:
     def _to_result(self, state: dict) -> AgentRuntimeResult:
         metadata = dict(state.get("metadata", {}))
         metadata["runtime"] = "langgraph_v2"
+        agent_definition = metadata.get("agent_definition")
+        if isinstance(agent_definition, dict):
+            sanitized_definition = dict(agent_definition)
+            model_config = sanitized_definition.pop("model_config", {})
+            sanitized_definition["model_config_keys"] = (
+                sorted(model_config) if isinstance(model_config, dict) else []
+            )
+            metadata["agent_definition"] = sanitized_definition
         for key in list(metadata):
             if key.startswith("_agent_stream_"):
                 metadata.pop(key, None)

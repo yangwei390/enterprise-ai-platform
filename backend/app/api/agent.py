@@ -53,6 +53,7 @@ async def agent_chat(request: AgentChatRequest) -> ApiResponse:
     runtime = AgentRuntimeFactory.get_runtime()
     runtime_request = AgentRuntimeRequest(
         query=request.query,
+        agent_id=request.agent_id,
         knowledge_base_id=request.knowledge_base_id,
         conversation_id=request.conversation_id,
         memory_context=request.memory_context,
@@ -105,10 +106,11 @@ async def _stream_agent_events(
         runtime = AgentRuntimeFactory.get_runtime()
         runtime_request = AgentRuntimeRequest(
             query=request.query,
+            agent_id=request.agent_id,
             knowledge_base_id=request.knowledge_base_id,
             conversation_id=conversation_id,
             memory_context=request.memory_context,
-            metadata={**request.metadata, "agent_id": request.agent_id},
+            metadata=request.metadata,
         )
         final_result = None
         answer_parts: list[str] = []

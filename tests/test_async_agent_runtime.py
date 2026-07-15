@@ -463,7 +463,7 @@ def test_real_langgraph_async_smoke(monkeypatch):
     monkeypatch.setattr(settings, "AGENT_ASYNC_ENABLED", True)
     monkeypatch.setattr(
         "backend.app.agents.langgraph.nodes.get_planner_strategy",
-        lambda: AsyncPlannerStrategy(),
+        lambda state=None: AsyncPlannerStrategy(),
     )
     registry = ToolRegistry()
     registry.register(AsyncKnowledgeTool())

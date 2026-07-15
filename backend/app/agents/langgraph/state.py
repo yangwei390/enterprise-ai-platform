@@ -57,11 +57,11 @@ def create_initial_state(
         budget=AgentExecutionBudget.from_settings().model_dump(),
         metadata={
             **metadata,
-            "runtime": "langgraph",
+            "runtime": "langgraph_v2",
             "trace": [],
             "agent_loop": {
                 "enabled": True,
-                "planner_strategy": "native_tool_calling",
+                "planner_strategy": metadata.get("planner_strategy", "native_tool_calling"),
                 "planner_fallback_used": False,
                 "steps": 0,
                 "llm_calls": 0,

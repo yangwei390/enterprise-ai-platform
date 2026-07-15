@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 class AgentRuntimeRequest(BaseModel):
     query: str
+    agent_id: str | None = None
     conversation_id: int | None = None
     knowledge_base_id: int | None = None
     memory_context: str | None = None

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class AgentChatRequest(BaseModel):
     query: str
+    agent_id: str | None = None
     knowledge_base_id: int | None = None
     conversation_id: int | None = None
     memory_context: str | None = None
@@ -23,7 +24,7 @@ class AgentChatResponseData(AgentRuntimeResult):
 
 
 class AgentStreamRequest(AgentChatRequest):
-    agent_id: str | None = None
+    pass
 
 
 class AgentAssistant(BaseModel):

@@ -47,7 +47,7 @@ class PlannerNode:
             return state
 
         state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
-        decision = await get_planner_strategy().adecide(state)
+        decision = await get_planner_strategy(state).adecide(state)
         state["current_action"] = decision.action
         state["pending_tool_calls"] = [
             tool_call.model_dump() for tool_call in decision.tool_calls
@@ -493,7 +493,7 @@ def _update_planner_metadata(state: AgentState, metadata: dict) -> None:
     tool_registry = metadata.get("tool_registry", {})
     state["metadata"].setdefault("agent_loop", {})["planner_strategy"] = metadata.get(
         "actual_strategy",
-        settings.AGENT_PLANNER_STRATEGY,
+        state.get("metadata", {}).get("planner_strategy", settings.AGENT_PLANNER_STRATEGY),
     )
     state["metadata"].setdefault("agent_loop", {})["planner_fallback_used"] = metadata.get(
         "fallback_used",

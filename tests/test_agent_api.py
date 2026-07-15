@@ -304,4 +304,4 @@ def test_agent_stream_api_enters_langgraph_runtime(monkeypatch):
     assert completed["data"]["answer"] == "v2 stream answer"
     assert isinstance(called["runtime"], LangGraphAgentRuntime)
     assert called["request"].query == "你好"
-    assert called["request"].metadata["agent_id"] == "general_agent"
+    assert called["request"].agent_id == "general_agent"

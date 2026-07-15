@@ -1,3 +1,4 @@
+from backend.app.agents.definition import AgentDefinition, get_agent_definition_registry
 from backend.app.agents.schemas import AgentAssistant
 from backend.app.config.settings import settings
 from backend.app.tools import get_tool_registry
@@ -10,39 +11,34 @@ class AgentCatalog:
             descriptor.name
             for descriptor in registry.list_descriptors(enabled_only=True)
         }
-        assistants = [
+        definitions = get_agent_definition_registry().list()
+        return [
             AgentAssistant(
-                id="general_agent",
-                name="通用 AI 助手",
-                description="理解用户任务，并根据当前系统能力完成问答、计算和资料整理。",
-                capabilities=self._general_capabilities(enabled_tools),
-                recommended="knowledge_search" not in enabled_tools,
-                metadata=self._public_metadata(registry.version),
+                id=definition.id,
+                name=definition.name,
+                description=definition.description,
+                capabilities=self._capabilities(definition, enabled_tools),
+                recommended=definition.id == self._recommended_agent_id(enabled_tools),
+                metadata=self._public_metadata(definition, registry.version),
             )
+            for definition in definitions
         ]
-        if "knowledge_search" in enabled_tools:
-            assistants.insert(
-                0,
-                AgentAssistant(
-                    id="knowledge_agent",
-                    name="知识库问答助手",
-                    description="面向企业知识库问答，适合查询制度、文档条款和业务资料。",
-                    capabilities=[
-                        "查询企业知识库",
-                        "基于资料整理答案",
-                        "在可用时返回来源引用",
-                        "支持围绕同一会话继续追问",
-                    ],
-                    recommended=True,
-                    metadata=self._public_metadata(registry.version),
-                ),
-            )
-        return assistants
 
     def get_assistant(self, agent_id: str) -> AgentAssistant | None:
         return next((agent for agent in self.list_assistants() if agent.id == agent_id), None)
 
-    def _general_capabilities(self, enabled_tools: set[str]) -> list[str]:
+    def _capabilities(
+        self,
+        definition: AgentDefinition,
+        enabled_tools: set[str],
+    ) -> list[str]:
+        if definition.id == "knowledge_agent":
+            return [
+                "查询企业知识库",
+                "基于资料整理答案",
+                "在可用时返回来源引用",
+                "支持围绕同一会话继续追问",
+            ]
         capabilities = [
             "分析用户问题",
             "基于上下文整理答案",
@@ -56,9 +52,16 @@ class AgentCatalog:
             capabilities.append("使用已接入的业务能力完成任务")
         return capabilities
 
-    def _public_metadata(self, registry_version: int) -> dict:
+    def _recommended_agent_id(self, enabled_tools: set[str]) -> str:
+        return "knowledge_agent" if "knowledge_search" in enabled_tools else "general_agent"
+
+    def _public_metadata(self, definition: AgentDefinition, registry_version: int) -> dict:
         return {
             "runtime": "langgraph_v2",
             "async_enabled": settings.AGENT_ASYNC_ENABLED,
+            "definition_version": definition.version,
+            "planner_strategy": definition.planner_strategy,
+            "default_knowledge_base_id": definition.default_knowledge_base_id,
+            "output_mode": definition.output_mode,
             "registry_version": registry_version,
         }

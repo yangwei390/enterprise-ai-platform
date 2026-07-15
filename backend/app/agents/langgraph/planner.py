@@ -88,7 +88,7 @@ class LLMPlanner:
                         ),
                     ),
                 ],
-                metadata={"agent_runtime": "langgraph", "planner": "llm"},
+                metadata={"agent_runtime": "langgraph_v2", "planner": "llm"},
             )
         )
         plan_data = self._parse_plan(response.answer)

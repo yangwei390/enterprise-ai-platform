@@ -222,7 +222,7 @@ def test_real_langgraph_graph_compiles_and_invokes(monkeypatch):
     registry.register(SmokeKnowledgeTool())
     monkeypatch.setattr(
         "backend.app.agents.langgraph.nodes.get_planner_strategy",
-        lambda: SmokePlannerStrategy(),
+        lambda state=None: SmokePlannerStrategy(),
     )
     graph_app = build_agent_graph(
         planner_node=PlannerNode(),

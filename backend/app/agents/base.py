@@ -1,5 +1,6 @@
 from enum import StrEnum
 
+from backend.app.agents.definition import AgentDefinition as AgentDefinition
 from backend.app.workflows import WorkflowArtifact
 from pydantic import BaseModel, Field
 
@@ -29,16 +30,6 @@ class AgentStep(BaseModel):
     output: dict = Field(default_factory=dict)
     status: str = AgentRunStatus.PENDING
     error: str | None = None
-
-
-class AgentDefinition(BaseModel):
-    id: str
-    name: str
-    description: str | None = None
-    system_prompt: str | None = None
-    max_steps: int = 8
-    enable_reflection: bool = True
-    metadata: dict = Field(default_factory=dict)
 
 
 class AgentRunRequest(BaseModel):

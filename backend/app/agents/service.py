@@ -7,12 +7,12 @@ class AgentService:
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         runtime_request = AgentRuntimeRequest(
             query=request.task,
+            agent_id=request.agent_id,
             knowledge_base_id=request.knowledge_base_id,
             conversation_id=request.conversation_id,
             memory_context=None,
             metadata={
                 **request.metadata,
-                "agent_id": request.agent_id,
                 "enable_tools": request.enable_tools,
                 "enable_memory": request.enable_memory,
             },

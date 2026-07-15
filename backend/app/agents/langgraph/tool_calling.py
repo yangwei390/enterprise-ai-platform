@@ -61,15 +61,21 @@ class NativeToolCallingStrategy(BaseAgentPlannerStrategy):
             )
 
         started_at = perf_counter()
+        model_config = _agent_model_config(state)
         response = await asyncio.to_thread(
             llm.chat,
             LLMRequest(
                 messages=[LLMMessage.model_validate(message) for message in state["messages"]],
+                model=model_config.get("model"),
+                temperature=float(model_config.get("temperature", 0)),
                 tools=[descriptor.to_llm_schema() for descriptor in descriptors],
                 tool_choice="auto",
                 parallel_tool_calls=True,
-                temperature=0,
-                metadata={"agent_planner_strategy": self.name},
+                metadata={
+                    "agent_planner_strategy": self.name,
+                    "agent_id": state.get("metadata", {}).get("agent_id"),
+                    "agent_model_config_keys": sorted(model_config),
+                },
             ),
         )
         allowed_tools = {descriptor.name for descriptor in descriptors}
@@ -147,17 +153,37 @@ class JsonPlanStrategy(BaseAgentPlannerStrategy):
             tool_calls=tool_calls,
             metadata={
                 **plan.metadata,
-                "requested_strategy": settings.AGENT_PLANNER_STRATEGY,
+                "requested_strategy": _planner_strategy_name(state),
                 "actual_strategy": self.name,
-                "fallback_used": settings.AGENT_PLANNER_STRATEGY != self.name,
+                "fallback_used": _planner_strategy_name(state) != self.name,
             },
         )
 
 
-def get_planner_strategy() -> BaseAgentPlannerStrategy:
-    if settings.AGENT_PLANNER_STRATEGY == "json_plan":
+def get_planner_strategy(state: Any | None = None) -> BaseAgentPlannerStrategy:
+    if _planner_strategy_name(state) == "json_plan":
         return JsonPlanStrategy()
     return NativeToolCallingStrategy()
+
+
+def _planner_strategy_name(state: Any | None) -> str:
+    if isinstance(state, dict):
+        value = state.get("metadata", {}).get("planner_strategy")
+        if isinstance(value, str) and value:
+            return value
+    return settings.AGENT_PLANNER_STRATEGY
+
+
+def _agent_model_config(state: Any) -> dict:
+    if isinstance(state, dict):
+        config = (
+            state.get("metadata", {})
+            .get("agent_definition", {})
+            .get("model_config", {})
+        )
+        if isinstance(config, dict):
+            return config
+    return {}
 
 
 def assistant_tool_calls_payload(tool_calls: list[AgentToolCall]) -> list[dict[str, Any]]:
