@@ -75,11 +75,12 @@ class SimplePlanner:
         return {}
 
     def _looks_like_knowledge_query(self, query: str) -> bool:
+        if re.search(r"第[0-9一二三四五六七八九十百千万几]+[章节条]", query):
+            return True
         keywords = [
             "知识库",
             "文档",
             "根据资料",
-            "劳动法",
             "rag",
             "什么是",
             "是什么",

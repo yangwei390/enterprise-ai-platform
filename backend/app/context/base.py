@@ -19,6 +19,14 @@ class ContextBuildRequest(BaseModel):
     query: str
     chunks: list[RerankedChunk]
     max_context_chars: int = 8000
+    route_type: str | None = None
+    strategy: str | None = None
+    target_document_ids: list[int] = Field(default_factory=list)
+    max_chunks: int = 12
+    max_chars_per_document: int = 4000
+    multi_document_diversity_enabled: bool = True
+    multi_document_max_per_document: int = 4
+    multi_document_min_documents: int = 2
 
 
 class ContextBuildResult(BaseModel):
@@ -27,6 +35,13 @@ class ContextBuildResult(BaseModel):
     chunks: list[ContextChunk]
     total_chunks: int
     total_chars: int
+    selected_chunks: list[ContextChunk] = Field(default_factory=list)
+    citations: list[dict] = Field(default_factory=list)
+    document_groups: list[dict] = Field(default_factory=list)
+    truncated: bool = False
+    deduplicated_count: int = 0
+    merged_count: int = 0
+    skipped_count: int = 0
     metadata: dict = Field(default_factory=dict)
 
 

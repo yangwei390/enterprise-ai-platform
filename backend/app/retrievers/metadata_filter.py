@@ -55,9 +55,11 @@ class AutoMetadataFilterBuilder:
             if not matched_hints:
                 continue
 
+            identity = _document_identity(document)
             candidate_document_ids.append(document.id)
             source_hint = (
-                document.original_filename
+                identity.get("document_title")
+                or document.original_filename
                 or document.filename
                 or document.storage_path
                 or str(document.id)
@@ -81,7 +83,7 @@ class AutoMetadataFilterBuilder:
             auto_filter_applied=auto_filter_applied,
             soft_boost_enabled=auto_filter_applied,
             metadata={
-                "strategy": "filename_keyword_match",
+                "strategy": "document_identity_keyword_match",
                 "matched_documents": matched_documents,
                 "knowledge_base_id": knowledge_base_id,
             },
@@ -99,18 +101,22 @@ class AutoMetadataFilterBuilder:
             db.close()
 
     def _build_document_hints(self, document: Document) -> list[str]:
-        raw_values = [
-            document.filename,
+        identity = _document_identity(document)
+        raw_values = _identity_hint_values(identity)
+        fallback_values = [
             document.original_filename,
+            document.filename,
             Path(document.storage_path).name if document.storage_path else None,
             Path(document.storage_path).stem if document.storage_path else None,
         ]
+        raw_values.extend(value for value in fallback_values if value)
         hints: list[str] = []
         for raw_value in raw_values:
             if not raw_value:
                 continue
-            stem = Path(raw_value).stem
-            hints.extend([raw_value, stem])
+            value = str(raw_value)
+            stem = Path(value).stem
+            hints.extend([value, stem])
             hints.extend(self._chinese_substrings(stem))
 
         return [
@@ -140,3 +146,31 @@ class AutoMetadataFilterBuilder:
             .replace("(", "")
             .replace(")", "")
         )
+
+
+def _document_identity(document: Document) -> dict:
+    document_metadata = document.document_metadata
+    if isinstance(document_metadata, dict):
+        nested = document_metadata.get("document_identity")
+        return nested if isinstance(nested, dict) else {}
+    return {}
+
+
+def _identity_hint_values(identity: dict) -> list[str]:
+    values: list[str] = []
+    for key in ("document_title", "summary", "category", "language"):
+        value = identity.get(key)
+        if isinstance(value, str):
+            values.append(value)
+    for key in ("aliases", "keywords"):
+        items = identity.get(key)
+        if isinstance(items, list):
+            values.extend(str(item) for item in items if item)
+    entities = identity.get("entities")
+    if isinstance(entities, dict):
+        for entity_values in entities.values():
+            if isinstance(entity_values, list):
+                values.extend(str(item) for item in entity_values if item)
+            elif isinstance(entity_values, str):
+                values.append(entity_values)
+    return values

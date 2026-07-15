@@ -6,7 +6,7 @@ from backend.app.chunkers import ChunkerFactory
 from backend.app.chunkers.router import ChunkStrategyRouter
 from backend.app.cleaners import CleanerFactory
 from backend.app.config.settings import PROJECT_ROOT, settings
-from backend.app.context import ContextBuilderFactory, ContextBuildRequest
+from backend.app.context import BasicContextBuilder, ContextBuildRequest
 from backend.app.context_compression import (
     CompressionInput,
     CompressionResult,
@@ -229,7 +229,7 @@ def rag_trace(request: RagTraceRequest) -> ApiResponse:
         )
     )
 
-    context_builder = ContextBuilderFactory.get_builder()
+    context_builder = BasicContextBuilder()
     context_result = context_builder.build(
         ContextBuildRequest(
             query=rewritten_query,
@@ -375,7 +375,7 @@ def retriever_compare(request: RagTraceRequest) -> ApiResponse:
                 )
             )
             reranked_chunks = neighbor_context.reranked_chunks
-            context_result = ContextBuilderFactory.get_builder().build(
+            context_result = BasicContextBuilder().build(
                 ContextBuildRequest(
                     query=rewritten_query,
                     chunks=reranked_chunks,

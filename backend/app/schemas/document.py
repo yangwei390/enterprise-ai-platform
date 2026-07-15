@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DocumentCreate(BaseModel):
@@ -27,6 +27,7 @@ class DocumentResponse(BaseModel):
     file_hash: str | None
     parse_status: str
     parse_message: str | None
+    document_metadata: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

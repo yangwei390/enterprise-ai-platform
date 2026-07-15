@@ -42,6 +42,15 @@ class ChunkStrategyRouter:
         if requested != "auto" and requested in self.valid_strategies:
             actual = "legal_structure" if requested == "legal" else requested
             return ChunkStrategyDecision(requested, actual, "explicit_strategy")
+        if metadata and metadata.get("_parser_elements") and document_type not in {
+            "legal",
+            "markdown",
+        }:
+            return ChunkStrategyDecision(
+                requested,
+                "parent_child",
+                "parser_elements_available",
+            )
         if document_type == "legal":
             return ChunkStrategyDecision(requested, "legal_structure", "document_type=legal")
         if document_type == "markdown":

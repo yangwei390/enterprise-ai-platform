@@ -4,11 +4,15 @@ from backend.app.retrievers.hybrid.sparse_retriever import BM25SparseRetriever
 from backend.app.retrievers.pipeline import RetrieverPipeline, RetrieverPipelineContext
 from backend.app.retrievers.pipeline.steps import (
     DenseRetrieveStep,
+    DocumentRoutingStep,
     FusionStep,
     MetadataFilterStep,
     QueryRewriteStep,
+    QueryUnderstandingStep,
+    RetrievalPlanningStep,
     SoftBoostStep,
     SparseRetrieveStep,
+    StrategySelectionStep,
 )
 
 
@@ -23,8 +27,12 @@ class HybridRetriever:
         self.sparse_retriever = sparse_retriever or BM25SparseRetriever()
         self.pipeline = pipeline or RetrieverPipeline(
             steps=[
+                QueryUnderstandingStep(),
                 QueryRewriteStep(),
                 MetadataFilterStep(),
+                DocumentRoutingStep(),
+                RetrievalPlanningStep(),
+                StrategySelectionStep(),
                 DenseRetrieveStep(self.dense_retriever),
                 SparseRetrieveStep(self.sparse_retriever),
                 FusionStep(),

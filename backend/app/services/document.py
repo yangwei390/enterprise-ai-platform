@@ -104,6 +104,20 @@ class DocumentService(BaseService[DocumentRepository]):
             )
             raise BusinessException(41003, "文档解析失败")
 
+        document_identity = context.metadata.get("document_identity")
+        try:
+            document = self._persist_document_identity(document, document_identity)
+        except Exception as exc:
+            logger.exception(
+                "Persist document identity failed | document_id=%s",
+                document.id,
+            )
+            self.repository.update(
+                document,
+                {"parse_status": "failed", "parse_message": "文档身份信息保存失败"},
+            )
+            raise BusinessException(41003, "文档身份信息保存失败") from exc
+
         self.repository.update(
             document,
             {"parse_status": "success", "parse_message": "解析成功"},
@@ -148,6 +162,8 @@ class DocumentService(BaseService[DocumentRepository]):
                 "bm25_index_path": context.metadata.get("bm25_index_path"),
                 "bm25_error": context.metadata.get("bm25_error"),
                 "document_structure": context.metadata.get("document_structure"),
+                "document_identity": document_identity,
+                "document_identity_persisted": True,
                 "chunking": context.metadata.get("chunking"),
                 "knowledge_base_index_version": index_version,
             },
@@ -167,6 +183,23 @@ class DocumentService(BaseService[DocumentRepository]):
             "vector_total_records": vector_store_result.total_records,
             "vector_ids_preview": vector_store_result.ids[:5],
         }
+
+    def _persist_document_identity(
+        self,
+        document: Document,
+        document_identity: dict | None,
+    ) -> Document:
+        if not isinstance(document_identity, dict) or not document_identity:
+            raise ValueError("document_identity is empty")
+        current_metadata = dict(document.document_metadata or {})
+        next_metadata = {
+            **current_metadata,
+            "document_identity": document_identity,
+        }
+        return self.repository.update(
+            document,
+            {"document_metadata": next_metadata},
+        )
 
     def get(self, id: int) -> Document:
         logger.info("Get document started")

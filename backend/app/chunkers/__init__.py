@@ -1,4 +1,5 @@
 from backend.app.chunkers.base import BaseChunker, Chunk, ChunkResult
+from backend.app.chunkers.element_aware import ElementAwareChunker
 from backend.app.chunkers.factory import ChunkerFactory
 from backend.app.chunkers.fixed_chunker import FixedChunker
 from backend.app.chunkers.legal import LegalStructureChunker
@@ -12,6 +13,7 @@ __all__ = [
     "Chunk",
     "ChunkResult",
     "ChunkerFactory",
+    "ElementAwareChunker",
     "FixedChunker",
     "LegalStructureChunker",
     "MarkdownChunker",

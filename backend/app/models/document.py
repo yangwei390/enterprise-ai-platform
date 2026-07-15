@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from backend.app.models.base import Base
 from backend.app.models.mixins import SoftDeleteMixin, TimestampMixin
 from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
@@ -29,6 +30,12 @@ class Document(TimestampMixin, SoftDeleteMixin, Base):
     file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     parse_status: Mapped[str] = mapped_column(String(64), default="pending", nullable=False)
     parse_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        default=dict,
+        server_default="{}",
+        nullable=False,
+    )
 
     knowledge_base: Mapped[KnowledgeBase] = relationship(
         back_populates="documents",

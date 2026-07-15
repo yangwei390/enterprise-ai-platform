@@ -10,6 +10,7 @@ from backend.app.exceptions import BusinessException
 from backend.app.indexing import DocumentIndexSynchronizer
 from backend.app.parsers import ParserFactory
 from backend.app.pipeline.base import PipelineContext, PipelineStep
+from backend.app.pipeline.document_identity import DocumentIdentityAnalyzer
 from backend.app.vectorstores import VectorRecord, VectorStoreFactory
 
 
@@ -47,6 +48,25 @@ class CleanerStep(PipelineStep):
         return context
 
 
+class DocumentIdentityStep(PipelineStep):
+    def run(self, context: PipelineContext) -> PipelineContext:
+        if context.parse_result is None or context.clean_result is None:
+            raise BusinessException(41003, "文档解析失败")
+
+        document = context.document
+        filename = (
+            getattr(document, "original_filename", None)
+            or getattr(document, "filename", None)
+        )
+        identity = DocumentIdentityAnalyzer().analyze(
+            parse_result=context.parse_result,
+            cleaned_text=context.clean_result.text,
+            filename=filename,
+        )
+        context.metadata["document_identity"] = identity.model_dump()
+        return context
+
+
 class ChunkStep(PipelineStep):
     def run(self, context: PipelineContext) -> PipelineContext:
         if context.clean_result is None:
@@ -71,6 +91,7 @@ class ChunkStep(PipelineStep):
             chunk_metadata = self._build_advanced_chunk_metadata(
                 text=context.clean_result.text,
                 base_metadata=base_metadata,
+                parser_elements=context.parse_result.elements if context.parse_result else [],
             )
             strategy = chunk_metadata["chunk_strategy_actual"]
             chunker = ChunkerFactory.get_chunker(suffix, strategy=strategy)
@@ -118,10 +139,18 @@ class ChunkStep(PipelineStep):
             }
         return context
 
-    def _build_advanced_chunk_metadata(self, *, text: str, base_metadata: dict) -> dict:
+    def _build_advanced_chunk_metadata(
+        self,
+        *,
+        text: str,
+        base_metadata: dict,
+        parser_elements: list | None = None,
+    ) -> dict:
+        parser_structure_metadata = _parser_structure_metadata(parser_elements or [])
         if not settings.DOCUMENT_CLASSIFICATION_ENABLED:
             return {
                 **base_metadata,
+                **parser_structure_metadata,
                 "document_type": "plain_text",
                 "chunk_strategy_requested": settings.CHUNK_STRATEGY,
                 "chunk_strategy_actual": "fixed",
@@ -141,11 +170,19 @@ class ChunkStep(PipelineStep):
             "max_depth": 0,
             "parse_failed": False,
         }
-        if settings.DOCUMENT_STRUCTURE_ENABLED:
+        should_parse_structure = settings.DOCUMENT_STRUCTURE_ENABLED and (
+            not parser_structure_metadata
+            or classification.document_type in {"legal", "markdown"}
+        )
+        if should_parse_structure:
             try:
                 structure = StructureParserFactory.parse(
                     text,
-                    {**base_metadata, "document_type": classification.document_type},
+                    {
+                        **base_metadata,
+                        **parser_structure_metadata,
+                        "document_type": classification.document_type,
+                    },
                     classification.document_type,
                 )
                 structure_metadata = {
@@ -165,13 +202,23 @@ class ChunkStep(PipelineStep):
                     "parse_failed": True,
                     "error": str(exc),
                 }
+        elif parser_structure_metadata:
+            structure_metadata = {
+                **structure_metadata,
+                "parser": "ParserElements",
+                "node_count": parser_structure_metadata["parser_element_count"],
+                "max_depth": 1,
+                "parse_failed": False,
+                "structure_source": "parser_elements",
+            }
         decision = ChunkStrategyRouter().route(
             document_type=structure.document_type if structure else classification.document_type,
             structure=structure,
-            metadata=base_metadata,
+            metadata={**base_metadata, **parser_structure_metadata},
         )
         return {
             **base_metadata,
+            **parser_structure_metadata,
             "document_type": structure.document_type if structure else classification.document_type,
             "document_classification": classification.model_dump(),
             "document_structure": structure_metadata,
@@ -181,8 +228,10 @@ class ChunkStep(PipelineStep):
 
     def _clean_internal_metadata(self, chunk_result) -> None:
         chunk_result.metadata.pop("_document_structure", None)
+        chunk_result.metadata.pop("_parser_elements", None)
         for chunk in chunk_result.chunks:
             chunk.metadata.pop("_document_structure", None)
+            chunk.metadata.pop("_parser_elements", None)
 
 
 class EmbeddingStep(PipelineStep):
@@ -265,6 +314,7 @@ class DocumentPipeline:
         self.steps: list[PipelineStep] = [
             ParserStep(),
             CleanerStep(),
+            DocumentIdentityStep(),
             ChunkStep(),
             EmbeddingStep(),
             VectorStoreStep(),
@@ -277,3 +327,18 @@ class DocumentPipeline:
             context = step.run(context)
 
         return context
+
+
+def _parser_structure_metadata(parser_elements: list) -> dict:
+    elements = [
+        element
+        for element in parser_elements
+        if getattr(element, "content", "").strip()
+    ]
+    if not elements:
+        return {}
+    return {
+        "_parser_elements": elements,
+        "parser_element_count": len(elements),
+        "structure_source": "parser_elements",
+    }

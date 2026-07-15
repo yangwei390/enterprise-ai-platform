@@ -1,10 +1,14 @@
 from dataclasses import dataclass, field
 
 from backend.app.context import ContextChunk
+from backend.app.query import QueryRewriteResult
 from backend.app.rerankers import RerankedChunk
 from backend.app.retrievers.base import RetrievedChunk
+from backend.app.retrievers.document_router import RoutingResult
 from backend.app.retrievers.metadata_filter import AutoMetadataFilterResult
 from backend.app.retrievers.planning import RetrievalPlan
+from backend.app.retrievers.query_understanding import QueryUnderstandingResult
+from backend.app.retrievers.strategy import RetrievalStrategy
 
 
 @dataclass
@@ -26,6 +30,10 @@ class RetrieverPipelineContext:
     errors: list[dict] = field(default_factory=list)
     auto_filter_result: AutoMetadataFilterResult | None = None
     retrieval_plan: RetrievalPlan | None = None
+    query_understanding: QueryUnderstandingResult | None = None
+    query_rewrite_result: QueryRewriteResult | None = None
+    routing_result: RoutingResult | None = None
+    retrieval_strategy: RetrievalStrategy | None = None
 
     @property
     def active_query(self) -> str:

@@ -106,6 +106,14 @@ class RetrievalPlanner:
                     constraint.model_copy(update={"rejected_reason": "invalid_operator"})
                 )
                 continue
+            if constraint.operator == "range":
+                if not self._value_matches_range(constraint.value):
+                    rejected.append(
+                        constraint.model_copy(update={"rejected_reason": "type_mismatch"})
+                    )
+                    continue
+                accepted.append(constraint.model_copy(update={"applied": True}))
+                continue
             if not self._value_matches_type(constraint.value, definition.value_type):
                 rejected.append(
                     constraint.model_copy(update={"rejected_reason": "type_mismatch"})
@@ -125,6 +133,15 @@ class RetrievalPlanner:
             return isinstance(value, list) and all(isinstance(item, str) for item in value)
         if value_type == "list":
             return isinstance(value, str | list)
+        return False
+
+    def _value_matches_range(self, value) -> bool:
+        if isinstance(value, dict):
+            lower = value.get("gte", value.get("min"))
+            upper = value.get("lte", value.get("max"))
+            return all(item is None or isinstance(item, int | float) for item in (lower, upper))
+        if isinstance(value, list | tuple) and len(value) == 2:
+            return all(item is None or isinstance(item, int | float) for item in value)
         return False
 
     def _strategy(self, value: str) -> RetrievalStrategy:

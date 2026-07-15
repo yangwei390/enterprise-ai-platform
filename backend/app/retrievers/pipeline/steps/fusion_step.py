@@ -9,7 +9,7 @@ from backend.app.retrievers.pipeline.context import RetrieverPipelineContext
 class FusionStep(BaseRetrieverStep):
     sparse_intent_patterns = (
         re.compile(r"第[0-9一二三四五六七八九十百千万几]+[章节条]"),
-        re.compile(r"(章节|条款|法律|法规|劳动法)"),
+        re.compile(r"(章节|条款|法律|法规)"),
     )
 
     def run(self, context: RetrieverPipelineContext) -> RetrieverPipelineContext:

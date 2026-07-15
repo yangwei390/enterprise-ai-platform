@@ -2,7 +2,7 @@ from typing import Any
 
 from backend.app.retrievers.planning.constraint_registry import ConstraintRegistry
 from backend.app.retrievers.planning.schemas import RetrievalConstraint
-from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchText, MatchValue, Range
 
 
 class ConstraintEngine:
@@ -43,8 +43,16 @@ class ConstraintEngine:
                 must.append(FieldCondition(key=key, match=MatchAny(any=values)))
             elif constraint.operator == "contains":
                 must.append(
-                    FieldCondition(key=key, match=MatchValue(value=constraint.value))
+                    FieldCondition(key=key, match=MatchText(text=str(constraint.value)))
                 )
+            elif constraint.operator == "prefix":
+                must.append(
+                    FieldCondition(key=key, match=MatchText(text=str(constraint.value)))
+                )
+            elif constraint.operator == "range":
+                range_filter = self._range_filter(constraint.value)
+                if range_filter is not None:
+                    must.append(FieldCondition(key=key, range=range_filter))
         if not must:
             return None
         return Filter(must=must)
@@ -106,8 +114,42 @@ class ConstraintEngine:
             return actual in values
         if operator == "contains":
             if isinstance(actual, list):
-                return expected in actual
+                return any(str(expected) in str(item) for item in actual)
             if isinstance(actual, str):
                 return str(expected) in actual
             return False
+        if operator == "prefix":
+            if isinstance(actual, list):
+                return any(str(item).startswith(str(expected)) for item in actual)
+            if isinstance(actual, str):
+                return actual.startswith(str(expected))
+            return False
+        if operator == "range":
+            bounds = self._range_bounds(expected)
+            if bounds is None:
+                return False
+            if not isinstance(actual, int | float):
+                return False
+            lower, upper = bounds
+            if lower is not None and actual < lower:
+                return False
+            if upper is not None and actual > upper:
+                return False
+            return True
         return False
+
+    def _range_filter(self, value: Any) -> Range | None:
+        bounds = self._range_bounds(value)
+        if bounds is None:
+            return None
+        lower, upper = bounds
+        return Range(gte=lower, lte=upper)
+
+    def _range_bounds(self, value: Any) -> tuple[float | None, float | None] | None:
+        if isinstance(value, dict):
+            lower = value.get("gte", value.get("min"))
+            upper = value.get("lte", value.get("max"))
+            return lower, upper
+        if isinstance(value, list | tuple) and len(value) == 2:
+            return value[0], value[1]
+        return None

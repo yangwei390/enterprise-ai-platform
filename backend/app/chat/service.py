@@ -1,5 +1,5 @@
 from backend.app.chat.base import ChatRequest, ChatResponse, ChatSource, CitationItem
-from backend.app.context import ContextBuilderFactory, ContextBuildRequest
+from backend.app.context import BasicContextBuilder, ContextBuildRequest
 from backend.app.context_compression import (
     CompressionInput,
     CompressionResult,
@@ -127,7 +127,7 @@ class ChatService:
             )
         )
 
-        context_builder = ContextBuilderFactory.get_builder()
+        context_builder = BasicContextBuilder()
         context_result = context_builder.build(
             ContextBuildRequest(
                 query=rewrite_result.rewritten_query,

@@ -1,4 +1,4 @@
-from backend.app.context import ContextBuilderFactory, ContextBuildRequest
+from backend.app.context import BasicContextBuilder, ContextBuildRequest
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.prompts import PromptBuilderFactory, PromptBuildRequest
 from backend.app.rerankers import RerankerFactory, RerankQuery
@@ -55,7 +55,7 @@ def search(request: RetrieveRequest) -> ApiResponse:
             top_k=request.top_k,
         )
     )
-    context_builder = ContextBuilderFactory.get_builder()
+    context_builder = BasicContextBuilder()
     context_result = context_builder.build(
         ContextBuildRequest(
             query=request.query,

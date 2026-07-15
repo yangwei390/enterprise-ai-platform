@@ -1,4 +1,5 @@
 from backend.app.chunkers.base import BaseChunker, Chunk, ChunkResult
+from backend.app.chunkers.element_aware import ElementAwareChunker
 from backend.app.chunkers.recursive import RecursiveChunker
 from backend.app.config.settings import settings
 from backend.app.documents.metadata import ChunkMetadataBuilder
@@ -9,6 +10,9 @@ class ParentChildChunker(BaseChunker):
 
     def chunk(self, text: str, metadata: dict | None = None) -> ChunkResult:
         source_metadata = metadata or {}
+        if source_metadata.get("_parser_elements"):
+            return ElementAwareChunker().chunk(text, source_metadata)
+
         builder = ChunkMetadataBuilder()
         parent_uid = builder.build_chunk_uid(
             document_id=source_metadata.get("document_id"),

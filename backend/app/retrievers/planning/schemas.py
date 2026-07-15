@@ -2,8 +2,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-RetrievalOperator = Literal["eq", "in", "contains"]
-RetrievalIntent = Literal["semantic", "lexical", "hybrid", "structured", "complex"]
+RetrievalOperator = Literal["eq", "in", "contains", "prefix", "range"]
+RetrievalIntent = Literal[
+    "semantic",
+    "lexical",
+    "hybrid",
+    "structured",
+    "complex",
+    "factual",
+    "summary",
+    "comparison",
+    "multi_document",
+    "open_query",
+]
 RetrievalStrategy = Literal["dense", "sparse", "hybrid", "structured_hybrid"]
 
 
@@ -13,6 +24,7 @@ class RetrievalConstraint(BaseModel):
     value: Any
     confidence: float = 1.0
     source: str = "rule"
+    source_detail: str | None = None
     applied: bool = False
     rejected_reason: str | None = None
 
