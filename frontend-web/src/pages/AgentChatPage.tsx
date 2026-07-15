@@ -8,6 +8,7 @@ import MarkdownMessage from "../components/MarkdownMessage";
 import MessageComposer from "../components/MessageComposer";
 import PageHeader from "../components/PageHeader";
 import { useToast } from "../components/Toast";
+import { DEFAULT_KNOWLEDGE_BASE_ID } from "../config/defaults";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import type { AgentAssistant } from "../types/agent";
 import type { CitationView } from "../types/citation";
@@ -22,7 +23,7 @@ export default function AgentChatPage() {
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<UiChatMessage[]>([]);
   const [query, setQuery] = useState("");
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState("4");
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState(DEFAULT_KNOWLEDGE_BASE_ID);
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [agentStatus, setAgentStatus] = useState("");

@@ -13,6 +13,7 @@ import MarkdownMessage from "../components/MarkdownMessage";
 import MessageComposer from "../components/MessageComposer";
 import PageHeader from "../components/PageHeader";
 import { useToast } from "../components/Toast";
+import { DEFAULT_KNOWLEDGE_BASE_ID } from "../config/defaults";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import type { CitationView } from "../types/citation";
 import type {
@@ -59,7 +60,7 @@ export default function ChatPage() {
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<UiChatMessage[]>([]);
   const [query, setQuery] = useState("");
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState("4");
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState(DEFAULT_KNOWLEDGE_BASE_ID);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [error, setError] = useState("");
