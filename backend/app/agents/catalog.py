@@ -32,6 +32,13 @@ class AgentCatalog:
         definition: AgentDefinition,
         enabled_tools: set[str],
     ) -> list[str]:
+        if definition.id == "knowledge_research_agent":
+            return [
+                "查询企业知识库",
+                "总结文档与章节内容",
+                "整理多文档证据",
+                "对比多个资料并保留来源引用",
+            ]
         if definition.id == "knowledge_agent":
             return [
                 "查询企业知识库",
@@ -53,7 +60,11 @@ class AgentCatalog:
         return capabilities
 
     def _recommended_agent_id(self, enabled_tools: set[str]) -> str:
-        return "knowledge_agent" if "knowledge_search" in enabled_tools else "general_agent"
+        return (
+            "knowledge_research_agent"
+            if "knowledge_search" in enabled_tools
+            else "general_agent"
+        )
 
     def _public_metadata(self, definition: AgentDefinition, registry_version: int) -> dict:
         return {

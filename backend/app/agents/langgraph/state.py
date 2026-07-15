@@ -79,6 +79,15 @@ def create_initial_state(
                 "available_tool_count": 0,
                 "registry_version": 0,
             },
+            "tool_scope": {
+                "allowed_tools": metadata.get("tool_allowlist", []),
+                "visible_tools": [],
+                "selected_tools": [],
+                "blocked_tools": [],
+                "tool_permission_result": None,
+                "tool_permission_reason": None,
+                "tool_scope_source": "agent_definition",
+            },
             "reflection": {
                 "enabled": True,
                 "triggered": False,

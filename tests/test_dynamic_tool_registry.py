@@ -2,6 +2,10 @@ import json
 from pathlib import Path
 
 import pytest
+from backend.app.agents.definition import (
+    get_agent_definition_registry,
+    reset_agent_definition_registry,
+)
 from backend.app.agents.langgraph.graph import build_agent_graph
 from backend.app.agents.langgraph.nodes import ToolNode
 from backend.app.agents.langgraph.planner import LLMPlanner
@@ -81,6 +85,13 @@ class FakeDirectLLM:
                 "metadata": {},
             },
         )()
+
+
+@pytest.fixture(autouse=True)
+def reset_agent_definitions():
+    reset_agent_definition_registry()
+    yield
+    reset_agent_definition_registry()
 
 
 def test_registry_register_and_get_tool():
@@ -382,6 +393,11 @@ def test_existing_builtin_tools_still_work():
 def test_langgraph_agent_selects_dynamic_tool(monkeypatch):
     registry = ToolRegistry()
     registry.register(DynamicTestTool())
+    definition_registry = get_agent_definition_registry()
+    current = definition_registry.get("general_agent")
+    definition_registry.register(
+        current.model_copy(update={"id": "dynamic_test_agent", "tool_allowlist": ["dynamic_test"]})
+    )
     monkeypatch.setattr(
         "backend.app.agents.langgraph.planner.get_tool_registry",
         lambda: registry,
@@ -402,7 +418,7 @@ def test_langgraph_agent_selects_dynamic_tool(monkeypatch):
     graph_app = build_agent_graph(tool_node=ToolNode(tool_executor=ToolExecutor(registry=registry)))
 
     result = LangGraphAgentRuntime(graph_app=graph_app).run(
-        AgentRuntimeRequest(query="use dynamic")
+        AgentRuntimeRequest(query="use dynamic", agent_id="dynamic_test_agent")
     )
 
     assert result.tool_calls[0]["name"] == "dynamic_test"

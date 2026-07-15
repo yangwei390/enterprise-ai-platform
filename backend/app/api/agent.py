@@ -183,6 +183,18 @@ async def _stream_agent_events(
                 "citations": citations,
                 "sources": sources,
                 "status": "completed",
+                "trace_id": final_result.metadata.get("trace_id"),
+                "runtime": final_result.metadata.get("runtime"),
+                "agent_id": final_result.metadata.get("agent_id") or request.agent_id,
+                "grounded_answer": final_result.metadata.get("grounded_answer"),
+                "source_count": final_result.metadata.get("source_count"),
+                "duration_ms": (
+                    final_result.metadata.get("agent_trace", {})
+                    .get("timing", {})
+                    .get("total_duration_ms")
+                )
+                if isinstance(final_result.metadata.get("agent_trace"), dict)
+                else None,
             },
         )
     except asyncio.CancelledError:

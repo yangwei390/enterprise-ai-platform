@@ -8,6 +8,7 @@ import {
 } from "../api/debug";
 import type {
   AgentChatResponseData,
+  AgentTraceResult,
   AgentTraceStep,
   CacheDebugSnapshot,
   CheckpointsDebugSnapshot,
@@ -154,6 +155,11 @@ function normalizeTrace(result: AgentChatResponseData | null): AgentTraceStep[] 
   return result?.trace ?? [];
 }
 
+function unifiedTrace(result: AgentChatResponseData | null): AgentTraceResult | null {
+  const value = result?.metadata.agent_trace;
+  return isRecord(value) ? (value as AgentTraceResult) : null;
+}
+
 function toolItemFromTrace(step: AgentTraceStep, index: number): ToolTimelineItem | null {
   const toolName = traceToolName(step);
   const action = firstString(step.action, step.step, step.name);
@@ -264,6 +270,7 @@ export default function AgentPage() {
   });
 
   const trace = useMemo(() => normalizeTrace(result), [result]);
+  const agentTrace = useMemo(() => unifiedTrace(result), [result]);
   const agentState = useMemo(() => buildAgentState(result), [result]);
   const toolTimeline = useMemo(() => buildToolTimeline(result), [result]);
 
@@ -363,6 +370,7 @@ export default function AgentPage() {
               <p className="answer">{result.answer}</p>
               <p className="muted">
                 action: {result.action} · trace steps: {trace.length} · tools: {toolTimeline.length}
+                {agentTrace?.trace_id ? ` · trace_id: ${agentTrace.trace_id}` : ""}
               </p>
             </>
           ) : (
@@ -372,6 +380,45 @@ export default function AgentPage() {
       </div>
 
       <div className="studio-panels">
+        <section className="card">
+          <div className="section-header">
+            <h3>Unified Trace Contract</h3>
+            <span className="muted">{agentTrace?.runtime ?? "-"}</span>
+          </div>
+          {agentTrace ? (
+            <>
+              <div className="state-grid compact-grid">
+                <div className="metric-card"><span>trace_id</span><strong>{agentTrace.trace_id ?? "-"}</strong></div>
+                <div className="metric-card"><span>agent</span><strong>{agentTrace.agent_id ?? "-"}</strong></div>
+                <div className="metric-card"><span>grounded</span><strong>{String(agentTrace.evidence?.grounded_answer ?? "-")}</strong></div>
+                <div className="metric-card"><span>errors</span><strong>{String(agentTrace.errors?.length ?? 0)}</strong></div>
+              </div>
+              <details open>
+                <summary>AgentDefinition / Planner</summary>
+                <JsonBlock value={{ agent_definition: agentTrace.agent_definition, planner: agentTrace.planner, plan_steps: agentTrace.plan_steps }} />
+              </details>
+              <details>
+                <summary>Tool Scope / Tool Calls</summary>
+                <JsonBlock value={{ tool_scope: agentTrace.tool_scope, tool_calls: agentTrace.tool_calls }} />
+              </details>
+              <details>
+                <summary>RAG / Evidence</summary>
+                <JsonBlock value={{ retrieval: agentTrace.retrieval, evidence: agentTrace.evidence }} />
+              </details>
+              <details>
+                <summary>Memory / Checkpoint</summary>
+                <JsonBlock value={{ memory: agentTrace.memory, checkpoint: agentTrace.checkpoint }} />
+              </details>
+              <details>
+                <summary>Final / Errors / Timing / Tokens</summary>
+                <JsonBlock value={{ final_answer: agentTrace.final_answer, errors: agentTrace.errors, timing: agentTrace.timing, token_usage: agentTrace.token_usage }} />
+              </details>
+            </>
+          ) : (
+            <EmptyState text="Unified trace contract is empty until an Agent run completes." />
+          )}
+        </section>
+
         <section className="card">
           <div className="section-header">
             <h3>Agent Trace</h3>

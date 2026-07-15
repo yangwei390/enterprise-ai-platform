@@ -27,3 +27,25 @@ class AgentTraceStep(BaseModel):
     tool_call_count: int | None = None
     reflection_count: int | None = None
     budget_remaining: dict = Field(default_factory=dict)
+
+
+class AgentTraceResult(BaseModel):
+    trace_id: str | None = None
+    runtime: str = "langgraph_v2"
+    agent_id: str | None = None
+    agent_definition: dict = Field(default_factory=dict)
+    planner: dict = Field(default_factory=dict)
+    plan_steps: list[dict] = Field(default_factory=list)
+    graph_nodes: list[dict] = Field(default_factory=list)
+    tool_scope: dict = Field(default_factory=dict)
+    tool_calls: list[dict] = Field(default_factory=list)
+    retrieval: dict = Field(default_factory=dict)
+    evidence: dict = Field(default_factory=dict)
+    memory: dict = Field(default_factory=dict)
+    checkpoint: dict = Field(default_factory=dict)
+    reflection: dict = Field(default_factory=dict)
+    final_answer: dict = Field(default_factory=dict)
+    errors: list[dict] = Field(default_factory=list)
+    timing: dict = Field(default_factory=dict)
+    token_usage: dict = Field(default_factory=dict)
+    metadata: dict = Field(default_factory=dict)

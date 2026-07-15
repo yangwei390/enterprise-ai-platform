@@ -5,6 +5,12 @@ from inspect import isawaitable
 from time import perf_counter
 from typing import cast
 
+from backend.app.agents.evidence import (
+    NO_EVIDENCE_ANSWER,
+    build_evidence_metadata,
+    has_evidence,
+    requires_evidence,
+)
 from backend.app.agents.final_answer import (
     build_final_answer_request,
     collect_streaming_answer,
@@ -22,8 +28,15 @@ from backend.app.agents.langgraph.tool_calling import (
     assistant_tool_calls_payload,
     get_planner_strategy,
 )
+from backend.app.agents.tool_scope import (
+    build_tool_scope,
+    check_tool_permission,
+    tool_scope_trace,
+)
 from backend.app.config.settings import settings
 from backend.app.tools import ToolCall, ToolExecutor, ToolResult
+from backend.app.tools.registry import ToolDisabledError
+from pydantic import ValidationError
 
 
 class PlannerNode:
@@ -110,6 +123,18 @@ class ToolNode:
 
         executable_calls: list[AgentToolCall] = []
         for tool_call in pending:
+            permission_result = self._check_permission(state, tool_call)
+            if permission_result is not None:
+                self._record_result(state, tool_call, permission_result, started_at)
+                state["current_action"] = "reflect"
+                continue
+
+            validation_result = self._validate_arguments(tool_call)
+            if validation_result is not None:
+                self._record_result(state, tool_call, validation_result, started_at)
+                state["current_action"] = "reflect"
+                continue
+
             repeat_error = _update_repeat_guard(state, tool_call)
             if repeat_error:
                 state.setdefault("tool_results", []).append(
@@ -149,6 +174,91 @@ class ToolNode:
     def __call__(self, state: AgentState) -> AgentState:
         return asyncio.run(self.acall(state))
 
+    def _check_permission(
+        self,
+        state: AgentState,
+        tool_call: AgentToolCall,
+    ) -> ToolResult | None:
+        scope = build_tool_scope(state.get("metadata", {}))
+        decision = check_tool_permission(
+            tool_name=tool_call.tool_name,
+            arguments=tool_call.arguments,
+            scope=scope,
+        )
+        state["metadata"].setdefault("tool_scope", {}).update(
+            tool_scope_trace(
+                scope=scope,
+                visible_tools=list(scope.allowed_tools),
+                selected_tools=[tool_call.tool_name],
+                blocked_tools=[] if decision.allowed else [tool_call.tool_name],
+                permission_result=decision.status,
+                permission_reason=decision.reason,
+            )
+        )
+        if decision.allowed:
+            return None
+        return ToolResult(
+            name=tool_call.tool_name,
+            success=False,
+            error=decision.reason or "tool_not_allowed",
+            metadata={
+                "error_type": "tool_permission_error",
+                **decision.metadata(scope),
+            },
+        )
+
+    def _validate_arguments(self, tool_call: AgentToolCall) -> ToolResult | None:
+        registry = getattr(self.tool_executor, "registry", None)
+        if registry is None:
+            return None
+        try:
+            tool = registry.get_tool(
+                tool_call.tool_name,
+                require_enabled=True,
+            )
+        except ToolDisabledError as exc:
+            return ToolResult(
+                name=tool_call.tool_name,
+                success=False,
+                error=str(exc),
+                metadata={
+                    "status": "blocked",
+                    "reason": "tool_disabled",
+                    "error_type": "tool_permission_error",
+                    "tool_permission_result": "blocked",
+                    "tool_permission_reason": "tool_disabled",
+                },
+            )
+        if tool is None:
+            return ToolResult(
+                name=tool_call.tool_name,
+                success=False,
+                error="tool not found",
+                metadata={
+                    "status": "blocked",
+                    "reason": "tool_not_found",
+                    "error_type": "tool_permission_error",
+                    "tool_permission_result": "blocked",
+                    "tool_permission_reason": "tool_not_found",
+                },
+            )
+        try:
+            tool.args_schema.model_validate(tool_call.arguments)
+        except ValidationError as exc:
+            return ToolResult(
+                name=tool_call.tool_name,
+                success=False,
+                error=str(exc),
+                metadata={
+                    "status": "validation_failed",
+                    "reason": "invalid_tool_arguments",
+                    "error_type": "tool_validation_error",
+                    "tool_permission_result": "allowed",
+                    "tool_permission_reason": None,
+                },
+            )
+        return None
+
     async def _execute_tool(
         self,
         state: AgentState,
@@ -187,7 +297,10 @@ class ToolNode:
                 "name": tool_call.tool_name,
                 "arguments": tool_call.arguments,
                 "index": tool_call.index,
-                "status": "success" if result.success else "failed",
+                "status": str(
+                    result.metadata.get("status")
+                    or ("success" if result.success else "failed")
+                ),
                 "duration_ms": result.metadata.get("duration_ms"),
             }
         )
@@ -195,6 +308,9 @@ class ToolNode:
             "tool_call_id": tool_call.id,
             "tool_name": tool_call.tool_name,
             "arguments_hash": _arguments_hash(tool_call.arguments),
+            "status": str(
+                result.metadata.get("status") or ("success" if result.success else "failed")
+            ),
             "success": result.success,
             "result": result.result,
             "error": result.error,
@@ -203,6 +319,7 @@ class ToolNode:
         state.setdefault("tool_results", []).append(result_dump)
         if tool_call.tool_name == "knowledge_search" and isinstance(result.result, dict):
             state["knowledge"] = result.result
+            _update_knowledge_metadata(state, result.result)
         event = "tool_completed" if result.success else "tool_failed"
         _append_trace(
             state,
@@ -353,6 +470,18 @@ class FinalNode:
 
     async def _stream_answer(self, state: AgentState) -> str:
         queue = state.get("metadata", {}).get("_agent_stream_event_queue")
+        if _requires_evidence(state) and not has_evidence(
+            state.get("knowledge") if isinstance(state.get("knowledge"), dict) else None
+        ):
+            if queue is not None:
+                await queue.put(
+                    {"event": "answer_delta", "data": {"delta": NO_EVIDENCE_ANSWER}}
+                )
+            state["metadata"]["_agent_stream_answer_done"] = True
+            state["metadata"]["answer_stream_delta_count"] = (
+                state["metadata"].get("answer_stream_delta_count", 0) + 1
+            )
+            return NO_EVIDENCE_ANSWER
         delta_count = 0
         request = build_final_answer_request(
             query=state["query"],
@@ -377,6 +506,10 @@ class FinalNode:
 
     def _build_answer(self, state: AgentState) -> str:
         knowledge = state.get("knowledge")
+        if _requires_evidence(state) and not has_evidence(
+            knowledge if isinstance(knowledge, dict) else None
+        ):
+            return NO_EVIDENCE_ANSWER
         if isinstance(knowledge, dict) and knowledge.get("answer"):
             return str(knowledge["answer"])
         observations = state.get("observations", [])
@@ -491,6 +624,7 @@ def _update_repeat_guard(state: AgentState, tool_call: AgentToolCall) -> str | N
 
 def _update_planner_metadata(state: AgentState, metadata: dict) -> None:
     tool_registry = metadata.get("tool_registry", {})
+    tool_scope = metadata.get("tool_scope", {})
     state["metadata"].setdefault("agent_loop", {})["planner_strategy"] = metadata.get(
         "actual_strategy",
         state.get("metadata", {}).get("planner_strategy", settings.AGENT_PLANNER_STRATEGY),
@@ -508,6 +642,19 @@ def _update_planner_metadata(state: AgentState, metadata: dict) -> None:
         }
     )
     state["metadata"]["tool_registry"] = tool_registry
+    if isinstance(tool_scope, dict):
+        state["metadata"].setdefault("tool_scope", {}).update(tool_scope)
+
+
+def _update_knowledge_metadata(state: AgentState, knowledge: dict) -> None:
+    metadata = state.setdefault("metadata", {})
+    metadata.update(
+        build_evidence_metadata(
+            knowledge=knowledge,
+            knowledge_base_id=state.get("knowledge_base_id"),
+            retrieval_required=bool(metadata.get("retrieval_required")),
+        )
+    )
 
 
 def _update_loop_metadata(state: AgentState, started_at: float) -> None:
@@ -581,3 +728,7 @@ def _sanitize_metadata(metadata: dict) -> dict:
         for key, value in metadata.items()
         if not any(token in key.lower() for token in ["key", "token", "secret", "password"])
     }
+
+
+def _requires_evidence(state: AgentState) -> bool:
+    return requires_evidence(state.get("metadata", {}).get("retrieval_policy", {}))

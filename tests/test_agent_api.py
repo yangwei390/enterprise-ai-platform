@@ -60,7 +60,34 @@ class FakeStreamingAgentRuntime:
                     action="direct_answer",
                     sources=[{"source": "source.pdf"}],
                     citations=[{"source": "source.pdf"}],
-                    metadata={"answer_stream_delta_count": 2},
+                    metadata={
+                        "answer_stream_delta_count": 2,
+                        "trace_id": "trace-stream-1",
+                        "runtime": "langgraph_v2",
+                        "agent_id": request.agent_id,
+                        "grounded_answer": True,
+                        "source_count": 1,
+                        "agent_trace": {"timing": {"total_duration_ms": 12.5}},
+                    },
+                ).model_dump()
+            },
+        }
+
+
+class FakeNoEvidenceStreamingAgentRuntime:
+    async def astream_events(self, request):
+        yield {"event": "status", "data": {"status": "answering", "message": "正在整理答案"}}
+        yield {
+            "event": "result",
+            "data": {
+                "result": AgentRuntimeResult(
+                    answer="无法基于当前知识库证据回答该问题。",
+                    action="direct_answer",
+                    metadata={
+                        "runtime": "langgraph_v2",
+                        "no_evidence": True,
+                        "grounded_answer": False,
+                    },
                 ).model_dump()
             },
         }
@@ -264,6 +291,12 @@ def test_agent_stream_api_returns_multiple_answer_deltas(monkeypatch):
     assert deltas == ["流式", "回答"]
     assert "".join(deltas) == "流式回答"
     assert completed["data"]["answer"] == "流式回答"
+    assert completed["data"]["trace_id"] == "trace-stream-1"
+    assert completed["data"]["runtime"] == "langgraph_v2"
+    assert completed["data"]["agent_id"] == "general_agent"
+    assert completed["data"]["grounded_answer"] is True
+    assert completed["data"]["source_count"] == 1
+    assert completed["data"]["duration_ms"] == 12.5
     assert service.assistant_messages[0].content == "流式回答"
     assert service.assistant_messages[0].message_metadata["citations"] == [{"source": "source.pdf"}]
 
@@ -305,3 +338,37 @@ def test_agent_stream_api_enters_langgraph_runtime(monkeypatch):
     assert isinstance(called["runtime"], LangGraphAgentRuntime)
     assert called["request"].query == "你好"
     assert called["request"].agent_id == "general_agent"
+
+
+def test_agent_stream_api_no_evidence_completes_without_error(monkeypatch):
+    service = FakeConversationService()
+    monkeypatch.setattr(
+        "backend.app.api.agent.AgentRuntimeFactory.get_runtime",
+        lambda: FakeNoEvidenceStreamingAgentRuntime(),
+    )
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_conversation_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/agent/chat/stream",
+        json={"agent_id": "knowledge_research_agent", "query": "summarize missing material"},
+    )
+    events = _parse_sse_events(response.text)
+
+    event_names = [event["event"] for event in events]
+    answer_deltas = [
+        event["data"]["delta"]
+        for event in events
+        if event["event"] == "answer_delta"
+    ]
+    completed = next(event for event in events if event["event"] == "completed")
+
+    assert response.status_code == 200
+    assert "message_start" in event_names
+    assert "status" in event_names
+    assert "error" not in event_names
+    assert answer_deltas == ["无法基于当前知识库证据回答该问题。"]
+    assert completed["data"]["status"] == "completed"
+    assert completed["data"]["answer"] == "无法基于当前知识库证据回答该问题。"

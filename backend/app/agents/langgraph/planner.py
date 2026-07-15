@@ -26,6 +26,8 @@ class LLMPlanner:
         knowledge_base_id: int | None = None,
         conversation_id: int | None = None,
         memory_context: str | None = None,
+        tool_allowlist: list[str] | None = None,
+        tool_scope_source: str | None = None,
     ) -> AgentPlan:
         return await asyncio.to_thread(
             self.plan,
@@ -33,6 +35,8 @@ class LLMPlanner:
             knowledge_base_id=knowledge_base_id,
             conversation_id=conversation_id,
             memory_context=memory_context,
+            tool_allowlist=tool_allowlist,
+            tool_scope_source=tool_scope_source,
         )
 
     def plan(
@@ -42,9 +46,16 @@ class LLMPlanner:
         knowledge_base_id: int | None = None,
         conversation_id: int | None = None,
         memory_context: str | None = None,
+        tool_allowlist: list[str] | None = None,
+        tool_scope_source: str | None = None,
     ) -> AgentPlan:
         registry = get_tool_registry()
-        tool_descriptors = registry.list_descriptors(enabled_only=True)
+        allowed_names = set(tool_allowlist) if tool_allowlist is not None else None
+        tool_descriptors = [
+            descriptor
+            for descriptor in registry.list_descriptors(enabled_only=True)
+            if allowed_names is None or descriptor.name in allowed_names
+        ]
         tool_schemas = [descriptor.to_llm_schema() for descriptor in tool_descriptors]
         if not tool_descriptors:
             return AgentPlan(
@@ -57,6 +68,7 @@ class LLMPlanner:
                         "rejected_tools": [],
                         "registry_version": registry.version,
                         "refreshed_at": registry.last_refresh,
+                        "tool_scope_source": tool_scope_source,
                     }
                 },
             )
@@ -101,6 +113,7 @@ class LLMPlanner:
             knowledge_base_id=knowledge_base_id,
             conversation_id=conversation_id,
             memory_context=memory_context,
+            tool_scope_source=tool_scope_source,
         )
 
     def _parse_plan(self, content: str) -> dict[str, Any]:
@@ -123,6 +136,7 @@ class LLMPlanner:
         knowledge_base_id: int | None,
         conversation_id: int | None,
         memory_context: str | None,
+        tool_scope_source: str | None = None,
     ) -> AgentPlan:
         registry = get_tool_registry()
         descriptors = tool_descriptors or {
@@ -175,6 +189,7 @@ class LLMPlanner:
             if registry_version is not None
             else registry.version,
             "refreshed_at": refreshed_at if refreshed_at is not None else registry.last_refresh,
+            "tool_scope_source": tool_scope_source,
         }
         merged_metadata = metadata if isinstance(metadata, dict) else {}
         return AgentPlan(

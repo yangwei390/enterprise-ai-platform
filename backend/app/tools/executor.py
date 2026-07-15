@@ -90,6 +90,9 @@ class ToolExecutor:
                 success=False,
                 error=str(exc),
                 metadata={
+                    "status": "validation_failed",
+                    "reason": "invalid_tool_arguments",
+                    "error_type": "tool_validation_error",
                     "started_at": started_at.isoformat(),
                     "finished_at": finished_at.isoformat(),
                     "duration_ms": duration_ms,
@@ -104,6 +107,9 @@ class ToolExecutor:
                 success=False,
                 error=str(exc),
                 metadata={
+                    "status": "runtime_failed",
+                    "reason": "tool_runtime_error",
+                    "error_type": "tool_runtime_error",
                     "started_at": started_at.isoformat(),
                     "finished_at": finished_at.isoformat(),
                     "duration_ms": duration_ms,
@@ -123,6 +129,9 @@ class ToolExecutor:
                 success=False,
                 error=str(exc),
                 metadata={
+                    "status": "validation_failed",
+                    "reason": "invalid_tool_arguments",
+                    "error_type": "tool_validation_error",
                     "started_at": started_at.isoformat(),
                     "finished_at": finished_at.isoformat(),
                     "duration_ms": _duration_ms(started_at, finished_at),
@@ -248,6 +257,9 @@ class ToolExecutor:
                         success=False,
                         error=last_error,
                         metadata={
+                            "status": "runtime_failed",
+                            "reason": "tool_runtime_error",
+                            "error_type": "tool_runtime_error",
                             "started_at": started_at.isoformat(),
                             "finished_at": finished_at.isoformat(),
                             "duration_ms": _duration_ms(started_at, finished_at),
@@ -274,6 +286,9 @@ class ToolExecutor:
                         success=False,
                         error=last_error,
                         metadata={
+                            "status": "runtime_failed",
+                            "reason": "tool_runtime_error",
+                            "error_type": "tool_runtime_error",
                             "started_at": started_at.isoformat(),
                             "finished_at": finished_at.isoformat(),
                             "duration_ms": _duration_ms(started_at, finished_at),
@@ -293,6 +308,9 @@ class ToolExecutor:
             success=False,
             error=last_error or "tool execution failed",
             metadata={
+                "status": "runtime_failed",
+                "reason": "tool_runtime_error",
+                "error_type": "tool_runtime_error",
                 "started_at": started_at.isoformat(),
                 "finished_at": finished_at.isoformat(),
                 "duration_ms": _duration_ms(started_at, finished_at),

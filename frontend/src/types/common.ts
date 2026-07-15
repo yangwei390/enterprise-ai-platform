@@ -90,6 +90,28 @@ export type AgentTraceStep = {
   metadata?: Record<string, unknown>;
 };
 
+export type AgentTraceResult = {
+  trace_id?: string | null;
+  runtime?: string;
+  agent_id?: string | null;
+  agent_definition?: Record<string, unknown>;
+  planner?: Record<string, unknown>;
+  plan_steps?: Array<Record<string, unknown>>;
+  graph_nodes?: Array<Record<string, unknown>>;
+  tool_scope?: Record<string, unknown>;
+  tool_calls?: Array<Record<string, unknown>>;
+  retrieval?: Record<string, unknown>;
+  evidence?: Record<string, unknown>;
+  memory?: Record<string, unknown>;
+  checkpoint?: Record<string, unknown>;
+  reflection?: Record<string, unknown>;
+  final_answer?: Record<string, unknown>;
+  errors?: Array<Record<string, unknown>>;
+  timing?: Record<string, unknown>;
+  token_usage?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+};
+
 export type AgentChatResponseData = {
   answer: string;
   action: string;

@@ -150,6 +150,40 @@ def _builtin_definitions() -> list[AgentDefinition]:
             version="1.0",
             metadata={"capability_group": "knowledge"},
         ),
+        AgentDefinition(
+            id="knowledge_research_agent",
+            name="知识研究智能体",
+            description="面向知识库研究任务，基于检索证据完成问答、总结、对比和结构化结论。",
+            instructions=(
+                "你是企业知识研究智能体。必须优先使用知识库检索证据回答问题，"
+                "只基于可用证据陈述事实；需要推断时明确标注为推断；"
+                "缺少证据时明确说明无法基于当前资料回答，不得编造。"
+                "处理多文档问题时按文档组织结论并保留来源线索，"
+                "回答应结构化、简洁、可核查。"
+            ),
+            planner_strategy="json_plan",
+            tool_allowlist=["knowledge_search", "calculator"],
+            workflow_allowlist=["default_agent_workflow_v2"],
+            default_knowledge_base_id=None,
+            memory_policy={"enabled": True, "scope": "conversation", "use_for_followup": True},
+            retrieval_policy={
+                "enabled": True,
+                "required": True,
+                "mode": "research",
+                "require_evidence": True,
+            },
+            model_config=_default_model_config(temperature=0),
+            max_steps=min(settings.AGENT_MAX_STEPS, 10),
+            timeout_seconds=settings.AGENT_ASYNC_TIMEOUT_SECONDS,
+            output_mode="grounded_research_answer",
+            safety_policy={
+                "no_evidence_no_answer": True,
+                "require_citations_when_available": True,
+                "read_only_tools": True,
+            },
+            version="1.0",
+            metadata={"capability_group": "knowledge_research"},
+        ),
     ]
 
 

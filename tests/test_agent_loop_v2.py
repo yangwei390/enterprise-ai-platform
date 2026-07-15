@@ -2,6 +2,10 @@ import asyncio
 from time import perf_counter
 
 import pytest
+from backend.app.agents.definition import (
+    get_agent_definition_registry,
+    reset_agent_definition_registry,
+)
 from backend.app.agents.langgraph.graph import build_agent_graph
 from backend.app.agents.langgraph.nodes import (
     ObservationNode,
@@ -107,6 +111,13 @@ class FakeNoToolCallingLLM(FakeToolCallingLLM):
     supports_tool_calling = False
 
 
+@pytest.fixture(autouse=True)
+def reset_agent_definitions():
+    reset_agent_definition_registry()
+    yield
+    reset_agent_definition_registry()
+
+
 def _registry(*tools: BaseTool) -> ToolRegistry:
     registry = ToolRegistry()
     for tool in tools:
@@ -136,6 +147,19 @@ def _patch_registry(monkeypatch, registry: ToolRegistry) -> None:
     monkeypatch.setattr(
         "backend.app.agents.langgraph.tool_calling.get_tool_registry",
         lambda: registry,
+    )
+    definition_registry = get_agent_definition_registry()
+    current = definition_registry.get("general_agent")
+    definition_registry.register(
+        current.model_copy(
+            update={
+                "tool_allowlist": [
+                    descriptor.name
+                    for descriptor in registry.list_descriptors(enabled_only=True)
+                ],
+                "workflow_allowlist": ["default_agent_workflow_v2"],
+            }
+        )
     )
 
 

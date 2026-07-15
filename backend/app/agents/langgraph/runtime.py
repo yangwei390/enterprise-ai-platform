@@ -3,16 +3,23 @@ import hashlib
 from collections.abc import AsyncIterator
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from backend.app.agents.definition import (
     AgentDefinition,
     AgentDefinitionError,
     get_agent_definition_registry,
 )
+from backend.app.agents.evidence import (
+    NO_EVIDENCE_ANSWER,
+    build_evidence_metadata,
+    requires_evidence,
+)
 from backend.app.agents.langgraph.graph import LangGraphUnavailable, build_agent_graph
 from backend.app.agents.langgraph.state import AgentState, create_initial_state
 from backend.app.agents.state import AgentRuntimeRequest, AgentRuntimeResult
 from backend.app.agents.trace import AgentTraceStep
+from backend.app.agents.trace_builder import build_agent_trace_result, sanitize
 from backend.app.config.settings import settings
 from backend.app.logger import logger
 from backend.app.memory.factory import MemoryFactory
@@ -373,6 +380,7 @@ class LangGraphAgentRuntime:
                 definition=definition,
                 session_id=session_id,
                 session_state=session_state,
+                knowledge_base_id=knowledge_base_id,
             ),
         )
         state["messages"].insert(
@@ -445,10 +453,12 @@ class LangGraphAgentRuntime:
         definition: AgentDefinition,
         session_id: str,
         session_state: MemoryState | None,
+        knowledge_base_id: int | None,
     ) -> dict:
         return {
             **metadata,
             "runtime": "langgraph_v2",
+            "trace_id": metadata.get("trace_id") or f"agent-trace-{uuid4().hex}",
             "agent_id": definition.id,
             "agent_definition_version": definition.version,
             "planner_strategy": definition.planner_strategy,
@@ -458,6 +468,16 @@ class LangGraphAgentRuntime:
             "workflow_allowlist": list(definition.workflow_allowlist),
             "memory_policy": definition.memory_policy,
             "retrieval_policy": definition.retrieval_policy,
+            "retrieval_required": requires_evidence(definition.retrieval_policy),
+            "retrieval_used": False,
+            "knowledge_base_id": knowledge_base_id,
+            "evidence_count": 0,
+            "source_count": 0,
+            "citation_count": 0,
+            "selected_document_ids": [],
+            "no_evidence": False,
+            "grounded_answer": False,
+            "errors": [],
             "model_config_keys": sorted(definition.model_settings),
             "default_knowledge_base_id": definition.default_knowledge_base_id,
             "output_mode": definition.output_mode,
@@ -563,9 +583,32 @@ class LangGraphAgentRuntime:
             sources = knowledge.get("sources", [])
             citations = knowledge.get("citations", [])
             metadata["knowledge_metadata"] = knowledge.get("metadata", {})
+        evidence_metadata = build_evidence_metadata(
+            knowledge=knowledge if isinstance(knowledge, dict) else {},
+            knowledge_base_id=state.get("knowledge_base_id"),
+            retrieval_required=bool(metadata.get("retrieval_required")),
+        )
+        metadata.update(evidence_metadata)
+        if metadata["no_evidence"]:
+            state["final_answer"] = NO_EVIDENCE_ANSWER
+        answer = str(state.get("final_answer") or "")
+        try:
+            metadata["agent_trace"] = build_agent_trace_result(
+                state=state,
+                metadata=metadata,
+                trace=trace,
+                answer=answer,
+                sources=sources,
+                citations=citations,
+            ).model_dump()
+            metadata["trace_failed"] = False
+        except Exception as exc:
+            logger.warning(f"Agent trace build failed: {sanitize(str(exc))}")
+            metadata["trace_failed"] = True
+            metadata["trace_error"] = sanitize(str(exc))
 
         return AgentRuntimeResult(
-            answer=str(state.get("final_answer") or ""),
+            answer=answer,
             action="tool" if state.get("tool_calls") else "direct_answer",
             tool_calls=state.get("tool_calls", []),
             observations=state.get("observations", []),
