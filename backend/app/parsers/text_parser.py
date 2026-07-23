@@ -5,10 +5,11 @@ from backend.app.parsers.base import BaseParser, DocumentElement, ParseQuality, 
 
 
 class TextParser(BaseParser):
+
     def parse(self, file_path: Path) -> ParseResult:
         text = file_path.read_text(encoding="utf-8")
         elements = _parse_text_elements(text)
-        return ParseResult(
+        value = ParseResult(
             text=text,
             metadata={
                 "suffix": file_path.suffix.lower(),
@@ -20,6 +21,7 @@ class TextParser(BaseParser):
                 element_count=len(elements),
             ),
         )
+        return value
 
 
 def _parse_text_elements(text: str) -> list[DocumentElement]:
@@ -50,3 +52,8 @@ def _classify_line(content: str) -> str:
     if len(content) <= 40 and not content.endswith(("。", "，", "；", ".", ",")):
         return "heading"
     return "paragraph"
+
+
+if __name__ == '__main__':
+    parser = TextParser()
+    print(parser.parse(Path("/Users/yangwei/Desktop/Android.txt")))

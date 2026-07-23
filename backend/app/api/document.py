@@ -48,11 +48,22 @@ def list_documents_by_knowledge_base(
     return success(data=DocumentListResponse(items=items, total=len(items)))
 
 
-@router.post("/documents", response_model=ApiResponse)
+@router.post("/documents", response_model=ApiResponse,deprecated=True)
 def create_document(
     data: DocumentCreate,
     service: DocumentService = Depends(get_document_service),
 ) -> ApiResponse:
+    """
+      已弃用：仅创建文档元数据的接口。
+
+      该接口不会保存上传文件，因此通过该接口创建的文档，
+      在没有额外补充 storage_path 等存储信息的情况下，
+      无法进入正常的解析与索引流程。
+
+      正常文档接入流程请使用：
+      1. POST /documents/upload
+      2. POST /documents/{id}/parse
+      """
     document = service.create(data)
     return success(data=DocumentResponse.model_validate(document))
 

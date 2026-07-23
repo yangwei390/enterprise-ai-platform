@@ -1,3 +1,6 @@
+import io
+import json
+import sys
 from pathlib import Path
 
 from backend.app.chunkers import ChunkerFactory
@@ -55,8 +58,8 @@ class DocumentIdentityStep(PipelineStep):
 
         document = context.document
         filename = (
-            getattr(document, "original_filename", None)
-            or getattr(document, "filename", None)
+                getattr(document, "original_filename", None)
+                or getattr(document, "filename", None)
         )
         identity = DocumentIdentityAnalyzer().analyze(
             parse_result=context.parse_result,
@@ -140,11 +143,11 @@ class ChunkStep(PipelineStep):
         return context
 
     def _build_advanced_chunk_metadata(
-        self,
-        *,
-        text: str,
-        base_metadata: dict,
-        parser_elements: list | None = None,
+            self,
+            *,
+            text: str,
+            base_metadata: dict,
+            parser_elements: list | None = None,
     ) -> dict:
         parser_structure_metadata = _parser_structure_metadata(parser_elements or [])
         if not settings.DOCUMENT_CLASSIFICATION_ENABLED:
@@ -171,8 +174,8 @@ class ChunkStep(PipelineStep):
             "parse_failed": False,
         }
         should_parse_structure = settings.DOCUMENT_STRUCTURE_ENABLED and (
-            not parser_structure_metadata
-            or classification.document_type in {"legal", "markdown"}
+                not parser_structure_metadata
+                or classification.document_type in {"legal", "markdown"}
         )
         if should_parse_structure:
             try:
@@ -342,3 +345,13 @@ def _parser_structure_metadata(parser_elements: list) -> dict:
         "parser_element_count": len(elements),
         "structure_source": "parser_elements",
     }
+# 强制改变标准输出的编码为 utf-8
+# sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+if __name__ == '__main__':
+    # pipeline = DocumentPipeline()
+    path = Path("/Users/yangwei/Desktop/H3_AP202504031650850404_1.pdf")
+    parser = ParserFactory.get_parser(path)
+    parse_result = parser.parse(path)
+    # print(json.dumps(parse_result))
+    print(json.dumps(parse_result.dict(), ensure_ascii=False, indent=4))
