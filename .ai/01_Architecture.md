@@ -118,3 +118,29 @@ Qdrant
 项目不再保留可执行旧版 Agent Runtime、旧规则规划器、旧 Agent Executor 或旧 Runtime fallback。
 
 Workflow Runtime 同步统一为 LangGraph V2 Runtime，`WorkflowRuntimeFactory` 仅返回 `LangGraphWorkflowRuntime`。
+
+## RAG Provider Architecture
+
+后续 RAG 能力采用全生命周期 Provider 边界：
+
+```text
+KnowledgeProvider
+├── LocalKnowledgeProvider
+│   ├── lifecycle: LocalKnowledgeLifecycleProvider
+│   └── retrieval: LocalRetrievalProvider
+└── RagflowKnowledgeProvider
+    ├── lifecycle: RagflowKnowledgeLifecycleProvider
+    └── retrieval: RagflowRetrievalProvider
+```
+
+当前本地 RAG 仍是默认实现。`LocalKnowledgeProvider` 和 `RagflowKnowledgeProvider` 是按知识库后端聚合的门面，各自组合自己的生命周期能力和检索能力；`KnowledgeProviderFactory` 根据知识库绑定的 provider 返回完整聚合 Provider，不允许 Local lifecycle 与 RAGFlow retrieval 被错误组合。
+
+Local lifecycle 负责本地文档保存、解析、切片、Embedding、Qdrant、BM25、删除和重新索引；Local retrieval 负责本地召回、融合、Rerank、MMR 和邻居扩展。
+
+RAGFlow 接入后作为独立知识库后端，通过 HTTP API 通信。RAGFlow lifecycle 负责自己的 Dataset、文档解析、切片、Embedding、索引、Chunk 管理、解析状态、失败重试和远端删除；RAGFlow retrieval 正式主链路使用 RAGFlow Retrieval API 返回 chunks。Chat 检索通过已选择的聚合 Provider 访问其 `retrieval` 能力。
+
+Local 与 RAGFlow 不迁移、不自动同步、不双写、不共享底层索引。平台公共层继续负责 Conversation、Memory、Context、PromptBuilder、LLMFactory、Sources、Citations 和 ChatResponse。
+
+详细规范见：
+
+- `.ai/10_RAG_Provider_Architecture.md`
