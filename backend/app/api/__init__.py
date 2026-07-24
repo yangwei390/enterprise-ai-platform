@@ -8,6 +8,7 @@ from backend.app.api.evaluation import router as evaluation_router
 from backend.app.api.health import router as health_router
 from backend.app.api.knowledge_base import router as knowledge_base_router
 from backend.app.api.mcp import router as mcp_router
+from backend.app.api.product import router as product_router
 from backend.app.api.qdrant import router as qdrant_router
 from backend.app.api.redis import router as redis_router
 from backend.app.api.retriever import router as retriever_router
@@ -25,6 +26,7 @@ __all__ = [
     "health_router",
     "knowledge_base_router",
     "mcp_router",
+    "product_router",
     "qdrant_router",
     "redis_router",
     "retriever_router",

@@ -10,6 +10,16 @@ from backend.app.schemas.knowledge_base import (
     KnowledgeBaseResponse,
     KnowledgeBaseUpdate,
 )
+from backend.app.schemas.product import (
+    ProductCreate,
+    ProductDocumentLinkListResponse,
+    ProductDocumentLinkResponse,
+    ProductListResponse,
+    ProductQuery,
+    ProductRecommendationResponse,
+    ProductResponse,
+    ProductUpdate,
+)
 from backend.app.schemas.response import ApiResponse, error, success
 
 __all__ = [
@@ -22,6 +32,14 @@ __all__ = [
     "KnowledgeBaseListResponse",
     "KnowledgeBaseResponse",
     "KnowledgeBaseUpdate",
+    "ProductCreate",
+    "ProductDocumentLinkListResponse",
+    "ProductDocumentLinkResponse",
+    "ProductListResponse",
+    "ProductQuery",
+    "ProductRecommendationResponse",
+    "ProductResponse",
+    "ProductUpdate",
     "error",
     "success",
 ]
