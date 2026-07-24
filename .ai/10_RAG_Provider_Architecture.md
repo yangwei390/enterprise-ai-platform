@@ -1078,4 +1078,8 @@ Local 与 RAGFlow 分开备份：
 - RAGFlow 是否支持 Chunk 列表、创建、更新、删除。
 - RAGFlow 是否支持独立 reindex 能力。
 
+RAGFlow API 契约调查文档见：
+
+- `.ai/11_RAGFlow_API_Contract.md`
+
 当前开发环境无法替代目标服务器信息，未确认项不得写成已确认事实。

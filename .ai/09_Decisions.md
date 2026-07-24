@@ -123,3 +123,36 @@ KnowledgeProvider
 - Ragflow retrieval 正式主链路使用 RAGFlow Retrieval API 返回 chunks。
 - RAGFlow 返回 chunks 后，不再执行本地 Dense Retrieve、Sparse Retrieve、Fusion、Rerank、MMR 和 Neighbor Expansion。
 - RAGFlow 具体 API 路径和字段必须在下一阶段根据实际部署版本确认，不在架构决策中猜测。
+
+---
+
+## 为什么智能客服阶段一采用单 Agent + Mock 外部系统
+
+阶段一新增 `customer_service_agent` 的正式架构方向，但本阶段只写文档，不修改业务代码。
+
+决策：
+
+- 统一入口继续使用 `POST /agent/chat` 和 `POST /agent/chat/stream`。
+- 运行时继续复用 `LangGraphAgentRuntime` 和 `AgentRuntimeFactory`。
+- Tool 管理由现有 `ToolRegistry` 和 `ToolExecutor` 负责。
+- 多轮商品条件通过相同 `conversation_id` 和现有 Agent Session Memory 继承。
+- 商品结构化数据进入 PostgreSQL 商品目录。
+- 产品说明书、使用方法、安全、维护、故障、保修和退换货规则进入 Local RAG。
+- 订单、物流、售后工单和转人工使用 Mock Service。
+
+原因：
+
+- 商品、说明书、订单、售后属于同一个客服会话域，阶段一没有必要引入多 Agent。
+- 当前 Runtime 已支持工具选择、工具调用、session memory、trace 和 Evaluation V2。
+- Mock 外部系统可以先验证工具边界、确认流程、脱敏和幂等，不把学习项目误接成真实业务系统。
+
+边界：
+
+- 不把 `customer_service_agent` 设置为全局默认 Agent。
+- 不接入 RAGFlow。
+- 不连接真实商城、订单、物流、售后或人工客服系统。
+- 不通过 PDF 文件名自动创建商品。
+- 不通过上传说明书自动猜测商品映射。
+- 商品 Fixture 只保存稳定商品数据，不保存当前环境产生的 `document_id`。
+- 说明书必须通过 `product_code + document_id` 显式绑定。
+- 创建售后工单和转人工记录只是 Mock 写操作；未来真实写操作必须接入正式 Workflow Approval 或其他审批机制。
