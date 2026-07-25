@@ -1,3 +1,14 @@
+from backend.app.schemas.customer_service import (
+    AfterSalesConfirmRequest,
+    AfterSalesDraftRequest,
+    AfterSalesDraftResult,
+    AfterSalesTicketResult,
+    CustomerLogisticsResult,
+    CustomerOrderQuery,
+    CustomerOrderResult,
+    HumanHandoffRequest,
+    HumanHandoffResult,
+)
 from backend.app.schemas.document import (
     DocumentCreate,
     DocumentListResponse,
@@ -24,10 +35,19 @@ from backend.app.schemas.response import ApiResponse, error, success
 
 __all__ = [
     "ApiResponse",
+    "AfterSalesConfirmRequest",
+    "AfterSalesDraftRequest",
+    "AfterSalesDraftResult",
+    "AfterSalesTicketResult",
+    "CustomerLogisticsResult",
+    "CustomerOrderQuery",
+    "CustomerOrderResult",
     "DocumentCreate",
     "DocumentListResponse",
     "DocumentResponse",
     "DocumentUpdate",
+    "HumanHandoffRequest",
+    "HumanHandoffResult",
     "KnowledgeBaseCreate",
     "KnowledgeBaseListResponse",
     "KnowledgeBaseResponse",
