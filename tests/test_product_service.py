@@ -26,8 +26,10 @@ class FakeProductRepository:
         self.primary_unset_for: int | None = None
         self.calls: list[str] = []
         self.raise_on_create: Exception | None = None
+        self.batch_product_codes: list[str] | None = None
         self.products = {
             "P001": _product(1, "P001", features=["易清洗"], use_cases=["宿舍"]),
+            "P002": _product(2, "P002", features=["低噪音"], use_cases=["家庭"]),
         }
         self.documents = {
             11: SimpleNamespace(
@@ -59,6 +61,22 @@ class FakeProductRepository:
         if product and (include_deleted or product.deleted_at is None):
             return product
         return None
+
+    def list_by_product_codes(
+        self,
+        product_codes: list[str],
+        *,
+        include_deleted: bool = False,
+        is_active: bool | None = True,
+    ):
+        self.batch_product_codes = product_codes
+        return [
+            product
+            for product_code in product_codes
+            if (product := self.products.get(product_code)) is not None
+            and (include_deleted or product.deleted_at is None)
+            and (is_active is None or product.is_active is is_active)
+        ]
 
     def create_product(self, data, *, commit: bool = True):
         product = _product(len(self.products) + 1, data["product_code"])
@@ -208,6 +226,17 @@ def test_product_service_recommendation_normalizes_score_and_uses_stable_order()
     assert len(recommendations) == 2
     assert all(0 <= item.score <= 1 for item in recommendations)
     assert recommendations[0].product.product_code == "P001"
+
+
+def test_product_service_compare_uses_single_batch_query_and_preserves_request_order() -> None:
+    repository = FakeProductRepository()
+    service = _product_service(repository)
+
+    comparison = service.compare_by_product_codes(["P002", "P001", "P002", "P404"])
+
+    assert repository.batch_product_codes == ["P002", "P001", "P404"]
+    assert [product.product_code for product in comparison.products] == ["P002", "P001"]
+    assert comparison.missing_product_codes == ["P404"]
 
 
 def test_product_repository_does_not_own_recommendation_or_nlp_rules() -> None:

@@ -65,6 +65,22 @@ class ProductRepository(BaseRepository):
             statement = statement.where(Product.deleted_at.is_(None))
         return self.db.execute(statement).scalar_one_or_none()
 
+    def list_by_product_codes(
+        self,
+        product_codes: list[str],
+        *,
+        include_deleted: bool = False,
+        is_active: bool | None = True,
+    ) -> list[Product]:
+        if not product_codes:
+            return []
+        statement = select(Product).where(Product.product_code.in_(product_codes))
+        if not include_deleted:
+            statement = statement.where(Product.deleted_at.is_(None))
+        if is_active is not None:
+            statement = statement.where(Product.is_active.is_(is_active))
+        return list(self.db.execute(statement).scalars().all())
+
     def create_product(self, data: dict[str, Any], *, commit: bool = True) -> Product:
         product = Product(**data)
         self.db.add(product)

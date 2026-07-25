@@ -43,6 +43,12 @@ class ProductRecommendation:
     reasons: list[str]
 
 
+@dataclass(slots=True)
+class ProductComparison:
+    products: list[Product]
+    missing_product_codes: list[str]
+
+
 class ProductService(BaseService[ProductRepository]):
     def create(self, data: ProductCreate) -> Product:
         logger.info(f"Create product started | product_code={data.product_code}")
@@ -152,6 +158,35 @@ class ProductService(BaseService[ProductRepository]):
         )
         logger.info(f"Recommend products succeeded | total={len(recommendations[:3])}")
         return recommendations[:3], None
+
+    def compare_by_product_codes(self, product_codes: list[str]) -> ProductComparison:
+        logger.info("Compare products started")
+        requested_codes = self._unique_texts(product_codes)
+        products = self.repository.list_by_product_codes(
+            requested_codes,
+            include_deleted=False,
+            is_active=True,
+        )
+        products_by_code = {product.product_code: product for product in products}
+        ordered_products = [
+            products_by_code[product_code]
+            for product_code in requested_codes
+            if product_code in products_by_code
+        ]
+        missing_product_codes = [
+            product_code
+            for product_code in requested_codes
+            if product_code not in products_by_code
+        ]
+        logger.info(
+            "Compare products succeeded | found=%s missing=%s",
+            len(ordered_products),
+            len(missing_product_codes),
+        )
+        return ProductComparison(
+            products=ordered_products,
+            missing_product_codes=missing_product_codes,
+        )
 
     def normalize_query(self, query: ProductQuery) -> ProductQuery:
         data = query.model_dump()
