@@ -9,6 +9,7 @@ class FakeRagChatPipeline:
     called = False
     last_query: str | None = None
     last_knowledge_base_id: int | None = None
+    last_document_id: int | None = None
     last_conversation_id: int | None = None
     last_memory_context: str | None = None
 
@@ -16,6 +17,7 @@ class FakeRagChatPipeline:
         FakeRagChatPipeline.called = True
         FakeRagChatPipeline.last_query = input.query
         FakeRagChatPipeline.last_knowledge_base_id = input.knowledge_base_id
+        FakeRagChatPipeline.last_document_id = input.document_id
         FakeRagChatPipeline.last_conversation_id = input.conversation_id
         FakeRagChatPipeline.last_memory_context = input.memory_context
         return RagChatResult(
@@ -61,6 +63,7 @@ def test_knowledge_tool_calls_rag_chat_pipeline(monkeypatch):
         {
             "query": "劳动法第二章说什么",
             "knowledge_base_id": 2,
+            "document_id": 9,
             "conversation_id": 10,
             "memory_context": "历史上下文",
         }
@@ -70,6 +73,7 @@ def test_knowledge_tool_calls_rag_chat_pipeline(monkeypatch):
     assert FakeRagChatPipeline.called is True
     assert FakeRagChatPipeline.last_query == "劳动法第二章说什么"
     assert FakeRagChatPipeline.last_knowledge_base_id == 2
+    assert FakeRagChatPipeline.last_document_id == 9
     assert FakeRagChatPipeline.last_conversation_id == 10
     assert FakeRagChatPipeline.last_memory_context == "历史上下文"
 
@@ -99,6 +103,14 @@ def test_knowledge_tool_registered_in_registry(monkeypatch):
 
     assert tool is not None
     assert tool.name == "knowledge_search"
+
+
+def test_knowledge_tool_schema_exposes_document_id() -> None:
+    schema = KnowledgeSearchTool().get_parameters_schema()
+
+    assert "document_id" in schema["properties"]
+    document_id_schema = schema["properties"]["document_id"]
+    assert any(item.get("minimum") == 1 for item in document_id_schema["anyOf"])
 
 
 def test_knowledge_tool_does_not_save_conversation_message(monkeypatch):

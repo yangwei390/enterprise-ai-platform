@@ -18,6 +18,7 @@ class KnowledgeSearchTool(BaseTool):
                 RagChatInput(
                     query=args.query,
                     knowledge_base_id=args.knowledge_base_id,
+                    document_id=args.document_id,
                     conversation_id=args.conversation_id,
                     memory_context=args.memory_context,
                 )
@@ -34,6 +35,8 @@ class KnowledgeSearchTool(BaseTool):
                 result=output.model_dump(),
                 metadata={
                     "knowledge_base_id": args.knowledge_base_id,
+                    "document_id": args.document_id,
+                    "document_id_filter_applied": args.document_id is not None,
                     "knowledge_base_index_version": index_version,
                     "conversation_id": args.conversation_id,
                     "failed": False,
@@ -46,6 +49,8 @@ class KnowledgeSearchTool(BaseTool):
                 error=str(exc),
                 metadata={
                     "knowledge_base_id": args.knowledge_base_id,
+                    "document_id": args.document_id,
+                    "document_id_filter_applied": args.document_id is not None,
                     "knowledge_base_index_version": index_version,
                     "conversation_id": args.conversation_id,
                     "failed": True,

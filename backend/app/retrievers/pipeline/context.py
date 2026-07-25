@@ -17,6 +17,7 @@ class RetrieverPipelineContext:
     original_query: str | None = None
     rewritten_query: str | None = None
     knowledge_base_id: int | None = None
+    document_id: int | None = None
     top_k: int = 5
     score_threshold: float | None = None
     metadata_filter: dict | None = None

@@ -16,9 +16,11 @@ from backend.app.retrievers.pipeline import (
 
 class FakeRetrieverPipeline:
     called = False
+    last_context: RetrieverPipelineContext | None = None
 
     def run(self, context: RetrieverPipelineContext) -> RetrieverPipelineContext:
         FakeRetrieverPipeline.called = True
+        FakeRetrieverPipeline.last_context = context
         context.original_query = context.query
         context.rewritten_query = "劳动法第二章说什么"
         context.fused_chunks = [
@@ -174,6 +176,7 @@ class FakeRagChatPipeline:
 def _patch_pipeline_dependencies(monkeypatch, fake_llm: FakeLLM | None = None) -> FakeLLM:
     llm = fake_llm or FakeLLM()
     FakeRetrieverPipeline.called = False
+    FakeRetrieverPipeline.last_context = None
     FakePromptBuilder.last_context_text = None
     monkeypatch.setattr("backend.app.rag.chat_pipeline.RetrieverPipeline", FakeRetrieverPipeline)
     monkeypatch.setattr(
@@ -198,6 +201,23 @@ def test_rag_chat_pipeline_uses_retriever_pipeline(monkeypatch):
     assert result.answer == "第二章讲促进就业。"
     assert result.sources[0].source == "law.pdf"
     assert result.metadata["retrieved_total"] == 1
+
+
+def test_rag_chat_pipeline_passes_document_id_to_retriever_context(monkeypatch):
+    _patch_pipeline_dependencies(monkeypatch)
+
+    result = RagChatPipeline().run(
+        RagChatInput(
+            query="请问这款豆浆机怎么清洗",
+            knowledge_base_id=20,
+            document_id=10,
+        )
+    )
+
+    assert FakeRetrieverPipeline.last_context is not None
+    assert FakeRetrieverPipeline.last_context.document_id == 10
+    assert result.metadata["document_id"] == 10
+    assert result.metadata["document_id_filter_applied"] is True
 
 
 def test_rag_chat_pipeline_uses_pipeline_context_text(monkeypatch):

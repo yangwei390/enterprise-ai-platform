@@ -26,7 +26,7 @@ class DenseRetrieveStep(BaseRetrieverStep):
             ),
             score_threshold=context.score_threshold,
             metadata_filter=context.metadata_filter,
-            constraints=plan.constraints if plan is not None else [],
+            constraints=self._query_constraints(context),
         )
         if plan is not None and plan.constraints:
             constraint_scope = context.metadata.setdefault("constraint_scope", {})
@@ -38,7 +38,9 @@ class DenseRetrieveStep(BaseRetrieverStep):
             )
         chunks = self._retrieve_with_strategy(context, query)
         if not chunks and plan is not None and plan.use_structure_filter:
-            chunks = self.dense_retriever.retrieve(query.model_copy(update={"constraints": []}))
+            chunks = self.dense_retriever.retrieve(
+                query.model_copy(update={"constraints": self._fallback_constraints(query)})
+            )
             plan.fallback_used = True
             plan.fallback_reason = "dense_constraint_no_match"
             planning_metadata = context.metadata.setdefault("retrieval_planning", {})
@@ -84,7 +86,11 @@ class DenseRetrieveStep(BaseRetrieverStep):
         query: HybridRetrieveQuery,
     ):
         strategy = context.retrieval_strategy
-        if strategy is None or strategy.strategy != "MULTI_DOCUMENT" or not strategy.document_ids:
+        if (
+            strategy is None
+            or strategy.strategy not in ("DOCUMENT", "MULTI_DOCUMENT")
+            or not strategy.document_ids
+        ):
             return self.dense_retriever.retrieve(query)
 
         per_document_budget = strategy.per_document_budget or strategy.global_budget
@@ -117,3 +123,39 @@ class DenseRetrieveStep(BaseRetrieverStep):
             source_detail="per_document_budget",
             applied=True,
         )
+
+    def _query_constraints(
+        self,
+        context: RetrieverPipelineContext,
+    ) -> list[RetrievalConstraint]:
+        constraints = (
+            list(context.retrieval_plan.constraints)
+            if context.retrieval_plan is not None
+            else []
+        )
+        if context.document_id is not None:
+            constraints.append(self._explicit_document_constraint(context.document_id))
+        return constraints
+
+    def _explicit_document_constraint(self, document_id: int) -> RetrievalConstraint:
+        return RetrievalConstraint(
+            field="document_id",
+            operator="eq",
+            value=document_id,
+            confidence=1.0,
+            source="explicit_document_filter",
+            source_detail="knowledge_search.document_id",
+            applied=True,
+        )
+
+    def _fallback_constraints(
+        self,
+        query: HybridRetrieveQuery,
+    ) -> list[RetrievalConstraint]:
+        return [
+            constraint
+            for constraint in query.constraints
+            if constraint.source == "explicit_document_filter"
+            and constraint.field == "document_id"
+            and constraint.applied
+        ]

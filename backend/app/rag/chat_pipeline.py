@@ -11,6 +11,7 @@ class RagChatPipeline:
             RetrieverPipelineContext(
                 query=input.query,
                 knowledge_base_id=input.knowledge_base_id,
+                document_id=input.document_id,
                 top_k=input.top_k,
                 score_threshold=input.score_threshold,
                 metadata_filter=input.metadata_filter,
@@ -118,6 +119,8 @@ class RagChatPipeline:
             "context_compression": context_compression,
             "metadata_filter": input.metadata_filter,
             "metadata_filter_applied": bool(input.metadata_filter),
+            "document_id": input.document_id,
+            "document_id_filter_applied": input.document_id is not None,
             "reranker": pipeline_metadata.get("reranker", {}),
             "mmr": pipeline_metadata.get("mmr", {}),
             "neighbor_expansion": pipeline_metadata.get("neighbor_expansion", {}),

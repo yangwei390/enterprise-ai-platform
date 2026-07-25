@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class RagChatInput(BaseModel):
     query: str
     knowledge_base_id: int | None = None
+    document_id: int | None = Field(default=None, ge=1)
     conversation_id: int | None = None
     memory_context: str | None = None
     memory_messages: list[LLMMessage] = Field(default_factory=list)

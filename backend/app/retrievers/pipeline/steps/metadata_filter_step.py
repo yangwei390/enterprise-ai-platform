@@ -1,15 +1,21 @@
-from backend.app.retrievers.metadata_filter import AutoMetadataFilterBuilder
+from backend.app.retrievers.metadata_filter import (
+    AutoMetadataFilterBuilder,
+    AutoMetadataFilterResult,
+)
 from backend.app.retrievers.pipeline.base import BaseRetrieverStep
 from backend.app.retrievers.pipeline.context import RetrieverPipelineContext
 
 
 class MetadataFilterStep(BaseRetrieverStep):
     def run(self, context: RetrieverPipelineContext) -> RetrieverPipelineContext:
-        auto_filter_result = AutoMetadataFilterBuilder().build(
-            query=context.active_query,
-            knowledge_base_id=context.knowledge_base_id,
-            metadata_filter=context.metadata_filter,
-        )
+        if context.document_id is not None:
+            auto_filter_result = self._explicit_document_filter_result(context)
+        else:
+            auto_filter_result = AutoMetadataFilterBuilder().build(
+                query=context.active_query,
+                knowledge_base_id=context.knowledge_base_id,
+                metadata_filter=context.metadata_filter,
+            )
         context.auto_filter_result = auto_filter_result
         context.metadata["auto_filter_applied"] = auto_filter_result.auto_filter_applied
         context.metadata["candidate_document_ids"] = (
@@ -28,3 +34,23 @@ class MetadataFilterStep(BaseRetrieverStep):
             "fusion_rejected_count": 0,
         }
         return context
+
+    def _explicit_document_filter_result(
+        self,
+        context: RetrieverPipelineContext,
+    ) -> AutoMetadataFilterResult:
+        document_id = context.document_id
+        if document_id is None:
+            raise ValueError("document_id is required for explicit document filter")
+        return AutoMetadataFilterResult(
+            candidate_document_ids=[document_id],
+            source_hints=[f"document:{document_id}"],
+            auto_filter_applied=True,
+            soft_boost_enabled=False,
+            metadata={
+                "strategy": "explicit_document_id",
+                "document_id": document_id,
+                "knowledge_base_id": context.knowledge_base_id,
+                "metadata_filter": context.metadata_filter,
+            },
+        )
