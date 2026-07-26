@@ -787,6 +787,145 @@ def test_multi_turn_product_state_survives_choice_and_failed_manual_lookup(
     assert second_decision.tool_calls[0].arguments["keyword"] == "MX4"
 
 
+def test_budget_change_and_detail_lookup_preserve_recommendation_constraints() -> None:
+    initial = _state(query="给我推荐一款鼠标，预算500元")
+    initial_decision = asyncio.run(_decide(initial))
+    initial_args = prepare_customer_service_tool_arguments(
+        state=initial,
+        tool_name="recommend_products",
+        arguments=initial_decision.tool_calls[0].arguments,
+    )
+    assert initial_args["price_max"] == 500
+
+    update_customer_service_state_after_tool(
+        state=initial,
+        tool_name="recommend_products",
+        arguments=initial_args,
+        result=ToolResult(
+            name="recommend_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "product": {
+                            "product_code": "G304",
+                            "name": "罗技 G304",
+                        }
+                    }
+                ]
+            },
+        ),
+    )
+    detail = _state(
+        query="这款有什么特点",
+        customer_service=deepcopy(initial["metadata"]["customer_service"]),
+    )
+    detail_decision = asyncio.run(_decide(detail))
+    update_customer_service_state_after_tool(
+        state=detail,
+        tool_name="search_products",
+        arguments=detail_decision.tool_calls[0].arguments,
+        result=ToolResult(
+            name="search_products",
+            success=True,
+            result={"items": [{"product_code": "G304", "name": "罗技 G304"}]},
+        ),
+    )
+    customer_service = detail["metadata"]["customer_service"]
+    assert customer_service["product_filters"]["price_max"] == 500
+
+    increased = _state(
+        query="再加300预算",
+        customer_service=deepcopy(customer_service),
+    )
+    increased_decision = asyncio.run(_decide(increased))
+    assert increased_decision.tool_calls[0].tool_name == "recommend_products"
+    assert increased_decision.tool_calls[0].arguments["price_max"] == 800
+
+
+def test_common_budget_increase_typo_uses_previous_budget() -> None:
+    state = _state(
+        query="再长300预算",
+        customer_service={
+            "product_filters": {
+                "price_max": 500,
+                "sale_status": "on_sale",
+                "in_stock_only": True,
+            }
+        },
+    )
+
+    decision = asyncio.run(_decide(state))
+
+    assert decision.tool_calls[0].tool_name == "recommend_products"
+    assert decision.tool_calls[0].arguments["price_max"] == 800
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_code"),
+    [
+        ("下面那款有什么特点", "MX4"),
+        ("后者有什么特色", "MX4"),
+        ("上面那款呢", "G304"),
+        ("前者呢", "G304"),
+    ],
+)
+def test_relative_product_references_use_stable_recommendation_order(
+    query: str,
+    expected_code: str,
+) -> None:
+    state = _state(
+        query=query,
+        customer_service={
+            "recommendation_list": [
+                {"product_code": "G304", "name": "罗技 G304"},
+                {"product_code": "MX4", "name": "Logitech MX Master 4"},
+            ],
+            "active_product_code": None,
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304", "name": "罗技 G304"},
+                    {"product_code": "MX4", "name": "Logitech MX Master 4"},
+                ],
+                "focused_product_code": None,
+            },
+        },
+    )
+
+    decision = asyncio.run(_decide(state))
+
+    assert decision.tool_calls[0].tool_name == "search_products"
+    assert decision.tool_calls[0].arguments["keyword"] == expected_code
+
+
+def test_generic_product_features_use_catalog_without_retrieval() -> None:
+    state = _state(
+        query="下面那款有什么特点",
+        customer_service={
+            "recommendation_list": [
+                {"product_code": "G304"},
+                {"product_code": "MX4"},
+            ],
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304"},
+                    {"product_code": "MX4"},
+                ],
+                "focused_product_code": None,
+            },
+        },
+    )
+
+    decision = asyncio.run(_decide(state))
+    route = state["metadata"]["customer_service"]["route"]
+
+    assert decision.tool_calls[0].tool_name == "search_products"
+    assert decision.tool_calls[0].arguments["keyword"] == "MX4"
+    assert route["intent"] == "product_realtime_fact"
+    assert route["source"] == "product_catalog"
+    assert state["metadata"]["retrieval_required"] is False
+
+
 def test_alternative_recommendation_stops_at_five_context_products() -> None:
     customer_service = {
         "recommended_product_codes": [f"P00{index}" for index in range(1, 6)],
@@ -1004,6 +1143,217 @@ def test_customer_llm_classifies_open_product_document_questions(
     assert requests[0].tool_choice["function"]["name"] == (
         "classify_customer_service_intent"
     )
+
+
+def test_contextualized_request_resolves_llm_reference_to_trusted_product(
+    monkeypatch,
+) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "confidence": 0.98,
+                            "target_references": ["second"],
+                            "attributes": ["button_count"],
+                            "rewritten_query": "查询 MX4 的按键数量",
+                            "constraints": {},
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(
+        query="第二个呢",
+        customer_service={
+            "recommendation_list": [
+                {"product_code": "G304"},
+                {"product_code": "MX4"},
+            ],
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304"},
+                    {"product_code": "MX4"},
+                ],
+                "focused_product_code": "G304",
+            },
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+
+    assert decision.tool_calls[0].arguments["keyword"] == "MX4"
+    assert request["rewritten_query"] == "查询 MX4 的按键数量"
+    assert request["target_product_codes"] == ["MX4"]
+    assert request["source"] == "primary_manual"
+    assert request["clarification_required"] is False
+
+
+def test_contextualized_request_rejects_untrusted_product_reference(
+    monkeypatch,
+) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "confidence": 0.99,
+                            "target_references": ["G999"],
+                            "attributes": ["dimensions"],
+                            "rewritten_query": "查询 G999 的尺寸",
+                            "constraints": {},
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(
+        query="它尺寸多少",
+        customer_service={
+            "recommendation_list": [{"product_code": "G304"}],
+            "product_context": {
+                "candidates": [{"product_code": "G304"}],
+                "focused_product_code": "G304",
+            },
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+
+    assert decision.tool_calls == []
+    assert request["target_product_codes"] == []
+    assert request["clarification_required"] is True
+    assert "当前推荐列表" in str(decision.content)
+
+
+def test_contextualizer_receives_full_conversation_history(monkeypatch) -> None:
+    captured_requests = []
+
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            captured_requests.append(request)
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "confidence": 0.95,
+                            "target_references": ["second"],
+                            "attributes": ["dimensions"],
+                            "constraints": {},
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(
+        query="第二个呢",
+        customer_service={
+            "recommendation_list": [
+                {"product_code": "G304"},
+                {"product_code": "MX4"},
+            ],
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304"},
+                    {"product_code": "MX4"},
+                ],
+                "focused_product_code": "G304",
+            },
+        },
+    )
+    state["messages"] = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"history-{index}",
+        }
+        for index in range(30)
+    ]
+    state["messages"].append({"role": "user", "content": "第二个呢"})
+
+    asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    sent_contents = [
+        message.content
+        for message in captured_requests[0].messages
+        if message.role in {"user", "assistant"}
+    ]
+    assert "history-0" in sent_contents
+    assert "history-29" in sent_contents
+    assert sent_contents[-1] == "第二个呢"
+
+
+def test_contextualizer_cannot_override_trusted_constraints(monkeypatch) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_recommendation",
+                            "confidence": 0.99,
+                            "target_references": [],
+                            "attributes": [],
+                            "constraints": {
+                                "category": "键盘",
+                                "price_max": 9999,
+                            },
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(
+        query="继续推荐鼠标",
+        customer_service={
+            "product_filters": {
+                "category": "鼠标",
+                "price_max": 500,
+            }
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+
+    assert decision.tool_calls[0].arguments["category"] == "鼠标"
+    assert decision.tool_calls[0].arguments["price_max"] == 500
+    assert request["constraints"]["category"] == "鼠标"
+    assert request["constraints"]["price_max"] == 500
 
 
 def test_customer_llm_intent_invalid_output_falls_back_safely(monkeypatch) -> None:
@@ -1924,6 +2274,30 @@ def test_runtime_persists_and_restores_customer_service_state(monkeypatch) -> No
     state["metadata"]["customer_service"] = {
         CUSTOMER_SERVICE_PENDING_KEY: pending,
         "product_context": product_context,
+        "recommendation_list": product_context["candidates"],
+        "active_product_code": "G502",
+        "product_filters": {"category": "鼠标", "price_max": 800},
+        "contextualized_request": {
+            "raw_query": "第二个呢",
+            "rewritten_query": "查询 G502 的特点",
+            "intent": "product_realtime_fact",
+            "source": "product_catalog",
+            "target_references": ["second"],
+            "target_product_codes": ["G502"],
+            "attributes": ["features"],
+            "recommendation_count": None,
+            "constraints": {
+                "category": "鼠标",
+                "price_max": 800,
+                "required_features": [],
+                "preferred_features": [],
+                "required_use_cases": [],
+                "preferred_use_cases": [],
+            },
+            "confidence": 0.98,
+            "clarification_required": False,
+            "clarification_question": None,
+        },
     }
 
     runtime._save_session("conversation:42", cast(Any, state))
@@ -1937,6 +2311,14 @@ def test_runtime_persists_and_restores_customer_service_state(monkeypatch) -> No
     assert (
         restored["metadata"]["customer_service"]["product_context"]
         == product_context
+    )
+    restored_customer_service = restored["metadata"]["customer_service"]
+    assert restored_customer_service["recommendation_list"] == product_context["candidates"]
+    assert restored_customer_service["active_product_code"] == "G502"
+    assert restored_customer_service["product_filters"]["price_max"] == 800
+    assert (
+        restored_customer_service["contextualized_request"]["target_product_codes"]
+        == ["G502"]
     )
 
 
