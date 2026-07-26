@@ -709,6 +709,104 @@ def test_customer_product_context_routes_selected_manual_without_cross_model() -
     assert manual_decision.tool_calls[0].arguments["document_id"] == 502
 
 
+def test_customer_product_capability_routes_through_primary_manual_with_evidence() -> None:
+    customer_service = {
+        "product_context": {
+            "candidates": [
+                {
+                    "product_code": "MX4",
+                    "name": "Logitech MX Master 4",
+                    "model": "MX Master 4",
+                }
+            ],
+            "focused_product_code": "MX4",
+        }
+    }
+    lookup = _state(
+        query="他支持蓝牙么",
+        customer_service=deepcopy(customer_service),
+    )
+    lookup_decision = asyncio.run(_decide(lookup))
+
+    assert lookup_decision.tool_calls[0].tool_name == "search_products"
+    assert lookup_decision.tool_calls[0].arguments["keyword"] == "MX4"
+    assert lookup["metadata"]["customer_service"]["route"] == {
+        "intent": "product_document_fact",
+        "source": "primary_manual",
+        "evidence_required": True,
+    }
+    assert lookup["metadata"]["retrieval_required"] is True
+
+    manual = _state(
+        query="他支持蓝牙么",
+        customer_service=deepcopy(lookup["metadata"]["customer_service"]),
+        observations=[
+            {
+                "tool_name": "search_products",
+                "success": True,
+                "raw_result": {
+                    "items": [
+                        {
+                            "product_code": "MX4",
+                            "primary_manual_document_id": 404,
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+    manual_decision = asyncio.run(_decide(manual))
+
+    assert manual_decision.tool_calls[0].tool_name == "knowledge_search"
+    assert manual_decision.tool_calls[0].arguments["document_id"] == 404
+
+    grounded = _state(
+        query="他支持蓝牙么",
+        customer_service=deepcopy(manual["metadata"]["customer_service"]),
+        tool_calls=[
+            {
+                "tool_name": "knowledge_search",
+                "arguments": {"document_id": 404},
+            }
+        ],
+        observations=[
+            {
+                "tool_name": "knowledge_search",
+                "success": True,
+                "raw_result": {
+                    "answer": "支持蓝牙连接。",
+                    "sources": [{"document_id": 404}],
+                },
+            }
+        ],
+    )
+    grounded_decision = asyncio.run(_decide(grounded))
+
+    assert grounded_decision.content == "支持蓝牙连接。"
+
+
+def test_customer_realtime_product_fact_stays_on_product_catalog() -> None:
+    state = _state(
+        query="他多少钱",
+        customer_service={
+            "product_context": {
+                "candidates": [{"product_code": "MX4"}],
+                "focused_product_code": "MX4",
+            }
+        },
+    )
+
+    decision = asyncio.run(_decide(state))
+
+    assert decision.tool_calls[0].tool_name == "search_products"
+    assert state["metadata"]["customer_service"]["route"] == {
+        "intent": "product_realtime_fact",
+        "source": "product_catalog",
+        "evidence_required": False,
+    }
+    assert state["metadata"]["retrieval_required"] is False
+
+
 def test_customer_planner_routes_return_policy_to_knowledge_search() -> None:
     decision = asyncio.run(_decide(_state(query="退换货规则是什么")))
 

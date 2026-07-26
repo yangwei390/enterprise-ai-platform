@@ -34,6 +34,20 @@ class UserDecision(StrEnum):
     UNSAFE_INJECTION = "UNSAFE_INJECTION"
 
 
+class CustomerServiceIntent(StrEnum):
+    PRODUCT_REALTIME_FACT = "product_realtime_fact"
+    PRODUCT_DOCUMENT_FACT = "product_document_fact"
+    POLICY_QUESTION = "policy_question"
+    OTHER = "other"
+
+
+class CustomerServiceSource(StrEnum):
+    PRODUCT_CATALOG = "product_catalog"
+    PRIMARY_MANUAL = "primary_manual"
+    POLICY_KNOWLEDGE = "policy_knowledge"
+    PLANNER = "planner"
+
+
 class _PendingCoordinator:
     def __init__(self) -> None:
         self._guard = threading.RLock()
@@ -141,6 +155,17 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
         query = str(state.get("query") or "").strip()
         metadata = state.setdefault("metadata", {})
         metadata["runtime_turn_id"] = current_runtime_turn_id(state)
+        intent, source = _customer_service_route(query)
+        evidence_required = source in {
+            CustomerServiceSource.PRIMARY_MANUAL,
+            CustomerServiceSource.POLICY_KNOWLEDGE,
+        }
+        metadata.setdefault("customer_service", {})["route"] = {
+            "intent": intent,
+            "source": source,
+            "evidence_required": evidence_required,
+        }
+        metadata["retrieval_required"] = evidence_required
         observations = state.get("observations", [])
 
         if _is_greeting(query):
@@ -177,7 +202,7 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
 
         if (
             _last_tool_name(observations) == "search_products"
-            and _is_manual_question(query)
+            and intent == CustomerServiceIntent.PRODUCT_DOCUMENT_FACT
             and not _is_recommend(query)
         ):
             return _manual_followup_decision(state, observations[-1])
@@ -202,7 +227,7 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
 
         if _is_prompt_injection(query):
             return _final("我不能忽略系统规则或绕过工具确认流程。")
-        if _is_return_policy_question(query):
+        if intent == CustomerServiceIntent.POLICY_QUESTION:
             return _tool_decision(
                 "knowledge_search",
                 {
@@ -255,7 +280,10 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                 "search_products",
                 _focused_product_query_args(state, product_reference),
             )
-        if _is_manual_question(query) and not _is_recommend(query):
+        if (
+            intent == CustomerServiceIntent.PRODUCT_DOCUMENT_FACT
+            and not _is_recommend(query)
+        ):
             return _tool_decision(
                 "search_products",
                 _product_query_args(state, query, page_size=5),
@@ -606,7 +634,7 @@ def _knowledge_final(state: dict[str, Any], observation: dict[str, Any]) -> Agen
         return _final("说明书检索失败，不能基于资料回答。")
     answer = str(raw_result.get("answer") or "")
     sources = raw_result.get("sources")
-    if not answer or not sources:
+    if not answer or not isinstance(sources, list) or not sources:
         return _final("说明书中没有找到相关内容。")
     expected_document_id = _last_knowledge_document_id(state)
     if expected_document_id is not None:
@@ -1032,7 +1060,7 @@ def _focus_context_product(metadata: dict[str, Any], product_code: str) -> None:
 
 
 def _is_context_product_followup(query: str) -> bool:
-    reference_words = ["这个", "这款", "该商品", "它", "刚才", "上面"]
+    reference_words = ["这个", "这款", "该商品", "它", "他", "她", "刚才", "上面"]
     detail_words = [
         "特色",
         "特点",
@@ -1055,6 +1083,15 @@ def _is_context_product_followup(query: str) -> bool:
         "清洁",
         "故障",
         "安全",
+        "蓝牙",
+        "无线",
+        "有线",
+        "兼容",
+        "充电",
+        "电池",
+        "接口",
+        "驱动",
+        "支持",
     ]
     return any(word in query for word in reference_words + detail_words)
 
@@ -1311,7 +1348,46 @@ def _is_manual_question(query: str) -> bool:
             "故障",
             "安全",
             "操作",
+            "蓝牙",
+            "无线",
+            "有线",
+            "兼容",
+            "充电",
+            "电池",
+            "接口",
+            "驱动",
+            "系统支持",
+            "是否支持",
+            "支不支持",
         ]
+    )
+
+
+def _customer_service_route(
+    query: str,
+) -> tuple[CustomerServiceIntent, CustomerServiceSource]:
+    if _is_return_policy_question(query):
+        return (
+            CustomerServiceIntent.POLICY_QUESTION,
+            CustomerServiceSource.POLICY_KNOWLEDGE,
+        )
+    if _is_manual_question(query):
+        return (
+            CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
+            CustomerServiceSource.PRIMARY_MANUAL,
+        )
+    if _is_product_realtime_fact(query):
+        return (
+            CustomerServiceIntent.PRODUCT_REALTIME_FACT,
+            CustomerServiceSource.PRODUCT_CATALOG,
+        )
+    return CustomerServiceIntent.OTHER, CustomerServiceSource.PLANNER
+
+
+def _is_product_realtime_fact(query: str) -> bool:
+    return any(
+        word in query
+        for word in ["价格", "多少钱", "库存", "有货", "在售", "品牌", "型号"]
     )
 
 
