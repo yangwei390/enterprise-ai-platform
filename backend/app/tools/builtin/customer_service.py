@@ -324,6 +324,7 @@ class RecommendProductsTool(_ProductTool):
 
         def callback(service):
             recommendations, no_result_reason = service.recommend(args.to_product_query())
+            recommendations = recommendations[: args.page_size]
             manual_document_ids = service.primary_manual_document_ids_for_scope(
                 [item.product.id for item in recommendations],
                 allowed_knowledge_base_ids=args.manual_knowledge_base_scope(),

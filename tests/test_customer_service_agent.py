@@ -578,6 +578,123 @@ def test_single_recommendation_keeps_one_focused_product() -> None:
     assert decision.tool_calls[0].arguments["keyword"] == "MX4"
 
 
+def test_sequential_single_recommendations_keep_one_ordered_context() -> None:
+    first = _state(query="推荐一个鼠标", conversation_id=304)
+    first_arguments = prepare_customer_service_tool_arguments(
+        state=first,
+        tool_name="recommend_products",
+        arguments={"page_size": 3},
+    )
+    update_customer_service_state_after_tool(
+        state=first,
+        tool_name="recommend_products",
+        arguments=first_arguments,
+        result=ToolResult(
+            name="recommend_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "product": {
+                            "product_code": "G304",
+                            "name": "罗技 G304",
+                        }
+                    }
+                ]
+            },
+        ),
+    )
+    customer_service = deepcopy(first["metadata"]["customer_service"])
+
+    second = _state(
+        query="再推荐一个呢",
+        conversation_id=304,
+        customer_service=customer_service,
+    )
+    second_decision = asyncio.run(_decide(second))
+    assert second_decision.tool_calls[0].tool_name == "recommend_products"
+
+    second_arguments = prepare_customer_service_tool_arguments(
+        state=second,
+        tool_name="recommend_products",
+        arguments=second_decision.tool_calls[0].arguments,
+    )
+    assert second_arguments["page_size"] == 1
+    assert second_arguments["excluded_product_codes"] == ["G304"]
+
+    update_customer_service_state_after_tool(
+        state=second,
+        tool_name="recommend_products",
+        arguments=second_arguments,
+        result=ToolResult(
+            name="recommend_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "product": {
+                            "product_code": "MX4",
+                            "name": "Logitech MX Master 4",
+                        }
+                    }
+                ]
+            },
+        ),
+    )
+    context = second["metadata"]["customer_service"]["product_context"]
+
+    assert [item["product_code"] for item in context["candidates"]] == [
+        "G304",
+        "MX4",
+    ]
+    assert context["focused_product_code"] == "MX4"
+
+    first_reference = asyncio.run(
+        _decide(
+            _state(
+                query="第一款有几个按键",
+                customer_service=deepcopy(second["metadata"]["customer_service"]),
+            )
+        )
+    )
+    second_reference = asyncio.run(
+        _decide(
+            _state(
+                query="第二款有几个按键",
+                customer_service=deepcopy(second["metadata"]["customer_service"]),
+            )
+        )
+    )
+
+    assert first_reference.tool_calls[0].arguments["keyword"] == "G304"
+    assert second_reference.tool_calls[0].arguments["keyword"] == "MX4"
+
+
+def test_alternative_recommendation_stops_at_five_context_products() -> None:
+    customer_service = {
+        "recommended_product_codes": [f"P00{index}" for index in range(1, 6)],
+        "product_context": {
+            "candidates": [
+                {"product_code": f"P00{index}"}
+                for index in range(1, 6)
+            ],
+            "focused_product_code": "P005",
+        },
+    }
+
+    decision = asyncio.run(
+        _decide(
+            _state(
+                query="再推荐一个",
+                customer_service=customer_service,
+            )
+        )
+    )
+
+    assert decision.tool_calls == []
+    assert "已达到 5 个" in str(decision.content)
+
+
 @pytest.mark.parametrize(
     ("query", "expected_count"),
     [

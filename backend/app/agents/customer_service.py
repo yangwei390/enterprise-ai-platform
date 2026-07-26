@@ -349,12 +349,21 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                 return _final("单次最多推荐 5 个商品，请将推荐数量调整为 1 到 5 个。")
             if requested_count is not None and requested_count < 1:
                 return _final("推荐数量必须是 1 到 5 个。")
+            page_size = requested_count or 3
+            if _is_alternative_recommendation(query):
+                remaining = (
+                    _PRODUCT_CONTEXT_MAX_CANDIDATES
+                    - _recommendation_context_count(metadata)
+                )
+                if remaining <= 0:
+                    return _final("当前推荐列表已达到 5 个商品，请重新发起推荐。")
+                page_size = min(page_size, remaining)
             return _tool_decision(
                 "recommend_products",
                 _product_query_args(
                     state,
                     query,
-                    page_size=requested_count or 3,
+                    page_size=page_size,
                 ),
             )
         if (
@@ -518,6 +527,15 @@ def prepare_customer_service_tool_arguments(
         if requested_count is not None and 1 <= requested_count <= 5:
             prepared["page_size"] = requested_count
         if _is_alternative_recommendation(query):
+            remaining = (
+                _PRODUCT_CONTEXT_MAX_CANDIDATES
+                - _recommendation_context_count(state.get("metadata", {}))
+            )
+            if remaining > 0:
+                prepared["page_size"] = min(
+                    int(prepared.get("page_size") or 3),
+                    remaining,
+                )
             recommended_codes = _recommended_product_codes(
                 state.get("metadata", {})
             )
@@ -559,6 +577,7 @@ def update_customer_service_state_after_tool(
             customer_service,
             tool_name=tool_name,
             arguments=arguments,
+            query=str(state.get("query") or ""),
             result=result.result,
         )
         return
@@ -571,6 +590,7 @@ def update_customer_service_state_after_tool(
             customer_service,
             tool_name=tool_name,
             arguments=arguments,
+            query=str(state.get("query") or ""),
             result=result.result,
         )
         return
@@ -916,6 +936,7 @@ def _update_product_context(
     *,
     tool_name: str,
     arguments: dict[str, Any],
+    query: str,
     result: Any,
 ) -> None:
     if not isinstance(result, dict) or not isinstance(result.get("items"), list):
@@ -934,6 +955,16 @@ def _update_product_context(
         candidates = candidates[:requested_page_size]
     if not candidates:
         return
+    previous = customer_service.get(_PRODUCT_CONTEXT_KEY)
+    previous_candidates = (
+        [
+            item
+            for item in previous.get("candidates", [])
+            if isinstance(item, dict) and isinstance(item.get("product_code"), str)
+        ]
+        if isinstance(previous, dict)
+        else []
+    )
     if tool_name == "recommend_products":
         recommended_codes = customer_service.setdefault(
             "recommended_product_codes",
@@ -948,16 +979,31 @@ def _update_product_context(
                 recommended_codes.append(code)
         if len(recommended_codes) > 100:
             del recommended_codes[:-100]
-    previous = customer_service.get(_PRODUCT_CONTEXT_KEY)
+        if _is_alternative_recommendation(query):
+            combined_candidates = [*previous_candidates]
+            combined_codes = {
+                str(item["product_code"]) for item in combined_candidates
+            }
+            for candidate in candidates:
+                code = str(candidate["product_code"])
+                if code not in combined_codes:
+                    combined_candidates.append(candidate)
+                    combined_codes.add(code)
+            customer_service[_PRODUCT_CONTEXT_KEY] = {
+                "candidates": combined_candidates[
+                    :_PRODUCT_CONTEXT_MAX_CANDIDATES
+                ],
+                "focused_product_code": (
+                    candidates[0]["product_code"]
+                    if len(candidates) == 1
+                    else None
+                ),
+            }
+            return
     focused_code = (
         previous.get("focused_product_code")
         if isinstance(previous, dict)
         else None
-    )
-    previous_candidates = (
-        previous.get("candidates", [])
-        if isinstance(previous, dict)
-        else []
     )
     previous_codes = {
         item.get("product_code")
@@ -1022,7 +1068,11 @@ def _resolve_context_product(
     explicit = _explicit_context_matches(candidates, query)
     if len(explicit) == 1:
         return explicit[0]
-    ordinal = _ordinal_product_index(query, len(candidates))
+    ordinal = (
+        None
+        if _is_recommend(query)
+        else _ordinal_product_index(query, len(candidates))
+    )
     if ordinal == -1:
         return "out_of_range"
     if ordinal is not None:
@@ -1160,10 +1210,38 @@ def _recommended_product_codes(metadata: dict[str, Any]) -> list[str]:
     return [item for item in value if isinstance(item, str) and item]
 
 
+def _recommendation_context_count(metadata: dict[str, Any]) -> int:
+    context = _product_context(metadata)
+    if context is None:
+        return 0
+    candidates = context.get("candidates")
+    if not isinstance(candidates, list):
+        return 0
+    return len(
+        [
+            item
+            for item in candidates
+            if isinstance(item, dict) and isinstance(item.get("product_code"), str)
+        ]
+    )
+
+
 def _is_alternative_recommendation(query: str) -> bool:
     return any(
         phrase in query
-        for phrase in ["其他", "其它", "别的", "换一个", "换一款", "还有推荐"]
+        for phrase in [
+            "其他",
+            "其它",
+            "别的",
+            "换一个",
+            "换一款",
+            "还有推荐",
+            "再推荐",
+            "再来一个",
+            "再来一款",
+            "另一个",
+            "另一款",
+        ]
     )
 
 

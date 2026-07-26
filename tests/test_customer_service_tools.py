@@ -233,6 +233,23 @@ def test_recommend_products_preserves_service_score_reasons_and_order() -> None:
     }
 
 
+def test_recommend_products_defensively_respects_page_size() -> None:
+    class MultipleProductService(FakeProductService):
+        def recommend(self, query: ProductQuery):
+            recommendations, reason = super().recommend(query)
+            return [*recommendations, *recommendations], reason
+
+    service = MultipleProductService()
+    tool = RecommendProductsTool(_product_provider(service))
+
+    result = tool.run({"page_size": 1})
+    result_data = _result_dict(result)
+
+    assert result.success is True
+    assert result_data["total"] == 1
+    assert len(result_data["items"]) == 1
+
+
 def test_compare_products_uses_service_batch_result_order_and_missing_codes() -> None:
     service = FakeProductService()
     tool = CompareProductsTool(_product_provider(service))

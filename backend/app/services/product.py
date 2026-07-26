@@ -156,8 +156,9 @@ class ProductService(BaseService[ProductRepository]):
                 item.product.product_code,
             )
         )
-        logger.info(f"Recommend products succeeded | total={len(recommendations[:3])}")
-        return recommendations[:3], None
+        selected = recommendations[: normalized.page_size]
+        logger.info(f"Recommend products succeeded | total={len(selected)}")
+        return selected, None
 
     def compare_by_product_codes(self, product_codes: list[str]) -> ProductComparison:
         logger.info("Compare products started")

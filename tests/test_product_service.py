@@ -246,6 +246,18 @@ def test_product_service_recommendation_normalizes_score_and_uses_stable_order()
     assert recommendations[0].product.product_code == "P001"
 
 
+def test_product_service_recommendation_respects_requested_page_size() -> None:
+    repository = FakeProductRepository()
+    service = _product_service(repository)
+
+    recommendations, no_result_reason = service.recommend(
+        ProductQuery(page_size=1)
+    )
+
+    assert no_result_reason is None
+    assert [item.product.product_code for item in recommendations] == ["P001"]
+
+
 def test_product_service_compare_uses_single_batch_query_and_preserves_request_order() -> None:
     repository = FakeProductRepository()
     service = _product_service(repository)

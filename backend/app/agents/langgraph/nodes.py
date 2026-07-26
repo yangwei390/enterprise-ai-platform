@@ -504,18 +504,19 @@ class FinalNode:
 
     async def _stream_answer(self, state: AgentState) -> str:
         queue = state.get("metadata", {}).get("_agent_stream_event_queue")
-        if _requires_evidence(state) and not has_evidence(
-            state.get("knowledge") if isinstance(state.get("knowledge"), dict) else None
-        ):
+        if _requires_evidence(state):
+            grounded_answer = str(
+                state.get("final_answer") or self._build_answer(state)
+            )
             if queue is not None:
                 await queue.put(
-                    {"event": "answer_delta", "data": {"delta": NO_EVIDENCE_ANSWER}}
+                    {"event": "answer_delta", "data": {"delta": grounded_answer}}
                 )
             state["metadata"]["_agent_stream_answer_done"] = True
             state["metadata"]["answer_stream_delta_count"] = (
                 state["metadata"].get("answer_stream_delta_count", 0) + 1
             )
-            return NO_EVIDENCE_ANSWER
+            return grounded_answer
         delta_count = 0
         request = build_final_answer_request(
             query=state["query"],
@@ -782,4 +783,7 @@ def _sanitize_metadata(metadata: dict) -> dict:
 
 
 def _requires_evidence(state: AgentState) -> bool:
-    return requires_evidence(state.get("metadata", {}).get("retrieval_policy", {}))
+    metadata = state.get("metadata", {})
+    return bool(metadata.get("retrieval_required")) or requires_evidence(
+        metadata.get("retrieval_policy", {})
+    )

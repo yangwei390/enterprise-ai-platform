@@ -375,6 +375,59 @@ def test_final_node_appends_assistant_answer_to_runtime_history() -> None:
     }
 
 
+def test_final_node_does_not_rewrite_evidence_grounded_answer(monkeypatch) -> None:
+    async def fail_collect(*args, **kwargs):
+        raise AssertionError("grounded answer must not be rewritten by another LLM")
+
+    monkeypatch.setattr(
+        "backend.app.agents.langgraph.nodes.collect_streaming_answer",
+        fail_collect,
+    )
+    state = _state("第二款有几个按键")
+    queue = asyncio.Queue()
+    state["metadata"].update(
+        {
+            "_agent_stream_answer_enabled": True,
+            "_agent_stream_event_queue": queue,
+            "retrieval_required": True,
+        }
+    )
+    state["knowledge"] = {
+        "answer": "主说明书记载：该鼠标共有 7 个按键。",
+        "sources": [{"document_id": 404}],
+    }
+
+    result = asyncio.run(FinalNode().acall(state))
+
+    assert result["final_answer"] == "主说明书记载：该鼠标共有 7 个按键。"
+    assert queue.get_nowait() == {
+        "event": "answer_delta",
+        "data": {"delta": "主说明书记载：该鼠标共有 7 个按键。"},
+    }
+
+
+def test_final_node_preserves_evidence_rejection_over_raw_knowledge() -> None:
+    state = _state("第一款有几个按键")
+    state["metadata"].update(
+        {
+            "_agent_stream_answer_enabled": True,
+            "_agent_stream_event_queue": asyncio.Queue(),
+            "retrieval_required": True,
+        }
+    )
+    state["knowledge"] = {
+        "answer": "不匹配型号的答案",
+        "sources": [{"document_id": 999}],
+    }
+    state["final_answer"] = "说明书来源与目标型号不一致，已拒绝混入最终答复。"
+
+    result = asyncio.run(FinalNode().acall(state))
+
+    assert result["final_answer"] == (
+        "说明书来源与目标型号不一致，已拒绝混入最终答复。"
+    )
+
+
 def test_final_answer_request_contains_prior_user_and_assistant_turns() -> None:
     request = build_final_answer_request(
         query="还有其他推荐吗",
