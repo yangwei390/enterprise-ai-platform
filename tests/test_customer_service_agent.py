@@ -13,6 +13,7 @@ from backend.app.agents.catalog import AgentCatalog
 from backend.app.agents.customer_service import (
     CustomerServicePlannerStrategy,
     _PendingCoordinator,
+    update_customer_service_state_after_tool,
 )
 from backend.app.agents.customer_service_contract import (
     CUSTOMER_SERVICE_AGENT_ID,
@@ -310,6 +311,58 @@ def test_customer_planner_product_search_recommend_and_compare_args() -> None:
     assert recommend.tool_calls[0].arguments["required_features"] == ["容易清洗"]
     assert compare.tool_calls[0].tool_name == "compare_products"
     assert compare.tool_calls[0].arguments["product_codes"] == ["P001", "P002"]
+
+
+def test_customer_planner_inherits_product_filters_across_three_turns() -> None:
+    first = _state(query="给我推荐几个豆浆机", conversation_id=301)
+    first_decision = asyncio.run(_decide(first))
+    first_args = first_decision.tool_calls[0].arguments
+    update_customer_service_state_after_tool(
+        state=first,
+        tool_name="recommend_products",
+        arguments=first_args,
+        result=ToolResult(name="recommend_products", success=True, result={"items": []}),
+    )
+    customer_service = deepcopy(first["metadata"]["customer_service"])
+
+    second = _state(
+        query="挑几款200到300区间的",
+        conversation_id=301,
+        customer_service=customer_service,
+    )
+    second_decision = asyncio.run(_decide(second))
+    second_args = second_decision.tool_calls[0].arguments
+    update_customer_service_state_after_tool(
+        state=second,
+        tool_name="search_products",
+        arguments=second_args,
+        result=ToolResult(name="search_products", success=True, result={"items": []}),
+    )
+
+    third = _state(
+        query="两个人用，想要容易清洗的",
+        conversation_id=301,
+        customer_service=deepcopy(second["metadata"]["customer_service"]),
+    )
+    third_decision = asyncio.run(_decide(third))
+    third_args = third_decision.tool_calls[0].arguments
+
+    assert first_decision.tool_calls[0].tool_name == "recommend_products"
+    assert second_decision.tool_calls[0].tool_name == "search_products"
+    assert second_args["category"] == "豆浆机"
+    assert second_args["price_min"] == 200
+    assert second_args["price_max"] == 300
+    assert third_decision.tool_calls[0].tool_name == "recommend_products"
+    assert third_args["category"] == "豆浆机"
+    assert third_args["price_min"] == 200
+    assert third_args["price_max"] == 300
+    assert third_args["preferred_features"] == ["容易清洗"]
+
+
+def test_customer_planner_routes_return_policy_to_knowledge_search() -> None:
+    decision = asyncio.run(_decide(_state(query="退换货规则是什么")))
+
+    assert decision.tool_calls[0].tool_name == "knowledge_search"
 
 
 def test_manual_lookup_uses_document_id_from_search_tool_result() -> None:

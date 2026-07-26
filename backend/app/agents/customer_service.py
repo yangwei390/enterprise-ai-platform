@@ -107,6 +107,22 @@ class _PendingCoordinator:
 
 
 _PENDING_COORDINATOR = _PendingCoordinator()
+_PRODUCT_FILTER_KEYS = {
+    "brand",
+    "category",
+    "model",
+    "price_min",
+    "price_max",
+    "required_features",
+    "excluded_features",
+    "preferred_features",
+    "required_use_cases",
+    "preferred_use_cases",
+    "in_stock_only",
+    "sale_status",
+    "sort_by",
+    "sort_order",
+}
 
 
 class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
@@ -150,7 +166,11 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             if decision == UserDecision.AMBIGUOUS:
                 return _final("请明确回复“确认提交”后，我才能创建模拟售后工单。")
 
-        if _last_tool_name(observations) == "search_products" and _is_manual_question(query):
+        if (
+            _last_tool_name(observations) == "search_products"
+            and _is_manual_question(query)
+            and not _is_recommend(query)
+        ):
             return _manual_followup_decision(state, observations[-1])
         if _last_tool_name(observations) == "knowledge_search":
             return _knowledge_final(state, observations[-1])
@@ -173,6 +193,16 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
 
         if _is_prompt_injection(query):
             return _final("我不能忽略系统规则或绕过工具确认流程。")
+        if _is_return_policy_question(query):
+            return _tool_decision(
+                "knowledge_search",
+                {
+                    "query": query,
+                    "knowledge_base_id": state.get("knowledge_base_id"),
+                    "conversation_id": state.get("conversation_id"),
+                    "memory_context": state.get("memory_context"),
+                },
+            )
         if _is_after_sales(query):
             return _after_sales_draft_or_clarify(query)
         if _is_handoff(query):
@@ -197,7 +227,7 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             if order is None:
                 return _final("请提供订单号和手机号后四位后再查询订单。")
             return _tool_decision("query_order", order)
-        if _is_manual_question(query):
+        if _is_manual_question(query) and not _is_recommend(query):
             return _tool_decision(
                 "search_products",
                 _product_query_args(state, query, page_size=5),
@@ -329,6 +359,17 @@ def update_customer_service_state_after_tool(
     result: ToolResult,
 ) -> None:
     if state.get("metadata", {}).get("agent_id") != CUSTOMER_SERVICE_AGENT_ID:
+        return
+    if tool_name in {"search_products", "recommend_products"} and result.success:
+        customer_service = state.setdefault("metadata", {}).setdefault(
+            "customer_service",
+            {},
+        )
+        customer_service["product_filters"] = {
+            key: value
+            for key, value in arguments.items()
+            if key in _PRODUCT_FILTER_KEYS
+        }
         return
     if tool_name != "create_after_sales_ticket":
         return
@@ -610,7 +651,16 @@ def _conversation_session_id(state: Any) -> str | None:
 
 
 def _product_query_args(state: Any, query: str, *, page_size: int) -> dict[str, Any]:
+    customer_service = state.get("metadata", {}).get("customer_service", {})
+    previous_filters = (
+        customer_service.get("product_filters", {})
+        if isinstance(customer_service, dict)
+        else {}
+    )
+    if not isinstance(previous_filters, dict):
+        previous_filters = {}
     args: dict[str, Any] = {
+        **previous_filters,
         "sale_status": "on_sale",
         "in_stock_only": True,
         "sort_by": "popularity",
@@ -627,6 +677,9 @@ def _product_query_args(state: Any, query: str, *, page_size: int) -> dict[str, 
     price_max = _extract_price_max(query)
     if price_max is not None:
         args["price_max"] = price_max
+    price_range = _extract_price_range(query)
+    if price_range is not None:
+        args["price_min"], args["price_max"] = price_range
     if "必须" in query and "清洗" in query:
         args["required_features"] = ["容易清洗"]
     elif "清洗" in query:
@@ -675,6 +728,14 @@ def _extract_model(query: str) -> str | None:
 def _extract_price_max(query: str) -> int | None:
     match = re.search(r"(\d{2,6})\s*(?:以内|以下|内)", query)
     return int(match.group(1)) if match else None
+
+
+def _extract_price_range(query: str) -> tuple[int, int] | None:
+    match = re.search(r"(\d{1,6})\s*(?:到|至|[-~～])\s*(\d{1,6})", query)
+    if match is None:
+        return None
+    lower, upper = int(match.group(1)), int(match.group(2))
+    return (lower, upper) if lower <= upper else (upper, lower)
 
 
 def _pending_after_sales(metadata: dict[str, Any]) -> dict[str, Any] | None:
@@ -733,11 +794,14 @@ def _is_prompt_injection(query: str) -> bool:
 
 
 def _is_product_search(query: str) -> bool:
-    return any(word in query for word in ["查", "找", "看看", "商品", "豆浆机"])
+    return any(word in query for word in ["查", "找", "看看", "挑", "商品", "豆浆机"])
 
 
 def _is_recommend(query: str) -> bool:
-    return any(word in query for word in ["推荐", "适合", "预算", "偏好"])
+    return any(
+        word in query
+        for word in ["推荐", "适合", "预算", "偏好", "想要", "人用", "容易清洗"]
+    )
 
 
 def _is_compare(query: str) -> bool:
@@ -758,6 +822,10 @@ def _is_logistics(query: str) -> bool:
 
 def _is_after_sales(query: str) -> bool:
     return any(word in query for word in ["售后", "维修", "退货", "换货", "坏了"])
+
+
+def _is_return_policy_question(query: str) -> bool:
+    return any(word in query for word in ["退换货规则", "退货规则", "换货规则", "退款规则"])
 
 
 def _is_handoff(query: str) -> bool:

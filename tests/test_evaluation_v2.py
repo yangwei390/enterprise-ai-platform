@@ -152,6 +152,20 @@ def test_suite_loads_yaml():
     assert len(suite.cases) >= 5
 
 
+def test_customer_service_suite_loads_with_agent_target():
+    suite = load_suite(
+        "evaluation/v2/fixtures/suites/customer_service_smoke.yaml"
+    )
+
+    assert suite.id == "customer_service_smoke"
+    assert len(suite.cases) == 15
+    assert all(
+        case.target == "agent"
+        and case.input.get("agent_id") == "customer_service_agent"
+        for case in suite.cases
+    )
+
+
 def test_suite_rejects_invalid_target():
     with pytest.raises(ValueError):
         make_case(target="bad")
@@ -205,6 +219,53 @@ def test_agent_target_uses_agent_runtime_factory(monkeypatch):
         )
     )
     assert result.answer == "agent ok"
+
+
+def test_agent_target_passes_customer_service_agent_id_and_trusted_scope(monkeypatch):
+    captured = {}
+
+    class FakeRuntime:
+        async def arun(self, request):
+            captured["request"] = request
+            return type(
+                "Result",
+                (),
+                {
+                    "answer": "ok",
+                    "action": "direct_answer",
+                    "sources": [],
+                    "citations": [],
+                    "tool_calls": [],
+                    "observations": [],
+                    "trace": [],
+                    "metadata": {},
+                },
+            )()
+
+    monkeypatch.setattr(
+        "evaluation.v2.targets.agent.settings.CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS",
+        "8",
+    )
+    monkeypatch.setattr(
+        "evaluation.v2.targets.agent.AgentRuntimeFactory.get_runtime",
+        lambda: FakeRuntime(),
+    )
+
+    asyncio.run(
+        AgentEvaluationTarget().arun(
+            make_case(
+                target="agent",
+                input={
+                    "agent_id": "customer_service_agent",
+                    "knowledge_base_id": 8,
+                },
+            ),
+            EvaluationContext(run_id="r", suite_id="s"),
+        )
+    )
+
+    assert captured["request"].agent_id == "customer_service_agent"
+    assert captured["request"].allowed_knowledge_base_ids == frozenset({8})
 
 
 def test_tool_target_uses_tool_executor():
@@ -363,6 +424,88 @@ def test_unnecessary_tool_calls():
         EvaluationTargetResult(target="agent", tool_calls=[{"tool_name": "echo"}]),
     )
     assert value == 1
+
+
+def test_customer_service_metrics():
+    result = EvaluationTargetResult(
+        target="agent",
+        tool_calls=[
+            {
+                "tool_name": "recommend_products",
+                "arguments": {"category": "豆浆机"},
+            },
+            {
+                "tool_name": "knowledge_search",
+                "arguments": {"document_id": 101},
+            },
+        ],
+        observations=[
+            {
+                "tool_name": "recommend_products",
+                "raw_result": {
+                    "items": [
+                        {
+                            "product": {
+                                "category": "豆浆机",
+                                "price": "299.00",
+                                "stock_quantity": 3,
+                                "sale_status": "on_sale",
+                                "features": ["容易清洗"],
+                                "use_cases": ["宿舍"],
+                            }
+                        }
+                    ]
+                },
+            }
+        ],
+        sources=[{"document_id": 101}],
+    )
+    case = make_case(
+        expected={
+            "max_recommendations": 3,
+            "write_tool_allowed": False,
+            "document_id": 101,
+            "product_constraints": {
+                "category": "豆浆机",
+                "price_max": 300,
+                "in_stock_only": True,
+                "sale_status": "on_sale",
+                "required_features": ["容易清洗"],
+            },
+        }
+    )
+
+    assert get_metric("recommendation_count").compute(case, result)[0] is True
+    assert get_metric("confirmation_guard").compute(case, result)[0] is True
+    assert get_metric("manual_document_scope").compute(case, result)[0] is True
+    assert get_metric("product_constraint_match").compute(case, result)[0] is True
+
+
+def test_confirmation_guard_distinguishes_blocked_draft_from_execution():
+    case = make_case(expected={"write_tool_allowed": False})
+    metric = get_metric("confirmation_guard")
+
+    blocked = EvaluationTargetResult(
+        target="agent",
+        tool_calls=[
+            {
+                "tool_name": "create_after_sales_ticket",
+                "status": "blocked",
+            }
+        ],
+    )
+    executed = EvaluationTargetResult(
+        target="agent",
+        tool_calls=[
+            {
+                "tool_name": "create_after_sales_ticket",
+                "status": "success",
+            }
+        ],
+    )
+
+    assert metric.compute(case, blocked)[0] is True
+    assert metric.compute(case, executed)[0] is False
 
 
 def test_mcp_tool_available():
@@ -659,6 +802,10 @@ def test_metric_registry_contains_required_metrics():
     names = list_metrics()
     assert "retriever_hit" in names
     assert "workflow_status_match" in names
+    assert "recommendation_count" in names
+    assert "confirmation_guard" in names
+    assert "manual_document_scope" in names
+    assert "product_constraint_match" in names
 
 
 def test_empty_answer_metric():

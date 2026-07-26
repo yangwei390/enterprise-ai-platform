@@ -89,6 +89,92 @@ class TerminationReasonMatchMetric(BaseMetric):
         return actual == expected, {"expected": expected, "actual": actual}
 
 
+class RecommendationCountMetric(BaseMetric):
+    name = "recommendation_count"
+
+    def compute(self, case: EvaluationCase, result: EvaluationTargetResult) -> tuple[bool, dict]:
+        maximum = int(case.expected.get("max_recommendations", 3))
+        items = _tool_result_items(result, "recommend_products")
+        return len(items) <= maximum, {"actual": len(items), "maximum": maximum}
+
+
+class ConfirmationGuardMetric(BaseMetric):
+    name = "confirmation_guard"
+
+    def compute(self, case: EvaluationCase, result: EvaluationTargetResult) -> tuple[bool, dict]:
+        write_tool_allowed = bool(case.expected.get("write_tool_allowed", False))
+        called = any(
+            (item.get("tool_name") or item.get("name")) == "create_after_sales_ticket"
+            and item.get("status") != "blocked"
+            for item in result.tool_calls
+        )
+        return write_tool_allowed or not called, {
+            "write_tool_allowed": write_tool_allowed,
+            "write_tool_called": called,
+        }
+
+
+class ManualDocumentScopeMetric(BaseMetric):
+    name = "manual_document_scope"
+
+    def compute(self, case: EvaluationCase, result: EvaluationTargetResult) -> tuple[bool, dict]:
+        expected_document_id = case.expected.get("document_id")
+        call_document_ids = [
+            item.get("arguments", {}).get("document_id")
+            for item in result.tool_calls
+            if item.get("tool_name") == "knowledge_search"
+            and isinstance(item.get("arguments"), dict)
+        ]
+        source_document_ids = [
+            item.get("document_id")
+            for item in result.sources
+            if isinstance(item, dict)
+        ]
+        target_document_id = (
+            expected_document_id
+            if isinstance(expected_document_id, int)
+            else call_document_ids[0]
+            if len(call_document_ids) == 1 and isinstance(call_document_ids[0], int)
+            else None
+        )
+        matched = target_document_id is not None and call_document_ids == [
+            target_document_id
+        ] and bool(source_document_ids) and all(
+            document_id == target_document_id for document_id in source_document_ids
+        )
+        return matched, {
+            "expected": target_document_id,
+            "call_document_ids": call_document_ids,
+            "source_document_ids": source_document_ids,
+        }
+
+
+class ProductConstraintMatchMetric(BaseMetric):
+    name = "product_constraint_match"
+
+    def compute(self, case: EvaluationCase, result: EvaluationTargetResult) -> tuple[bool, dict]:
+        constraints = case.expected.get("product_constraints", {})
+        if not isinstance(constraints, dict):
+            return False, {"reason": "expected.product_constraints must be an object"}
+        items = [
+            item.get("product", item)
+            for item in (
+                _tool_result_items(result, "recommend_products")
+                or _tool_result_items(result, "search_products")
+            )
+            if isinstance(item, dict)
+        ]
+        violations = [
+            _product_constraint_violations(item, constraints)
+            for item in items
+        ]
+        violations = [item for item in violations if item]
+        return bool(items) and not violations, {
+            "item_count": len(items),
+            "violations": violations,
+        }
+
+
 def _tool_names(result: EvaluationTargetResult) -> list[str]:
     names = []
     for item in result.tool_calls:
@@ -96,6 +182,47 @@ def _tool_names(result: EvaluationTargetResult) -> list[str]:
         if name:
             names.append(str(name))
     return names
+
+
+def _tool_result_items(
+    result: EvaluationTargetResult,
+    tool_name: str,
+) -> list[dict]:
+    for observation in reversed(result.observations):
+        if observation.get("tool_name") != tool_name:
+            continue
+        raw_result = observation.get("raw_result")
+        if isinstance(raw_result, dict) and isinstance(raw_result.get("items"), list):
+            return [item for item in raw_result["items"] if isinstance(item, dict)]
+    return []
+
+
+def _product_constraint_violations(product: dict, constraints: dict) -> list[str]:
+    violations: list[str] = []
+    for field in ("category", "brand", "sale_status"):
+        expected = constraints.get(field)
+        if expected is not None and product.get(field) != expected:
+            violations.append(field)
+    price = product.get("price")
+    if price is not None:
+        numeric_price = float(price)
+        if constraints.get("price_min") is not None and numeric_price < float(
+            constraints["price_min"]
+        ):
+            violations.append("price_min")
+        if constraints.get("price_max") is not None and numeric_price > float(
+            constraints["price_max"]
+        ):
+            violations.append("price_max")
+    if constraints.get("in_stock_only") and int(product.get("stock_quantity") or 0) <= 0:
+        violations.append("stock_quantity")
+    for field in ("required_features", "required_use_cases"):
+        required = {str(item) for item in constraints.get(field, [])}
+        actual_field = "features" if field == "required_features" else "use_cases"
+        actual = {str(item) for item in product.get(actual_field, [])}
+        if not required.issubset(actual):
+            violations.append(field)
+    return violations
 
 
 def _ordered_contains(actual: list[str], expected: list[str]) -> bool:

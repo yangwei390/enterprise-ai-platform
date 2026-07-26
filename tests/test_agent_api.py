@@ -233,6 +233,7 @@ def test_customer_agent_api_injects_server_configured_knowledge_scope(monkeypatc
 
     assert response.status_code == 200
     assert FakeAgentRuntime.last_request.allowed_knowledge_base_ids == frozenset({8, 9})
+    assert FakeAgentRuntime.last_request.conversation_id is None
 
 
 def test_agent_chat_api_enters_langgraph_runtime(monkeypatch):
@@ -359,6 +360,38 @@ def test_agent_stream_api_enters_langgraph_runtime(monkeypatch):
     assert isinstance(called["runtime"], LangGraphAgentRuntime)
     assert called["request"].query == "你好"
     assert called["request"].agent_id == "general_agent"
+
+
+def test_customer_agent_stream_creates_stable_conversation(monkeypatch):
+    service = FakeConversationService()
+    called = {}
+
+    async def fake_astream_events(self, request):
+        called["request"] = request
+        yield {
+            "event": "result",
+            "data": {
+                "result": AgentRuntimeResult(
+                    answer="客服回答",
+                    action="direct_answer",
+                ).model_dump()
+            },
+        }
+
+    monkeypatch.setattr(LangGraphAgentRuntime, "astream_events", fake_astream_events)
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_conversation_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/agent/chat/stream",
+        json={"agent_id": "customer_service_agent", "query": "我要申请售后"},
+    )
+
+    assert response.status_code == 200
+    assert called["request"].agent_id == "customer_service_agent"
+    assert called["request"].conversation_id == 901
 
 
 def test_agent_stream_api_no_evidence_completes_without_error(monkeypatch):

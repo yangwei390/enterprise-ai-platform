@@ -3,8 +3,12 @@ from collections.abc import Awaitable, Callable
 from time import perf_counter
 from typing import Any, cast
 
+from backend.app.agents.customer_service_contract import (
+    customer_service_allowed_knowledge_base_ids,
+)
 from backend.app.agents.factory import AgentRuntimeFactory
 from backend.app.agents.state import AgentRuntimeRequest
+from backend.app.config.settings import settings
 
 from evaluation.v2.schemas import EvaluationCase, EvaluationContext, EvaluationTargetResult
 from evaluation.v2.targets.base import BaseEvaluationTarget, elapsed_ms
@@ -22,7 +26,12 @@ class AgentEvaluationTarget(BaseEvaluationTarget):
         runtime = AgentRuntimeFactory.get_runtime()
         request = AgentRuntimeRequest(
             query=case.query or str(case.input.get("query", "")),
+            agent_id=case.input.get("agent_id"),
             knowledge_base_id=case.input.get("knowledge_base_id"),
+            allowed_knowledge_base_ids=customer_service_allowed_knowledge_base_ids(
+                agent_id=case.input.get("agent_id"),
+                configured_ids=settings.CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS,
+            ),
             conversation_id=case.input.get("conversation_id"),
             memory_context=case.input.get("memory_context"),
             metadata=case.input.get("metadata", {}),
