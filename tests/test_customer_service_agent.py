@@ -709,6 +709,235 @@ def test_customer_product_context_routes_selected_manual_without_cross_model() -
     assert manual_decision.tool_calls[0].arguments["document_id"] == 502
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "第二款尺寸多少",
+        "第二款有几个按键",
+        "第二款包装里面有什么",
+    ],
+)
+def test_customer_llm_classifies_open_product_document_questions(
+    monkeypatch,
+    query: str,
+) -> None:
+    requests = []
+
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            requests.append(request)
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "confidence": 0.96,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(
+        query=query,
+        customer_service={
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304"},
+                    {"product_code": "MX4"},
+                ],
+                "focused_product_code": None,
+            }
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    assert decision.tool_calls[0].tool_name == "search_products"
+    assert decision.tool_calls[0].arguments["keyword"] == "MX4"
+    route = state["metadata"]["customer_service"]["route"]
+    assert route["intent"] == "product_document_fact"
+    assert route["source"] == "primary_manual"
+    assert route["classifier"] == "llm"
+    assert route["confidence"] == 0.96
+    assert len(requests) == 1
+    assert requests[0].tool_choice["function"]["name"] == (
+        "classify_customer_service_intent"
+    )
+
+
+def test_customer_llm_intent_invalid_output_falls_back_safely(monkeypatch) -> None:
+    class InvalidIntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "unrestricted_database_access",
+                            "confidence": 1,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: InvalidIntentLLM(),
+    )
+    state = _state(query="这个产品的外形数据呢")
+
+    asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    assert route["intent"] == "other"
+    assert route["source"] == "planner"
+    assert route["classifier"] == "rules_fallback"
+    assert route["fallback_reason"] == "schema_validation_failed"
+
+
+def test_customer_llm_intent_model_failure_falls_back_safely(monkeypatch) -> None:
+    def fail_get_llm():
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        fail_get_llm,
+    )
+    state = _state(query="这个产品的外形数据呢")
+
+    asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    assert route["intent"] == "other"
+    assert route["source"] == "planner"
+    assert route["classifier"] == "rules_fallback"
+    assert route["fallback_reason"] == "classifier_error"
+
+
+def test_customer_llm_intent_is_reused_across_tool_steps(monkeypatch) -> None:
+    calls = 0
+
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "confidence": 0.94,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(
+        query="第二款尺寸多少",
+        customer_service={
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304"},
+                    {"product_code": "MX4"},
+                ],
+                "focused_product_code": None,
+            }
+        },
+    )
+
+    first = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+    state["observations"] = [
+        {
+            "tool_name": "search_products",
+            "success": True,
+            "raw_result": {
+                "items": [
+                    {
+                        "product_code": "MX4",
+                        "primary_manual_document_id": 404,
+                    }
+                ]
+            },
+        }
+    ]
+    second = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    assert first.tool_calls[0].tool_name == "search_products"
+    assert second.tool_calls[0].tool_name == "knowledge_search"
+    assert second.tool_calls[0].arguments["document_id"] == 404
+    assert calls == 1
+
+
+def test_customer_high_risk_rules_do_not_call_llm_classifier(monkeypatch) -> None:
+    def fail_get_llm():
+        raise AssertionError("high-risk rules must not call the intent classifier")
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        fail_get_llm,
+    )
+
+    decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(
+            _state(query="我要退货")
+        )
+    )
+
+    assert decision.tool_calls == []
+    assert "订单号" in str(decision.content)
+
+
+def test_customer_llm_logistics_intent_still_requires_business_fields(
+    monkeypatch,
+) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "logistics_query",
+                            "confidence": 0.93,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(query="我的包裹到哪了")
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    assert decision.tool_calls == []
+    assert "订单号和手机号后四位" in str(decision.content)
+    route = state["metadata"]["customer_service"]["route"]
+    assert route["intent"] == "logistics_query"
+    assert route["source"] == "order_service"
+    assert route["classifier"] == "llm"
+
+
 def test_customer_product_capability_routes_through_primary_manual_with_evidence() -> None:
     customer_service = {
         "product_context": {
@@ -730,11 +959,10 @@ def test_customer_product_capability_routes_through_primary_manual_with_evidence
 
     assert lookup_decision.tool_calls[0].tool_name == "search_products"
     assert lookup_decision.tool_calls[0].arguments["keyword"] == "MX4"
-    assert lookup["metadata"]["customer_service"]["route"] == {
-        "intent": "product_document_fact",
-        "source": "primary_manual",
-        "evidence_required": True,
-    }
+    route = lookup["metadata"]["customer_service"]["route"]
+    assert route["intent"] == "product_document_fact"
+    assert route["source"] == "primary_manual"
+    assert route["evidence_required"] is True
     assert lookup["metadata"]["retrieval_required"] is True
 
     manual = _state(
@@ -799,11 +1027,10 @@ def test_customer_realtime_product_fact_stays_on_product_catalog() -> None:
     decision = asyncio.run(_decide(state))
 
     assert decision.tool_calls[0].tool_name == "search_products"
-    assert state["metadata"]["customer_service"]["route"] == {
-        "intent": "product_realtime_fact",
-        "source": "product_catalog",
-        "evidence_required": False,
-    }
+    route = state["metadata"]["customer_service"]["route"]
+    assert route["intent"] == "product_realtime_fact"
+    assert route["source"] == "product_catalog"
+    assert route["evidence_required"] is False
     assert state["metadata"]["retrieval_required"] is False
 
 
