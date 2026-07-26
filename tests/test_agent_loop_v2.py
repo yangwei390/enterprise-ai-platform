@@ -159,7 +159,8 @@ def _patch_registry(monkeypatch, registry: ToolRegistry) -> None:
                 ],
                 "workflow_allowlist": ["default_agent_workflow_v2"],
             }
-        )
+        ),
+        replace=True,
     )
 
 

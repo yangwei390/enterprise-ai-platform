@@ -5,6 +5,11 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+from backend.app.agents.customer_service_contract import (
+    CUSTOMER_SERVICE_AGENT_ID,
+    CUSTOMER_SERVICE_PENDING_KEY,
+    CUSTOMER_SERVICE_TOOL_ALLOWLIST,
+)
 from backend.app.agents.definition import (
     AgentDefinition,
     AgentDefinitionError,
@@ -24,6 +29,7 @@ from backend.app.config.settings import settings
 from backend.app.logger import logger
 from backend.app.memory.factory import MemoryFactory
 from backend.app.memory.state import MemoryState
+from backend.app.tools import get_tool_registry
 
 
 class LangGraphAgentRuntime:
@@ -308,10 +314,11 @@ class LangGraphAgentRuntime:
         }
         if async_metadata is not None:
             metadata["async_runtime"] = async_metadata
+        public_metadata = sanitize(metadata)
         return AgentRuntimeResult(
             answer=f"Agent V2 执行失败：{reason}",
             action="failed",
-            metadata=metadata,
+            metadata=public_metadata if isinstance(public_metadata, dict) else {},
             trace=[],
         )
 
@@ -351,7 +358,27 @@ class LangGraphAgentRuntime:
                 yield update
 
     def _load_definition(self, request: AgentRuntimeRequest) -> AgentDefinition:
-        return get_agent_definition_registry().get(request.agent_id)
+        definition = get_agent_definition_registry().get(request.agent_id)
+        self._validate_definition_tools(definition)
+        return definition
+
+    def _validate_definition_tools(self, definition: AgentDefinition) -> None:
+        if definition.id != CUSTOMER_SERVICE_AGENT_ID:
+            return
+        registry = get_tool_registry()
+        available_tools = {
+            descriptor.name
+            for descriptor in registry.list_descriptors(enabled_only=True)
+        }
+        missing = [
+            tool_name
+            for tool_name in CUSTOMER_SERVICE_TOOL_ALLOWLIST
+            if tool_name not in available_tools
+        ]
+        if missing:
+            raise AgentDefinitionError(
+                "Customer service agent missing required tools: " + ", ".join(missing)
+            )
 
     def _create_state(
         self,
@@ -362,15 +389,24 @@ class LangGraphAgentRuntime:
         session_state: MemoryState | None,
         extra_metadata: dict | None = None,
     ) -> AgentState:
-        knowledge_base_id = (
+        requested_knowledge_base_id = (
             request.knowledge_base_id
             if request.knowledge_base_id is not None
             else definition.default_knowledge_base_id
         )
+        allowed_knowledge_base_ids = request.allowed_knowledge_base_ids
+        knowledge_base_id = requested_knowledge_base_id
+        if definition.id == CUSTOMER_SERVICE_AGENT_ID:
+            knowledge_base_id = (
+                requested_knowledge_base_id
+                if requested_knowledge_base_id in allowed_knowledge_base_ids
+                else None
+            )
         state = create_initial_state(
             query=request.query,
             conversation_id=request.conversation_id,
             knowledge_base_id=knowledge_base_id,
+            allowed_knowledge_base_ids=allowed_knowledge_base_ids,
             memory_context=request.memory_context,
             metadata=self._metadata_with_session(
                 {
@@ -383,6 +419,7 @@ class LangGraphAgentRuntime:
                 knowledge_base_id=knowledge_base_id,
             ),
         )
+        state["metadata"]["runtime_turn_id"] = uuid4().hex
         state["messages"].insert(
             0,
             {
@@ -505,6 +542,7 @@ class LangGraphAgentRuntime:
             "session": {
                 "session_id": session_id,
                 "loaded": session_state is not None,
+                "revision": session_state.revision if session_state is not None else 0,
             },
         }
 
@@ -517,32 +555,43 @@ class LangGraphAgentRuntime:
             return
         restored_messages = session_state.messages[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
         state["messages"] = [*restored_messages, *state.get("messages", [])]
-        state["metadata"]["session"]["restored_tool_result_count"] = len(
+        state["metadata"].setdefault("session", {})["restored_tool_result_count"] = len(
             session_state.tool_results
         )
         state["metadata"]["session"]["trace_id"] = session_state.trace_id
+        customer_service_state = session_state.session_metadata.get("customer_service")
+        if isinstance(customer_service_state, dict):
+            state["metadata"]["customer_service"] = customer_service_state
 
     def _save_session(self, session_id: str, state: dict) -> None:
         try:
-            session_state = MemoryState(
-                session_id=session_id,
-                messages=state.get("messages", [])[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :],
-                tool_results=state.get("observations", [])[
-                    -settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :
-                ],
-                current_plan=state.get("plan"),
-                current_step=str(state.get("current_action") or "final"),
-                planner_output=state.get("plan"),
-                workflow_state={},
-                trace_id=state.get("metadata", {}).get("trace_id"),
-                session_metadata={
-                    "runtime": "langgraph_v2",
-                    "final_answer": state.get("final_answer"),
-                    "termination_reason": state.get("termination_reason"),
-                    "step_count": state.get("step_count"),
-                },
+            manager = MemoryFactory.get_manager()
+            expected_revision = int(
+                state.get("metadata", {}).get("session", {}).get("revision", 0)
             )
-            MemoryFactory.get_manager().save_session(session_state)
+            session_state = self._build_session_state(
+                session_id=session_id,
+                state=state,
+                revision=expected_revision + 1,
+            )
+            saved = self._compare_and_save_session(
+                manager,
+                session_state,
+                expected_revision=expected_revision,
+            )
+            if not saved:
+                saved = self._resolve_customer_service_session_conflict(
+                    manager=manager,
+                    session_state=session_state,
+                )
+            if not saved:
+                state.setdefault("metadata", {}).setdefault("memory", {})[
+                    "session_saved"
+                ] = False
+                state.setdefault("metadata", {}).setdefault("memory", {})[
+                    "save_conflict"
+                ] = True
+                return
             state.setdefault("metadata", {}).setdefault("memory", {})[
                 "session_saved"
             ] = True
@@ -557,6 +606,95 @@ class LangGraphAgentRuntime:
             state.setdefault("metadata", {}).setdefault("memory", {})[
                 "error"
             ] = str(exc)
+
+    def _build_session_state(
+        self,
+        *,
+        session_id: str,
+        state: dict,
+        revision: int,
+    ) -> MemoryState:
+        return MemoryState(
+            session_id=session_id,
+            revision=revision,
+            messages=state.get("messages", [])[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :],
+            tool_results=state.get("observations", [])[
+                -settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :
+            ],
+            current_plan=state.get("plan"),
+            current_step=str(state.get("current_action") or "final"),
+            planner_output=state.get("plan"),
+            workflow_state={},
+            trace_id=state.get("metadata", {}).get("trace_id"),
+            session_metadata={
+                "runtime": "langgraph_v2",
+                "final_answer": state.get("final_answer"),
+                "termination_reason": state.get("termination_reason"),
+                "step_count": state.get("step_count"),
+                "customer_service": state.get("metadata", {}).get(
+                    "customer_service",
+                    {},
+                ),
+            },
+        )
+
+    def _compare_and_save_session(
+        self,
+        manager: Any,
+        session_state: MemoryState,
+        *,
+        expected_revision: int,
+    ) -> bool:
+        compare_and_save = getattr(manager, "compare_and_save_session", None)
+        if callable(compare_and_save):
+            return bool(
+                compare_and_save(
+                    session_state,
+                    expected_revision=expected_revision,
+                )
+            )
+        manager.save_session(session_state)
+        return True
+
+    def _resolve_customer_service_session_conflict(
+        self,
+        *,
+        manager: Any,
+        session_state: MemoryState,
+    ) -> bool:
+        customer_service = session_state.session_metadata.get("customer_service")
+        if not isinstance(customer_service, dict):
+            return False
+        operation_id = customer_service.get("last_confirmed_operation_id")
+        if not operation_id:
+            latest = manager.load_session(session_state.session_id)
+            if latest is None:
+                return False
+            latest_customer_service = latest.session_metadata.get("customer_service")
+            if not isinstance(latest_customer_service, dict):
+                latest_customer_service = {}
+            pending = customer_service.get(CUSTOMER_SERVICE_PENDING_KEY)
+            latest_pending = latest_customer_service.get(CUSTOMER_SERVICE_PENDING_KEY)
+            if pending is not None and latest_pending is None:
+                return True
+            return False
+        for _ in range(3):
+            latest = manager.load_session(session_state.session_id)
+            if latest is None:
+                return False
+            latest_customer_service = latest.session_metadata.get("customer_service")
+            if not isinstance(latest_customer_service, dict):
+                latest_customer_service = {}
+            if latest_customer_service.get("last_confirmed_operation_id") == operation_id:
+                return True
+            retry_state = session_state.model_copy(update={"revision": latest.revision + 1})
+            if self._compare_and_save_session(
+                manager,
+                retry_state,
+                expected_revision=latest.revision,
+            ):
+                return True
+        return False
 
     def _to_result(self, state: dict) -> AgentRuntimeResult:
         metadata = dict(state.get("metadata", {}))
@@ -607,6 +745,7 @@ class LangGraphAgentRuntime:
             metadata["trace_failed"] = True
             metadata["trace_error"] = sanitize(str(exc))
 
+        public_metadata = sanitize(metadata)
         return AgentRuntimeResult(
             answer=answer,
             action="tool" if state.get("tool_calls") else "direct_answer",
@@ -614,6 +753,6 @@ class LangGraphAgentRuntime:
             observations=state.get("observations", []),
             sources=sources,
             citations=citations,
-            metadata=metadata,
+            metadata=public_metadata if isinstance(public_metadata, dict) else {},
             trace=trace,
         )

@@ -214,6 +214,27 @@ def test_agent_chat_api_uses_agent_runtime(monkeypatch):
     assert FakeAgentRuntime.last_request.metadata == {"source": "test"}
 
 
+def test_customer_agent_api_injects_server_configured_knowledge_scope(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.api.agent.settings.CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS",
+        "8,9",
+    )
+    client = _agent_client(monkeypatch)
+
+    response = client.post(
+        "/agent/chat",
+        json={
+            "agent_id": "customer_service_agent",
+            "query": "型号 P001 怎么清洁",
+            "knowledge_base_id": 999,
+            "metadata": {"allowed_knowledge_base_ids": [999]},
+        },
+    )
+
+    assert response.status_code == 200
+    assert FakeAgentRuntime.last_request.allowed_knowledge_base_ids == frozenset({8, 9})
+
+
 def test_agent_chat_api_enters_langgraph_runtime(monkeypatch):
     called = {}
 

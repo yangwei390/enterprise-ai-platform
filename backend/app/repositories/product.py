@@ -171,6 +171,59 @@ class ProductRepository(BaseRepository):
         )
         return self.db.execute(statement).scalar_one_or_none()
 
+    def list_primary_manual_links(
+        self,
+        product_ids: list[int],
+        *,
+        allowed_knowledge_base_ids: set[int],
+    ) -> list[ProductDocumentLink]:
+        if not product_ids:
+            return []
+        if not allowed_knowledge_base_ids:
+            return []
+        statement = (
+            select(ProductDocumentLink)
+            .join(Product, Product.id == ProductDocumentLink.product_id)
+            .join(Document, Document.id == ProductDocumentLink.document_id)
+            .where(
+                ProductDocumentLink.product_id.in_(product_ids),
+                ProductDocumentLink.document_type == "manual",
+                ProductDocumentLink.is_primary.is_(True),
+                Product.deleted_at.is_(None),
+                Product.is_active.is_(True),
+                Document.deleted_at.is_(None),
+                Document.status == "uploaded",
+                Document.parse_status == "success",
+                Document.knowledge_base_id.in_(allowed_knowledge_base_ids),
+            )
+        )
+        return list(self.db.execute(statement).scalars().all())
+
+    def compile_primary_manual_sql_for_dialect(
+        self,
+        product_ids: list[int],
+        *,
+        allowed_knowledge_base_ids: set[int],
+        dialect: Dialect,
+    ) -> str:
+        statement = (
+            select(ProductDocumentLink)
+            .join(Product, Product.id == ProductDocumentLink.product_id)
+            .join(Document, Document.id == ProductDocumentLink.document_id)
+            .where(
+                ProductDocumentLink.product_id.in_(product_ids),
+                ProductDocumentLink.document_type == "manual",
+                ProductDocumentLink.is_primary.is_(True),
+                Product.deleted_at.is_(None),
+                Product.is_active.is_(True),
+                Document.deleted_at.is_(None),
+                Document.status == "uploaded",
+                Document.parse_status == "success",
+                Document.knowledge_base_id.in_(allowed_knowledge_base_ids),
+            )
+        )
+        return str(statement.compile(dialect=dialect))
+
     def get_primary_manual_link_for_update(
         self,
         product_id: int,

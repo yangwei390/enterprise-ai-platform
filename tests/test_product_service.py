@@ -23,6 +23,8 @@ class FakeProductRepository:
         self.committed = False
         self.rolled_back = False
         self.links = []
+        self.primary_manual_product_ids: list[int] | None = None
+        self.primary_manual_allowed_kbs: set[int] | None = None
         self.primary_unset_for: int | None = None
         self.calls: list[str] = []
         self.raise_on_create: Exception | None = None
@@ -139,6 +141,20 @@ class FakeProductRepository:
         self.calls.append("lock_old_primary")
         return self.get_primary_manual_link(product_id)
 
+    def list_primary_manual_links(
+        self,
+        product_ids: list[int],
+        *,
+        allowed_knowledge_base_ids: set[int],
+    ):
+        self.primary_manual_product_ids = product_ids
+        self.primary_manual_allowed_kbs = allowed_knowledge_base_ids
+        return [
+            link
+            for link in self.links
+            if link.product_id in product_ids and link.document_type == "manual" and link.is_primary
+        ]
+
     def unset_primary_manual_link(self, link):
         self.calls.append("unset_old")
         self.primary_unset_for = link.product_id
@@ -237,6 +253,101 @@ def test_product_service_compare_uses_single_batch_query_and_preserves_request_o
     assert repository.batch_product_codes == ["P002", "P001", "P404"]
     assert [product.product_code for product in comparison.products] == ["P002", "P001"]
     assert comparison.missing_product_codes == ["P404"]
+
+
+def test_product_service_primary_manual_document_ids_uses_batch_repository_call() -> None:
+    repository = FakeProductRepository()
+    repository.links.extend(
+        [
+            SimpleNamespace(
+                id=1,
+                product_id=1,
+                document_id=11,
+                document_type="manual",
+                is_primary=True,
+            ),
+            SimpleNamespace(
+                id=2,
+                product_id=2,
+                document_id=12,
+                document_type="manual",
+                is_primary=False,
+            ),
+        ]
+    )
+    service = _product_service(repository)
+
+    result = service.primary_manual_document_ids_for_scope(
+        [1, 2, 1],
+        allowed_knowledge_base_ids={7},
+    )
+
+    assert repository.primary_manual_product_ids == [1, 2]
+    assert repository.primary_manual_allowed_kbs == {7}
+    assert result == {1: 11}
+
+
+def test_product_service_primary_manual_fail_closed_without_allowed_scope() -> None:
+    repository = FakeProductRepository()
+    repository.primary_manual_product_ids = []
+    service = _product_service(repository)
+
+    result = service.primary_manual_document_ids_for_scope(
+        [1],
+        allowed_knowledge_base_ids=set(),
+    )
+
+    assert result == {}
+    assert repository.primary_manual_product_ids == []
+
+
+def test_product_service_rejects_duplicate_primary_manual_links() -> None:
+    repository = FakeProductRepository()
+    repository.links.extend(
+        [
+            SimpleNamespace(
+                id=1,
+                product_id=1,
+                document_id=11,
+                document_type="manual",
+                is_primary=True,
+            ),
+            SimpleNamespace(
+                id=2,
+                product_id=1,
+                document_id=13,
+                document_type="manual",
+                is_primary=True,
+            ),
+        ]
+    )
+    service = _product_service(repository)
+
+    with pytest.raises(BusinessException) as exc_info:
+        service.primary_manual_document_ids_for_scope(
+            [1],
+            allowed_knowledge_base_ids={7},
+        )
+
+    assert exc_info.value.code == PRODUCT_ERROR_DOCUMENT_LINK
+
+
+def test_product_repository_primary_manual_sql_filters_document_scope() -> None:
+    repository = ProductRepository(cast(Any, None))
+
+    sql = repository.compile_primary_manual_sql_for_dialect(
+        [1, 2],
+        allowed_knowledge_base_ids={7, 8},
+        dialect=postgresql.dialect(),
+    )
+
+    assert "JOIN documents" in sql
+    assert "documents.deleted_at IS NULL" in sql
+    assert "documents.status = " in sql
+    assert "documents.parse_status = " in sql
+    assert "documents.knowledge_base_id IN" in sql
+    assert "product_document_links.product_id IN" in sql
+    assert "success" not in sql
 
 
 def test_product_repository_does_not_own_recommendation_or_nlp_rules() -> None:

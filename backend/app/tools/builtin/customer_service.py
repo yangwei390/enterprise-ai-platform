@@ -76,6 +76,14 @@ class ProductToolQueryArgs(BaseModel):
     sort_order: SortOrder = "desc"
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
+    knowledge_base_id: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "平台注入的当前知识库范围，用于限定主说明书 document_id；"
+            "缺失时不返回说明书 ID。"
+        ),
+    )
 
     @field_validator(
         "required_features",
@@ -109,7 +117,10 @@ class ProductToolQueryArgs(BaseModel):
         return self
 
     def to_product_query(self) -> ProductQuery:
-        return ProductQuery(**self.model_dump())
+        return ProductQuery(**self.model_dump(exclude={"knowledge_base_id"}))
+
+    def manual_knowledge_base_scope(self) -> set[int]:
+        return {self.knowledge_base_id} if self.knowledge_base_id is not None else set()
 
 
 class SearchProductsArgs(ProductToolQueryArgs):
@@ -125,6 +136,10 @@ class CompareProductsArgs(BaseModel):
 
     product_codes: list[str] = Field(min_length=2, max_length=5)
     fields: list[CompareField] = Field(default_factory=lambda: list(COMPARE_FIELD_DEFAULTS))
+    knowledge_base_id: int | None = Field(default=None, ge=1)
+
+    def manual_knowledge_base_scope(self) -> set[int]:
+        return {self.knowledge_base_id} if self.knowledge_base_id is not None else set()
 
     @field_validator("product_codes")
     @classmethod
@@ -269,11 +284,21 @@ class SearchProductsTool(_ProductTool):
 
         def callback(service):
             products, total = service.list(args.to_product_query())
+            manual_document_ids = service.primary_manual_document_ids_for_scope(
+                [product.id for product in products],
+                allowed_knowledge_base_ids=args.manual_knowledge_base_scope(),
+            )
             return ToolResult(
                 name=self.name,
                 success=True,
                 result={
-                    "items": [_product_to_tool_item(product) for product in products],
+                    "items": [
+                        _product_to_tool_item(
+                            product,
+                            primary_manual_document_id=manual_document_ids.get(product.id),
+                        )
+                        for product in products
+                    ],
                     "total": total,
                     "page": args.page,
                     "page_size": args.page_size,
@@ -297,9 +322,16 @@ class RecommendProductsTool(_ProductTool):
 
         def callback(service):
             recommendations, no_result_reason = service.recommend(args.to_product_query())
+            manual_document_ids = service.primary_manual_document_ids_for_scope(
+                [item.product.id for item in recommendations],
+                allowed_knowledge_base_ids=args.manual_knowledge_base_scope(),
+            )
             items = [
                 {
-                    "product": _product_to_tool_item(item.product),
+                    "product": _product_to_tool_item(
+                        item.product,
+                        primary_manual_document_id=manual_document_ids.get(item.product.id),
+                    ),
                     "score": item.score,
                     "reasons": list(item.reasons),
                 }
@@ -332,12 +364,20 @@ class CompareProductsTool(_ProductTool):
 
         def callback(service):
             comparison = service.compare_by_product_codes(args.product_codes)
+            manual_document_ids = service.primary_manual_document_ids_for_scope(
+                [product.id for product in comparison.products],
+                allowed_knowledge_base_ids=args.manual_knowledge_base_scope(),
+            )
             return ToolResult(
                 name=self.name,
                 success=True,
                 result={
                     "items": [
-                        _product_to_comparison_item(product, args.fields)
+                        _product_to_comparison_item(
+                            product,
+                            args.fields,
+                            primary_manual_document_id=manual_document_ids.get(product.id),
+                        )
                         for product in comparison.products
                     ],
                     "missing_product_codes": comparison.missing_product_codes,
@@ -492,7 +532,11 @@ def _safe_tool_call(tool_name: str, callback: Callable[[], ToolResult]) -> ToolR
         )
 
 
-def _product_to_tool_item(product: Any) -> dict[str, Any]:
+def _product_to_tool_item(
+    product: Any,
+    *,
+    primary_manual_document_id: int | None = None,
+) -> dict[str, Any]:
     return _jsonable(
         {
             "id": product.id,
@@ -514,14 +558,21 @@ def _product_to_tool_item(product: Any) -> dict[str, Any]:
             "official_product_url": getattr(product, "official_product_url", None),
             "source_checked_at": getattr(product, "source_checked_at", None),
             "is_active": product.is_active,
+            "primary_manual_document_id": primary_manual_document_id,
         }
     )
 
 
-def _product_to_comparison_item(product: Any, fields: list[CompareField]) -> dict[str, Any]:
+def _product_to_comparison_item(
+    product: Any,
+    fields: list[CompareField],
+    *,
+    primary_manual_document_id: int | None = None,
+) -> dict[str, Any]:
     item: dict[str, Any] = {
         "product_code": product.product_code,
         "name": product.name,
+        "primary_manual_document_id": primary_manual_document_id,
     }
     for field in fields:
         if field == "manual_evidence_summary":

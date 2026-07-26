@@ -23,6 +23,36 @@ class RedisMemoryProvider(MemoryProvider):
             ttl_seconds or settings.REDIS_SESSION_TTL_SECONDS,
         )
 
+    def compare_and_save_session(
+        self,
+        state: MemoryState,
+        *,
+        expected_revision: int,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        script = """
+        local current = redis.call('GET', KEYS[1])
+        local current_revision = 0
+        if current then
+            local decoded = cjson.decode(current)
+            current_revision = tonumber(decoded['revision'] or 0)
+        end
+        if current_revision ~= tonumber(ARGV[1]) then
+            return 0
+        end
+        redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
+        return 1
+        """
+        result = self.redis.eval(
+            script,
+            1,
+            self._key("session", state.session_id),
+            expected_revision,
+            json.dumps(state.model_dump(), ensure_ascii=False),
+            ttl_seconds or settings.REDIS_SESSION_TTL_SECONDS,
+        )
+        return bool(result)
+
     def load_session(self, session_id: str) -> MemoryState | None:
         data = self._get_json(self._key("session", session_id))
         return MemoryState.model_validate(data) if data else None

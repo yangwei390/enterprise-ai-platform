@@ -27,6 +27,7 @@ class AgentState(TypedDict):
     metadata: dict
     conversation_id: NotRequired[int | None]
     knowledge_base_id: NotRequired[int | None]
+    allowed_knowledge_base_ids: NotRequired[list[int]]
     memory_context: NotRequired[str | None]
 
 
@@ -37,6 +38,7 @@ def create_initial_state(
     knowledge_base_id: int | None,
     memory_context: str | None,
     metadata: dict,
+    allowed_knowledge_base_ids: frozenset[int] = frozenset(),
 ) -> AgentState:
     return AgentState(
         messages=[{"role": "user", "content": query}],
@@ -97,5 +99,6 @@ def create_initial_state(
         },
         conversation_id=conversation_id,
         knowledge_base_id=knowledge_base_id,
+        allowed_knowledge_base_ids=sorted(allowed_knowledge_base_ids),
         memory_context=memory_context,
     )

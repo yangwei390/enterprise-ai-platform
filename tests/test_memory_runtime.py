@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 from backend.app.agents.langgraph.runtime import LangGraphAgentRuntime
@@ -40,6 +41,17 @@ class FakeRedis:
         for key in list(self.store):
             if key.startswith(prefix) and self.get(key) is not None:
                 yield key
+
+    def eval(self, script: str, numkeys: int, key: str, *args):
+        assert "current_revision" in script
+        assert numkeys == 1
+        expected_revision, value, ttl = args
+        current = self.get(key)
+        current_revision = json.loads(current).get("revision", 0) if current else 0
+        if current_revision != expected_revision:
+            return 0
+        self.set(key, value, ex=ttl)
+        return 1
 
 
 class CacheArgs(BaseModel):
@@ -95,6 +107,23 @@ def test_redis_provider_session_save_and_load():
     assert loaded.messages[0]["content"] == "hi"
 
 
+def test_redis_provider_compare_and_save_rejects_stale_revision():
+    provider = RedisMemoryProvider(redis_client=FakeRedis(), prefix="test")
+    provider.save_session(MemoryState(session_id="s1", revision=1), ttl_seconds=60)
+
+    assert provider.compare_and_save_session(
+        MemoryState(session_id="s1", revision=2),
+        expected_revision=1,
+        ttl_seconds=60,
+    )
+    assert not provider.compare_and_save_session(
+        MemoryState(session_id="s1", revision=2),
+        expected_revision=1,
+        ttl_seconds=60,
+    )
+    assert provider.load_session("s1").revision == 2
+
+
 def test_session_save_and_load():
     manager = MemoryManager(InMemoryMemoryProvider())
     state = MemoryState(session_id="s1", current_step="planner")
@@ -102,6 +131,21 @@ def test_session_save_and_load():
     manager.save_session(state)
 
     assert manager.load_session("s1").current_step == "planner"
+
+
+def test_in_memory_session_compare_and_save_rejects_stale_revision():
+    manager = MemoryManager(InMemoryMemoryProvider())
+    manager.save_session(MemoryState(session_id="s1", revision=1))
+
+    assert manager.compare_and_save_session(
+        MemoryState(session_id="s1", revision=2),
+        expected_revision=1,
+    )
+    assert not manager.compare_and_save_session(
+        MemoryState(session_id="s1", revision=2),
+        expected_revision=1,
+    )
+    assert manager.load_session("s1").revision == 2
 
 
 def test_tool_cache_miss_then_hit(monkeypatch):

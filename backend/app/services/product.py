@@ -188,6 +188,46 @@ class ProductService(BaseService[ProductRepository]):
             missing_product_codes=missing_product_codes,
         )
 
+    def primary_manual_document_ids(self, product_ids: list[int]) -> dict[int, int]:
+        return self.primary_manual_document_ids_for_scope(
+            product_ids,
+            allowed_knowledge_base_ids=set(),
+        )
+
+    def primary_manual_document_ids_for_scope(
+        self,
+        product_ids: list[int],
+        *,
+        allowed_knowledge_base_ids: set[int],
+    ) -> dict[int, int]:
+        unique_product_ids = []
+        seen: set[int] = set()
+        for product_id in product_ids:
+            if product_id not in seen:
+                unique_product_ids.append(product_id)
+                seen.add(product_id)
+        if not unique_product_ids or not allowed_knowledge_base_ids:
+            return {}
+        links = self.repository.list_primary_manual_links(
+            unique_product_ids,
+            allowed_knowledge_base_ids=allowed_knowledge_base_ids,
+        )
+        result: dict[int, int] = {}
+        duplicate_product_ids: set[int] = set()
+        for link in links:
+            if link.document_type != "manual" or not link.is_primary:
+                continue
+            if link.product_id in result:
+                duplicate_product_ids.add(link.product_id)
+                continue
+            result[link.product_id] = link.document_id
+        if duplicate_product_ids:
+            raise BusinessException(
+                PRODUCT_ERROR_DOCUMENT_LINK,
+                "商品主说明书关联数据不一致",
+            )
+        return result
+
     def normalize_query(self, query: ProductQuery) -> ProductQuery:
         data = query.model_dump()
         data["required_features"] = self._unique_texts(

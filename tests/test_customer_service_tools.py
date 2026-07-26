@@ -37,6 +37,7 @@ class FakeProductService:
         self.list_queries: list[ProductQuery] = []
         self.recommend_queries: list[ProductQuery] = []
         self.compare_product_codes: list[list[str]] = []
+        self.primary_manual_product_ids: list[list[int]] = []
         self.should_raise_business = False
         self.should_raise_unknown = False
 
@@ -85,6 +86,15 @@ class FakeProductService:
             ],
             missing_product_codes=["P404"],
         )
+
+    def primary_manual_document_ids_for_scope(
+        self,
+        product_ids: list[int],
+        *,
+        allowed_knowledge_base_ids: set[int],
+    ) -> dict[int, int]:
+        self.primary_manual_product_ids.append(product_ids)
+        return {1: 101, 2: 202} if allowed_knowledge_base_ids else {}
 
 
 def _product_provider(service: FakeProductService):
@@ -183,6 +193,7 @@ def test_search_products_maps_args_to_product_query_without_mixing_preferences()
             "sort_order": "asc",
             "page": 2,
             "page_size": 5,
+            "knowledge_base_id": 8,
         }
     )
 
@@ -196,6 +207,7 @@ def test_search_products_maps_args_to_product_query_without_mixing_preferences()
     assert query.use_cases == ["旧场景"]
     result_data = _result_dict(result)
     assert result_data["items"][0]["price"] == "299.00"
+    assert result_data["items"][0]["primary_manual_document_id"] == 101
     assert "deleted_at" not in result_data["items"][0]
 
 

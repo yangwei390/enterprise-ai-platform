@@ -1,4 +1,5 @@
 import time
+from threading import RLock
 
 from backend.app.memory.provider import MemoryProvider
 from backend.app.memory.snapshot import MemorySnapshot
@@ -10,13 +11,33 @@ class InMemoryMemoryProvider(MemoryProvider):
         self.sessions: dict[str, tuple[dict, float | None]] = {}
         self.cache: dict[str, tuple[dict, float | None]] = {}
         self.checkpoints: dict[str, tuple[dict, float | None]] = {}
+        self._session_lock = RLock()
 
     @property
     def name(self) -> str:
         return "memory"
 
     def save_session(self, state: MemoryState, ttl_seconds: int | None = None) -> None:
-        self.sessions[state.session_id] = (state.model_dump(), _expires_at(ttl_seconds))
+        with self._session_lock:
+            self.sessions[state.session_id] = (state.model_dump(), _expires_at(ttl_seconds))
+
+    def compare_and_save_session(
+        self,
+        state: MemoryState,
+        *,
+        expected_revision: int,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        with self._session_lock:
+            current = self._get(self.sessions, state.session_id)
+            current_revision = int(current.get("revision", 0)) if current else 0
+            if current_revision != expected_revision:
+                return False
+            self.sessions[state.session_id] = (
+                state.model_dump(),
+                _expires_at(ttl_seconds),
+            )
+            return True
 
     def load_session(self, session_id: str) -> MemoryState | None:
         value = self._get(self.sessions, session_id)

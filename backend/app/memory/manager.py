@@ -15,6 +15,18 @@ class MemoryManager:
     def save_session(self, state: MemoryState) -> None:
         self.provider.save_session(state, settings.REDIS_SESSION_TTL_SECONDS)
 
+    def compare_and_save_session(
+        self,
+        state: MemoryState,
+        *,
+        expected_revision: int,
+    ) -> bool:
+        return self.provider.compare_and_save_session(
+            state,
+            expected_revision=expected_revision,
+            ttl_seconds=settings.REDIS_SESSION_TTL_SECONDS,
+        )
+
     def load_session(self, session_id: str) -> MemoryState | None:
         return self.provider.load_session(session_id)
 

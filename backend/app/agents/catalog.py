@@ -11,7 +11,11 @@ class AgentCatalog:
             descriptor.name
             for descriptor in registry.list_descriptors(enabled_only=True)
         }
-        definitions = get_agent_definition_registry().list()
+        definitions = [
+            definition
+            for definition in get_agent_definition_registry().list()
+            if self._definition_available(definition, enabled_tools)
+        ]
         return [
             AgentAssistant(
                 id=definition.id,
@@ -32,6 +36,13 @@ class AgentCatalog:
         definition: AgentDefinition,
         enabled_tools: set[str],
     ) -> list[str]:
+        if definition.id == "customer_service_agent":
+            return [
+                "查询模拟商品目录",
+                "按主说明书限定检索产品资料",
+                "查询 Mock 订单和物流",
+                "创建模拟售后草稿、确认工单和模拟转人工记录",
+            ]
         if definition.id == "knowledge_research_agent":
             return [
                 "查询企业知识库",
@@ -58,6 +69,15 @@ class AgentCatalog:
         if any(tool_name.startswith("mcp__") for tool_name in enabled_tools):
             capabilities.append("使用已接入的业务能力完成任务")
         return capabilities
+
+    def _definition_available(
+        self,
+        definition: AgentDefinition,
+        enabled_tools: set[str],
+    ) -> bool:
+        if definition.id != "customer_service_agent":
+            return True
+        return set(definition.tool_allowlist).issubset(enabled_tools)
 
     def _recommended_agent_id(self, enabled_tools: set[str]) -> str:
         return (

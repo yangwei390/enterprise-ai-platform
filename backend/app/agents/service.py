@@ -1,6 +1,10 @@
 from backend.app.agents.base import AgentRunRequest, AgentRunResult, AgentRunStatus, AgentStep
+from backend.app.agents.customer_service_contract import (
+    customer_service_allowed_knowledge_base_ids,
+)
 from backend.app.agents.factory import AgentRuntimeFactory
 from backend.app.agents.state import AgentRuntimeRequest
+from backend.app.config.settings import settings
 
 
 class AgentService:
@@ -9,6 +13,10 @@ class AgentService:
             query=request.task,
             agent_id=request.agent_id,
             knowledge_base_id=request.knowledge_base_id,
+            allowed_knowledge_base_ids=customer_service_allowed_knowledge_base_ids(
+                agent_id=request.agent_id,
+                configured_ids=settings.CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS,
+            ),
             conversation_id=request.conversation_id,
             memory_context=None,
             metadata={

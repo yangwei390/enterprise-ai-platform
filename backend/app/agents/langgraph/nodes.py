@@ -5,6 +5,11 @@ from inspect import isawaitable
 from time import perf_counter
 from typing import cast
 
+from backend.app.agents.customer_service import (
+    evaluate_customer_service_tool_policy,
+    prepare_customer_service_tool_arguments,
+    update_customer_service_state_after_tool,
+)
 from backend.app.agents.evidence import (
     NO_EVIDENCE_ANSWER,
     build_evidence_metadata,
@@ -33,6 +38,7 @@ from backend.app.agents.tool_scope import (
     check_tool_permission,
     tool_scope_trace,
 )
+from backend.app.agents.trace_builder import sanitize
 from backend.app.config.settings import settings
 from backend.app.tools import ToolCall, ToolExecutor, ToolResult
 from backend.app.tools.registry import ToolDisabledError
@@ -123,6 +129,13 @@ class ToolNode:
 
         executable_calls: list[AgentToolCall] = []
         for tool_call in pending:
+            prepared_arguments = prepare_customer_service_tool_arguments(
+                state=state,
+                tool_name=tool_call.tool_name,
+                arguments=tool_call.arguments,
+            )
+            if prepared_arguments is not tool_call.arguments:
+                tool_call = tool_call.model_copy(update={"arguments": prepared_arguments})
             permission_result = self._check_permission(state, tool_call)
             if permission_result is not None:
                 self._record_result(state, tool_call, permission_result, started_at)
@@ -132,6 +145,16 @@ class ToolNode:
             validation_result = self._validate_arguments(tool_call)
             if validation_result is not None:
                 self._record_result(state, tool_call, validation_result, started_at)
+                state["current_action"] = "reflect"
+                continue
+
+            policy_result = evaluate_customer_service_tool_policy(
+                state=state,
+                tool_name=tool_call.tool_name,
+                arguments=tool_call.arguments,
+            )
+            if policy_result is not None:
+                self._record_result(state, tool_call, policy_result, started_at)
                 state["current_action"] = "reflect"
                 continue
 
@@ -288,6 +311,10 @@ class ToolNode:
         result: ToolResult,
         started_at: float,
     ) -> None:
+        public_arguments = cast(dict, sanitize(tool_call.arguments))
+        public_result = sanitize(result.result)
+        public_metadata = cast(dict, sanitize(result.metadata))
+        public_error = cast(str | None, sanitize(result.error))
         state["tool_call_count"] = int(state.get("tool_call_count", 0)) + 1
         state.setdefault("tool_calls", []).append(
             {
@@ -295,13 +322,13 @@ class ToolNode:
                 "tool_call_id": tool_call.id,
                 "tool_name": tool_call.tool_name,
                 "name": tool_call.tool_name,
-                "arguments": tool_call.arguments,
+                "arguments": public_arguments,
                 "index": tool_call.index,
                 "status": str(
-                    result.metadata.get("status")
+                    public_metadata.get("status")
                     or ("success" if result.success else "failed")
                 ),
-                "duration_ms": result.metadata.get("duration_ms"),
+                "duration_ms": public_metadata.get("duration_ms"),
             }
         )
         result_dump = {
@@ -312,24 +339,30 @@ class ToolNode:
                 result.metadata.get("status") or ("success" if result.success else "failed")
             ),
             "success": result.success,
-            "result": result.result,
-            "error": result.error,
-            "metadata": result.metadata,
+            "result": public_result,
+            "error": public_error,
+            "metadata": public_metadata,
         }
         state.setdefault("tool_results", []).append(result_dump)
-        if tool_call.tool_name == "knowledge_search" and isinstance(result.result, dict):
-            state["knowledge"] = result.result
-            _update_knowledge_metadata(state, result.result)
+        if tool_call.tool_name == "knowledge_search" and isinstance(public_result, dict):
+            state["knowledge"] = public_result
+            _update_knowledge_metadata(state, public_result)
+        update_customer_service_state_after_tool(
+            state=state,
+            tool_name=tool_call.tool_name,
+            arguments=tool_call.arguments,
+            result=result,
+        )
         event = "tool_completed" if result.success else "tool_failed"
         _append_trace(
             state,
             event=event,
             node="tool",
-            input_data={"tool_name": tool_call.tool_name, "arguments": tool_call.arguments},
+            input_data={"tool_name": tool_call.tool_name, "arguments": public_arguments},
             output_data=result_dump,
             started_at=started_at,
             status="success" if result.success else "failed",
-            error=result.error,
+            error=public_error,
             tool_call_id=tool_call.id,
             tool_name=tool_call.tool_name,
         )
@@ -686,21 +719,24 @@ def _append_trace(
     tool_call_id: str | None = None,
     tool_name: str | None = None,
 ) -> None:
+    public_input = cast(dict, sanitize(input_data))
+    public_output = cast(dict, sanitize(output_data))
+    public_error = cast(str | None, sanitize(error))
     state["metadata"].setdefault("trace", []).append(
         {
             "step": event,
             "name": node,
             "node": node,
             "event": event,
-            "input": input_data,
-            "output": output_data,
-            "input_summary": _summary(input_data),
-            "output_summary": _summary(output_data),
+            "input": public_input,
+            "output": public_output,
+            "input_summary": _summary(public_input),
+            "output_summary": _summary(public_output),
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
             "duration_ms": round((perf_counter() - started_at) * 1000, 2),
             "status": status,
-            "error": error,
+            "error": public_error,
             "llm_call_count": state.get("llm_call_count", 0),
             "tool_call_count": state.get("tool_call_count", 0),
             "reflection_count": state.get("reflection_count", 0),

@@ -11,6 +11,18 @@ SENSITIVE_KEY_PATTERN = re.compile(
     r"(api[_-]?key|authorization|cookie|password|passwd|secret|token|access[_-]?token|refresh[_-]?token)",
     re.IGNORECASE,
 )
+SENSITIVE_BUSINESS_KEY_PATTERN = re.compile(
+    r"(order_no|tracking_no|customer_phone|phone_last4|customer_phone_last4)",
+    re.IGNORECASE,
+)
+MAINLAND_PHONE_PATTERN = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+MAINLAND_ID_PATTERN = re.compile(r"(?<![0-9A-Za-z])\d{17}[0-9Xx](?![0-9A-Za-z])")
+BANK_CARD_PATTERN = re.compile(r"(?<!\d)(?:\d[ -]?){16,19}(?!\d)")
+LONG_IDENTIFIER_PATTERN = re.compile(r"(?<!\d)\d{10,20}(?!\d)")
+ADDRESS_PATTERN = re.compile(
+    r"[\u4e00-\u9fa5]{2,}(?:省|市|自治区|区|县|镇|乡|街道|路|街|巷|号)"
+    r"[\u4e00-\u9fa5A-Za-z0-9#\-]{2,}"
+)
 MAX_SUMMARY_CHARS = 800
 MAX_STRING_CHARS = 1200
 MAX_DEPTH = 8
@@ -53,7 +65,7 @@ def build_agent_trace_result(
 
 
 def sanitize(value: Any, *, parent_key: str = "", depth: int = 0) -> Any:
-    if SENSITIVE_KEY_PATTERN.search(parent_key):
+    if _is_sensitive_key(parent_key):
         return "[REDACTED]"
     if depth > MAX_DEPTH:
         return "[MAX_DEPTH]"
@@ -67,9 +79,44 @@ def sanitize(value: Any, *, parent_key: str = "", depth: int = 0) -> Any:
             sanitize(item, parent_key=parent_key, depth=depth + 1)
             for item in value[:50]
         ]
-    if isinstance(value, str) and len(value) > MAX_STRING_CHARS:
-        return value[:MAX_STRING_CHARS] + "...[truncated]"
+    if isinstance(value, str):
+        value = _sanitize_sensitive_text(value)
+        if len(value) > MAX_STRING_CHARS:
+            return value[:MAX_STRING_CHARS] + "...[truncated]"
     return value
+
+
+def _is_sensitive_key(parent_key: str) -> bool:
+    normalized = parent_key.lower()
+    is_token_metric = normalized == "token_usage" or normalized.endswith("_tokens")
+    return (
+        bool(SENSITIVE_KEY_PATTERN.search(parent_key)) and not is_token_metric
+    ) or bool(SENSITIVE_BUSINESS_KEY_PATTERN.search(parent_key))
+
+
+def _sanitize_sensitive_text(value: str) -> str:
+    sanitized = MAINLAND_PHONE_PATTERN.sub(
+        lambda match: f"{match.group(0)[:3]}****{match.group(0)[-4:]}",
+        value,
+    )
+    sanitized = MAINLAND_ID_PATTERN.sub(
+        lambda match: f"{match.group(0)[:6]}********{match.group(0)[-4:]}",
+        sanitized,
+    )
+    sanitized = BANK_CARD_PATTERN.sub(
+        _mask_bank_card,
+        sanitized,
+    )
+    sanitized = LONG_IDENTIFIER_PATTERN.sub(
+        lambda match: f"{match.group(0)[:4]}****{match.group(0)[-4:]}",
+        sanitized,
+    )
+    return ADDRESS_PATTERN.sub("[REDACTED_ADDRESS]", sanitized)
+
+
+def _mask_bank_card(match: re.Match[str]) -> str:
+    digits = re.sub(r"\D", "", match.group(0))
+    return f"{digits[:4]}********{digits[-4:]}"
 
 
 def summary(value: Any) -> dict:

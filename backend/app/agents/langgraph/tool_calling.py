@@ -196,6 +196,10 @@ class JsonPlanStrategy(BaseAgentPlannerStrategy):
 
 
 def get_planner_strategy(state: Any | None = None) -> BaseAgentPlannerStrategy:
+    if _planner_strategy_name(state) == "customer_service_rules":
+        from backend.app.agents.customer_service import CustomerServicePlannerStrategy
+
+        return CustomerServicePlannerStrategy()
     if _planner_strategy_name(state) == "json_plan":
         return JsonPlanStrategy()
     return NativeToolCallingStrategy()

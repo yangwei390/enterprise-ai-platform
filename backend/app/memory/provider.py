@@ -15,6 +15,16 @@ class MemoryProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def compare_and_save_session(
+        self,
+        state: MemoryState,
+        *,
+        expected_revision: int,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
     def load_session(self, session_id: str) -> MemoryState | None:
         raise NotImplementedError
 

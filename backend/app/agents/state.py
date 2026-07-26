@@ -7,6 +7,10 @@ class AgentRuntimeRequest(BaseModel):
     agent_id: str | None = None
     conversation_id: int | None = None
     knowledge_base_id: int | None = None
+    allowed_knowledge_base_ids: frozenset[int] = Field(
+        default_factory=frozenset,
+        exclude=True,
+    )
     memory_context: str | None = None
     metadata: dict = Field(default_factory=dict)
 

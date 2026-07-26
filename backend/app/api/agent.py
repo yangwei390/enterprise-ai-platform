@@ -9,6 +9,9 @@ from backend.app.agents import (
     AgentRuntimeRequest,
 )
 from backend.app.agents.catalog import AgentCatalog
+from backend.app.agents.customer_service_contract import (
+    customer_service_allowed_knowledge_base_ids,
+)
 from backend.app.agents.schemas import (
     AgentAssistantListResponse,
     AgentChatRequest,
@@ -16,6 +19,7 @@ from backend.app.agents.schemas import (
     AgentStreamRequest,
 )
 from backend.app.agents.service import AgentService
+from backend.app.config.settings import settings
 from backend.app.conversations import ConversationRepository, ConversationService
 from backend.app.db.session import get_db
 from backend.app.exceptions import BusinessException
@@ -27,6 +31,13 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 router = APIRouter()
+
+
+def _trusted_customer_service_knowledge_scope(agent_id: str | None) -> frozenset[int]:
+    return customer_service_allowed_knowledge_base_ids(
+        agent_id=agent_id,
+        configured_ids=settings.CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS,
+    )
 
 
 def get_conversation_service(db: Session = Depends(get_db)) -> ConversationService:
@@ -55,6 +66,9 @@ async def agent_chat(request: AgentChatRequest) -> ApiResponse:
         query=request.query,
         agent_id=request.agent_id,
         knowledge_base_id=request.knowledge_base_id,
+        allowed_knowledge_base_ids=_trusted_customer_service_knowledge_scope(
+            request.agent_id
+        ),
         conversation_id=request.conversation_id,
         memory_context=request.memory_context,
         metadata=request.metadata,
@@ -108,6 +122,9 @@ async def _stream_agent_events(
             query=request.query,
             agent_id=request.agent_id,
             knowledge_base_id=request.knowledge_base_id,
+            allowed_knowledge_base_ids=_trusted_customer_service_knowledge_scope(
+                request.agent_id
+            ),
             conversation_id=conversation_id,
             memory_context=request.memory_context,
             metadata=request.metadata,
