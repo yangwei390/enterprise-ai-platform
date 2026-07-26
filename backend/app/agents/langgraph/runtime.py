@@ -553,8 +553,33 @@ class LangGraphAgentRuntime:
     ) -> None:
         if session_state is None:
             return
-        restored_messages = session_state.messages[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
-        state["messages"] = [*restored_messages, *state.get("messages", [])]
+        current_messages = state.get("messages", [])
+        if state.get("metadata", {}).get("agent_id") == CUSTOMER_SERVICE_AGENT_ID:
+            restored_messages = [
+                message
+                for message in session_state.messages
+                if message.get("role") != "system"
+            ]
+            current_system = [
+                message
+                for message in current_messages
+                if message.get("role") == "system"
+            ]
+            current_non_system = [
+                message
+                for message in current_messages
+                if message.get("role") != "system"
+            ]
+            state["messages"] = [
+                *current_system[:1],
+                *restored_messages,
+                *current_non_system,
+            ]
+        else:
+            restored_messages = session_state.messages[
+                -settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :
+            ]
+            state["messages"] = [*restored_messages, *current_messages]
         state["metadata"].setdefault("session", {})["restored_tool_result_count"] = len(
             session_state.tool_results
         )
@@ -614,13 +639,24 @@ class LangGraphAgentRuntime:
         state: dict,
         revision: int,
     ) -> MemoryState:
+        is_customer_service = (
+            state.get("metadata", {}).get("agent_id") == CUSTOMER_SERVICE_AGENT_ID
+        )
+        messages = state.get("messages", [])
+        observations = state.get("observations", [])
         return MemoryState(
             session_id=session_id,
             revision=revision,
-            messages=state.get("messages", [])[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :],
-            tool_results=state.get("observations", [])[
-                -settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :
-            ],
+            messages=(
+                messages
+                if is_customer_service
+                else messages[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
+            ),
+            tool_results=(
+                observations
+                if is_customer_service
+                else observations[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
+            ),
             current_plan=state.get("plan"),
             current_step=str(state.get("current_action") or "final"),
             planner_output=state.get("plan"),

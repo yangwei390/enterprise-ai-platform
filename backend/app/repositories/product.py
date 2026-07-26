@@ -280,6 +280,7 @@ class ProductRepository(BaseRepository):
                     Product.product_code.ilike(keyword),
                     Product.name.ilike(keyword),
                     Product.model.ilike(keyword),
+                    Product.category.ilike(keyword),
                     Product.description.ilike(keyword),
                     self._tags_keyword_exists(keyword),
                 )

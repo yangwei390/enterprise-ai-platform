@@ -329,6 +329,7 @@ class CustomerServiceHybridPlannerStrategy(BaseAgentPlannerStrategy):
                 actual_strategy="customer_service_rules",
                 fallback_reason="business_tool_required",
             )
+        _normalize_native_product_tool_calls(native_decision)
         native_decision.metadata.update(
             {
                 "requested_strategy": self.name,
@@ -1111,6 +1112,17 @@ def _hybrid_decision(
         }
     )
     return decision
+
+
+def _normalize_native_product_tool_calls(decision: AgentDecision) -> None:
+    for tool_call in decision.tool_calls:
+        if tool_call.tool_name not in {"search_products", "recommend_products"}:
+            continue
+        category = tool_call.arguments.get("category")
+        if not isinstance(category, str) or not category.strip():
+            continue
+        tool_call.arguments.setdefault("keyword", category.strip())
+        tool_call.arguments.pop("category", None)
 
 
 def _extract_order_fields(query: str) -> dict[str, Any] | None:

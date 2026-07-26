@@ -12,6 +12,7 @@ def build_final_answer_request(
     *,
     query: str,
     observations: list[dict],
+    conversation_messages: list[dict] | None = None,
     knowledge: dict | None = None,
     fallback_answer: str | None = None,
 ) -> LLMRequest:
@@ -50,6 +51,10 @@ def build_final_answer_request(
                     "不要暴露工具调用、协议、内部状态或调试信息。"
                 ),
             ),
+            *_conversation_messages(
+                conversation_messages or [],
+                current_query=query,
+            ),
             LLMMessage(
                 role="user",
                 content=(
@@ -62,6 +67,32 @@ def build_final_answer_request(
         temperature=0,
         metadata={"agent_final_answer_stream": True},
     )
+
+
+def _conversation_messages(
+    messages: list[dict],
+    *,
+    current_query: str,
+) -> list[LLMMessage]:
+    result: list[LLMMessage] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        content = message.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        cleaned = content.strip()
+        if not cleaned:
+            continue
+        result.append(LLMMessage(role=role, content=cleaned))
+    if (
+        result
+        and result[-1].role == "user"
+        and result[-1].content.strip() == current_query.strip()
+    ):
+        result.pop()
+    return result
 
 
 async def stream_final_answer(

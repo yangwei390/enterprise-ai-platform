@@ -709,6 +709,7 @@ def test_product_repository_keyword_sql_includes_tags_as_bound_parameter() -> No
 
     assert "jsonb_array_elements_text(products.tags)" in sql
     assert "ILIKE" in sql
+    assert "products.category ILIKE" in sql
     assert "宿舍" not in sql
     assert "%(product_code_1)s" in sql or "%(value_1)s" in sql
 

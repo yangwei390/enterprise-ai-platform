@@ -463,6 +463,7 @@ class FinalNode:
             state["final_answer"] = await self._stream_answer(state)
         elif not state.get("final_answer"):
             state["final_answer"] = self._build_answer(state)
+        self._append_final_answer_message(state)
         if not state.get("termination_reason"):
             state["termination_reason"] = "final_answer"
         state["loop_status"] = "completed"
@@ -519,6 +520,7 @@ class FinalNode:
         request = build_final_answer_request(
             query=state["query"],
             observations=state.get("observations", []),
+            conversation_messages=state.get("messages", []),
             knowledge=state.get("knowledge") if isinstance(state.get("knowledge"), dict) else None,
             fallback_answer=self._build_answer(state),
         )
@@ -536,6 +538,19 @@ class FinalNode:
             + delta_count
         )
         return answer or self._build_answer(state)
+
+    def _append_final_answer_message(self, state: AgentState) -> None:
+        answer = state.get("final_answer")
+        if not isinstance(answer, str) or not answer.strip():
+            return
+        messages = state.setdefault("messages", [])
+        if (
+            messages
+            and messages[-1].get("role") == "assistant"
+            and messages[-1].get("content") == answer
+        ):
+            return
+        messages.append({"role": "assistant", "content": answer})
 
     def _build_answer(self, state: AgentState) -> str:
         knowledge = state.get("knowledge")

@@ -6,8 +6,10 @@ from backend.app.agents.definition import (
     get_agent_definition_registry,
     reset_agent_definition_registry,
 )
+from backend.app.agents.final_answer import build_final_answer_request
 from backend.app.agents.langgraph.graph import build_agent_graph
 from backend.app.agents.langgraph.nodes import (
+    FinalNode,
     ObservationNode,
     ToolNode,
 )
@@ -358,6 +360,40 @@ def test_agent_final_answer_after_observation(monkeypatch):
 
     assert result.answer == "final after obs"
     assert result.metadata["agent_loop"]["termination_reason"] == "final_answer"
+
+
+def test_final_node_appends_assistant_answer_to_runtime_history() -> None:
+    state = _state("当前问题")
+    state["messages"].insert(0, {"role": "system", "content": "system"})
+    state["final_answer"] = "最终回答"
+
+    result = asyncio.run(FinalNode().acall(state))
+
+    assert result["messages"][-1] == {
+        "role": "assistant",
+        "content": "最终回答",
+    }
+
+
+def test_final_answer_request_contains_prior_user_and_assistant_turns() -> None:
+    request = build_final_answer_request(
+        query="还有其他推荐吗",
+        observations=[],
+        conversation_messages=[
+            {"role": "system", "content": "internal"},
+            {"role": "user", "content": "推荐一个鼠标"},
+            {"role": "assistant", "content": "推荐 G304"},
+            {"role": "tool", "content": "raw tool data"},
+            {"role": "user", "content": "还有其他推荐吗"},
+        ],
+    )
+
+    assert [(message.role, message.content) for message in request.messages[1:-1]] == [
+        ("user", "推荐一个鼠标"),
+        ("assistant", "推荐 G304"),
+    ]
+    assert "还有其他推荐吗" in request.messages[-1].content
+    assert all("internal" not in message.content for message in request.messages)
 
 
 def test_agent_multi_tool_parallel_call(monkeypatch):
