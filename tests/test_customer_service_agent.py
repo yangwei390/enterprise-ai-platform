@@ -670,6 +670,123 @@ def test_sequential_single_recommendations_keep_one_ordered_context() -> None:
     assert second_reference.tool_calls[0].arguments["keyword"] == "MX4"
 
 
+def test_multi_turn_product_state_survives_choice_and_failed_manual_lookup(
+    monkeypatch,
+) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "confidence": 0.97,
+                            "target_references": ["first"],
+                            "attributes": ["button_count"],
+                            "recommendation_count": None,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda: IntentLLM(),
+    )
+    state = _state(
+        query="推荐一个鼠标",
+        customer_service={
+            "recommended_product_codes": ["G304", "MX4"],
+            "recommendation_list": [
+                {"product_code": "G304", "name": "罗技 G304"},
+                {"product_code": "MX4", "name": "Logitech MX Master 4"},
+            ],
+            "active_product_code": "MX4",
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304", "name": "罗技 G304"},
+                    {"product_code": "MX4", "name": "Logitech MX Master 4"},
+                ],
+                "focused_product_code": "MX4",
+            },
+        },
+    )
+
+    choice = _state(
+        query="你更推荐哪一个",
+        customer_service=deepcopy(state["metadata"]["customer_service"]),
+    )
+    choice_decision = asyncio.run(_decide(choice))
+    assert choice_decision.tool_calls[0].tool_name == "compare_products"
+    assert choice_decision.tool_calls[0].arguments["product_codes"] == [
+        "G304",
+        "MX4",
+    ]
+
+    first = _state(
+        query="第一个有几个按键",
+        customer_service=deepcopy(choice["metadata"]["customer_service"]),
+    )
+    first_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(first)
+    )
+    assert first_decision.tool_calls[0].arguments["keyword"] == "G304"
+
+    update_customer_service_state_after_tool(
+        state=first,
+        tool_name="search_products",
+        arguments=first_decision.tool_calls[0].arguments,
+        result=ToolResult(
+            name="search_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "product_code": "G304",
+                        "name": "罗技 G304",
+                        "primary_manual_document_id": None,
+                    }
+                ]
+            },
+        ),
+    )
+    customer_service = first["metadata"]["customer_service"]
+    assert [
+        item["product_code"]
+        for item in customer_service["recommendation_list"]
+    ] == ["G304", "MX4"]
+
+    first["observations"] = [
+        {
+            "tool_name": "search_products",
+            "success": True,
+            "raw_result": {
+                "items": [
+                    {
+                        "product_code": "G304",
+                        "primary_manual_document_id": None,
+                    }
+                ]
+            },
+        }
+    ]
+    missing_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(first)
+    )
+    assert "没有绑定主说明书" in str(missing_decision.content)
+
+    second = _state(
+        query="第二个呢",
+        customer_service=deepcopy(customer_service),
+    )
+    second_decision = asyncio.run(_decide(second))
+    assert second_decision.tool_calls[0].tool_name == "search_products"
+    assert second_decision.tool_calls[0].arguments["keyword"] == "MX4"
+
+
 def test_alternative_recommendation_stops_at_five_context_products() -> None:
     customer_service = {
         "recommended_product_codes": [f"P00{index}" for index in range(1, 6)],
