@@ -526,6 +526,91 @@ def test_alternative_recommendation_excludes_previously_recommended_products() -
     assert prepared["excluded_product_codes"] == ["G304", "G502"]
 
 
+def test_single_recommendation_keeps_one_focused_product() -> None:
+    state = _state(query="推荐一个办公鼠标", conversation_id=303)
+    prepared = prepare_customer_service_tool_arguments(
+        state=state,
+        tool_name="recommend_products",
+        arguments={"category": "鼠标", "page_size": 3},
+    )
+
+    assert prepared["page_size"] == 1
+
+    update_customer_service_state_after_tool(
+        state=state,
+        tool_name="recommend_products",
+        arguments=prepared,
+        result=ToolResult(
+            name="recommend_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "product": {
+                            "id": 4,
+                            "product_code": "MX4",
+                            "name": "MX Master 4",
+                        }
+                    },
+                    {
+                        "product": {
+                            "id": 5,
+                            "product_code": "M650",
+                            "name": "Signature M650",
+                        }
+                    },
+                ]
+            },
+        ),
+    )
+    context = state["metadata"]["customer_service"]["product_context"]
+    assert [item["product_code"] for item in context["candidates"]] == ["MX4"]
+    assert context["focused_product_code"] == "MX4"
+
+    followup = _state(
+        query="他有什么特点",
+        conversation_id=303,
+        customer_service=deepcopy(state["metadata"]["customer_service"]),
+    )
+    decision = asyncio.run(_decide(followup))
+
+    assert decision.tool_calls[0].tool_name == "search_products"
+    assert decision.tool_calls[0].arguments["keyword"] == "MX4"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_count"),
+    [
+        ("推荐2个办公鼠标", 2),
+        ("推荐三个游戏鼠标", 3),
+        ("帮我找四款无线鼠标", 4),
+        ("给我推荐五款鼠标", 5),
+    ],
+)
+def test_recommendation_count_controls_tool_page_size(
+    query: str,
+    expected_count: int,
+) -> None:
+    state = _state(query=query)
+
+    prepared = prepare_customer_service_tool_arguments(
+        state=state,
+        tool_name="recommend_products",
+        arguments={"category": "鼠标", "page_size": 3},
+    )
+
+    assert prepared["page_size"] == expected_count
+
+
+@pytest.mark.parametrize("query", ["推荐6个鼠标", "给我推荐十款鼠标"])
+def test_recommendation_count_over_limit_is_rejected(query: str) -> None:
+    decision = asyncio.run(_decide(_state(query=query)))
+
+    assert decision.tool_calls == []
+    assert "最多推荐 5 个" in str(decision.content)
+    assert decision.metadata["actual_strategy"] == "customer_service_rules"
+
+
 def test_customer_product_context_handles_compare_and_ambiguity() -> None:
     customer_service = {
         "product_context": {

@@ -269,9 +269,18 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                 args["knowledge_base_id"] = state["knowledge_base_id"]
             return _tool_decision("compare_products", args)
         if _is_recommend(query):
+            requested_count = _requested_recommendation_count(query)
+            if requested_count is not None and requested_count > 5:
+                return _final("单次最多推荐 5 个商品，请将推荐数量调整为 1 到 5 个。")
+            if requested_count is not None and requested_count < 1:
+                return _final("推荐数量必须是 1 到 5 个。")
             return _tool_decision(
                 "recommend_products",
-                _product_query_args(state, query, page_size=3),
+                _product_query_args(
+                    state,
+                    query,
+                    page_size=requested_count or 3,
+                ),
             )
         if _is_product_search(query):
             return _tool_decision(
@@ -423,14 +432,17 @@ def prepare_customer_service_tool_arguments(
     if tool_name not in {"search_products", "recommend_products", "compare_products"}:
         return arguments
     prepared = dict(arguments)
-    if tool_name == "recommend_products" and _is_alternative_recommendation(
-        str(state.get("query") or "")
-    ):
-        recommended_codes = _recommended_product_codes(
-            state.get("metadata", {})
-        )
-        if recommended_codes:
-            prepared["excluded_product_codes"] = recommended_codes
+    if tool_name == "recommend_products":
+        query = str(state.get("query") or "")
+        requested_count = _requested_recommendation_count(query)
+        if requested_count is not None and 1 <= requested_count <= 5:
+            prepared["page_size"] = requested_count
+        if _is_alternative_recommendation(query):
+            recommended_codes = _recommended_product_codes(
+                state.get("metadata", {})
+            )
+            if recommended_codes:
+                prepared["excluded_product_codes"] = recommended_codes
     allowed_scope = {
         value
         for value in state.get("allowed_knowledge_base_ids", [])
@@ -466,6 +478,7 @@ def update_customer_service_state_after_tool(
         _update_product_context(
             customer_service,
             tool_name=tool_name,
+            arguments=arguments,
             result=result.result,
         )
         return
@@ -477,6 +490,7 @@ def update_customer_service_state_after_tool(
         _update_product_context(
             customer_service,
             tool_name=tool_name,
+            arguments=arguments,
             result=result.result,
         )
         return
@@ -821,6 +835,7 @@ def _update_product_context(
     customer_service: dict[str, Any],
     *,
     tool_name: str,
+    arguments: dict[str, Any],
     result: Any,
 ) -> None:
     if not isinstance(result, dict) or not isinstance(result.get("items"), list):
@@ -830,6 +845,13 @@ def _update_product_context(
         for item in result["items"]
         if (candidate := _product_context_candidate(item)) is not None
     ][:_PRODUCT_CONTEXT_MAX_CANDIDATES]
+    requested_page_size = arguments.get("page_size")
+    if (
+        tool_name == "recommend_products"
+        and isinstance(requested_page_size, int)
+        and 1 <= requested_page_size <= 5
+    ):
+        candidates = candidates[:requested_page_size]
     if not candidates:
         return
     if tool_name == "recommend_products":
@@ -1054,6 +1076,37 @@ def _is_alternative_recommendation(query: str) -> bool:
     )
 
 
+def _requested_recommendation_count(query: str) -> int | None:
+    match = re.search(
+        r"(?:推荐|介绍|选|找)[^，。！？]{0,8}?"
+        r"(?P<count>\d+|[一二两三四五六七八九十]+)\s*(?:个|款|件|只)",
+        query,
+    )
+    if match is None:
+        return None
+    value = match.group("count")
+    if value.isdigit():
+        return int(value)
+    chinese_digits = {
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    if value == "十":
+        return 10
+    if "十" in value:
+        tens, ones = value.split("十", 1)
+        return chinese_digits.get(tens, 1) * 10 + chinese_digits.get(ones, 0)
+    return chinese_digits.get(value)
+
+
 def _requires_deterministic_customer_service(state: Any, query: str) -> bool:
     metadata = state.get("metadata", {})
     if state.get("observations") or _pending_after_sales(metadata) is not None:
@@ -1070,6 +1123,13 @@ def _requires_deterministic_customer_service(state: Any, query: str) -> bool:
             _is_order,
             _is_manual_question,
         )
+    ):
+        return True
+    requested_count = _requested_recommendation_count(query)
+    if (
+        _is_recommend(query)
+        and requested_count is not None
+        and not 1 <= requested_count <= 5
     ):
         return True
     context = _product_context(metadata)
