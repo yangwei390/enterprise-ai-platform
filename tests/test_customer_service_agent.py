@@ -359,6 +359,192 @@ def test_customer_planner_inherits_product_filters_across_three_turns() -> None:
     assert third_args["preferred_features"] == ["容易清洗"]
 
 
+def test_customer_product_context_resolves_order_and_keeps_focus() -> None:
+    state = _state(query="推荐三个游戏鼠标", conversation_id=302)
+    update_customer_service_state_after_tool(
+        state=state,
+        tool_name="recommend_products",
+        arguments={"category": "游戏鼠标", "page_size": 3},
+        result=ToolResult(
+            name="recommend_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "product": {
+                            "id": 1,
+                            "product_code": "G304",
+                            "name": "罗技 G304",
+                            "model": "G304",
+                        }
+                    },
+                    {
+                        "product": {
+                            "id": 2,
+                            "product_code": "G502",
+                            "name": "罗技 G502",
+                            "model": "G502",
+                        }
+                    },
+                    {
+                        "product": {
+                            "id": 3,
+                            "product_code": "G903",
+                            "name": "罗技 G903",
+                            "model": "G903",
+                        }
+                    },
+                ]
+            },
+        ),
+    )
+    customer_service = state["metadata"]["customer_service"]
+
+    second = _state(
+        query="第二个有什么特色",
+        conversation_id=302,
+        customer_service=deepcopy(customer_service),
+    )
+    second_decision = asyncio.run(_decide(second))
+
+    assert second_decision.tool_calls[0].tool_name == "search_products"
+    assert second_decision.tool_calls[0].arguments["keyword"] == "G502"
+    assert (
+        second["metadata"]["customer_service"]["product_context"][
+            "focused_product_code"
+        ]
+        == "G502"
+    )
+
+    update_customer_service_state_after_tool(
+        state=second,
+        tool_name="search_products",
+        arguments=second_decision.tool_calls[0].arguments,
+        result=ToolResult(
+            name="search_products",
+            success=True,
+            result={
+                "items": [
+                    {"id": 2, "product_code": "G502", "name": "罗技 G502", "model": "G502"}
+                ]
+            },
+        ),
+    )
+    context = second["metadata"]["customer_service"]["product_context"]
+    assert [item["product_code"] for item in context["candidates"]] == [
+        "G304",
+        "G502",
+        "G903",
+    ]
+
+    third = _state(
+        query="它多少钱",
+        conversation_id=302,
+        customer_service=deepcopy(second["metadata"]["customer_service"]),
+    )
+    third_decision = asyncio.run(_decide(third))
+
+    assert third_decision.tool_calls[0].arguments["keyword"] == "G502"
+
+
+def test_customer_product_context_handles_compare_and_ambiguity() -> None:
+    customer_service = {
+        "product_context": {
+            "candidates": [
+                {"product_code": "G304", "name": "罗技 G304", "model": "G304"},
+                {"product_code": "G502", "name": "罗技 G502", "model": "G502"},
+                {"product_code": "G903", "name": "罗技 G903", "model": "G903"},
+            ],
+            "focused_product_code": None,
+        }
+    }
+
+    compare = asyncio.run(
+        _decide(
+            _state(
+                query="对比第一个和第三个",
+                customer_service=deepcopy(customer_service),
+            )
+        )
+    )
+    ambiguous = asyncio.run(
+        _decide(
+            _state(
+                query="它有什么特色",
+                customer_service=deepcopy(customer_service),
+            )
+        )
+    )
+    explicit = asyncio.run(
+        _decide(
+            _state(
+                query="G502 的库存有多少",
+                customer_service=deepcopy(customer_service),
+            )
+        )
+    )
+    out_of_range = asyncio.run(
+        _decide(
+            _state(
+                query="第六个有什么特点",
+                customer_service=deepcopy(customer_service),
+            )
+        )
+    )
+
+    assert compare.tool_calls[0].tool_name == "compare_products"
+    assert compare.tool_calls[0].arguments["product_codes"] == ["G304", "G903"]
+    assert ambiguous.tool_calls == []
+    assert "多个候选" in str(ambiguous.content)
+    assert explicit.tool_calls[0].arguments["keyword"] == "G502"
+    assert out_of_range.tool_calls == []
+    assert "只有 3 个" in str(out_of_range.content)
+
+
+def test_customer_product_context_routes_selected_manual_without_cross_model() -> None:
+    customer_service = {
+        "product_context": {
+            "candidates": [
+                {"product_code": "G304", "name": "罗技 G304", "model": "G304"},
+                {"product_code": "G502", "name": "罗技 G502", "model": "G502"},
+            ],
+            "focused_product_code": None,
+        }
+    }
+    lookup = _state(
+        query="第二个怎么连接电脑",
+        customer_service=deepcopy(customer_service),
+    )
+    lookup_decision = asyncio.run(_decide(lookup))
+
+    assert lookup_decision.tool_calls[0].tool_name == "search_products"
+    assert lookup_decision.tool_calls[0].arguments["keyword"] == "G502"
+
+    manual = _state(
+        query="第二个怎么连接电脑",
+        customer_service=deepcopy(lookup["metadata"]["customer_service"]),
+        observations=[
+            {
+                "tool_name": "search_products",
+                "success": True,
+                "raw_result": {
+                    "items": [
+                        {
+                            "product_code": "G502",
+                            "model": "G502",
+                            "primary_manual_document_id": 502,
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+    manual_decision = asyncio.run(_decide(manual))
+
+    assert manual_decision.tool_calls[0].tool_name == "knowledge_search"
+    assert manual_decision.tool_calls[0].arguments["document_id"] == 502
+
+
 def test_customer_planner_routes_return_policy_to_knowledge_search() -> None:
     decision = asyncio.run(_decide(_state(query="退换货规则是什么")))
 
@@ -978,7 +1164,7 @@ def test_after_sales_different_conversation_confirm_does_not_share_pending() -> 
     assert result["tool_results"][0]["success"] is True
 
 
-def test_runtime_persists_and_restores_customer_service_pending_state(monkeypatch) -> None:
+def test_runtime_persists_and_restores_customer_service_state(monkeypatch) -> None:
     saved: dict[str, MemoryState] = {}
 
     class FakeMemoryManager:
@@ -1005,7 +1191,17 @@ def test_runtime_persists_and_restores_customer_service_pending_state(monkeypatc
         "status": CUSTOMER_SERVICE_PENDING_STATUS,
     }
     state = _state(query="申请售后", conversation_id=42)
-    state["metadata"]["customer_service"] = {CUSTOMER_SERVICE_PENDING_KEY: pending}
+    product_context = {
+        "candidates": [
+            {"product_code": "G304", "name": "罗技 G304"},
+            {"product_code": "G502", "name": "罗技 G502"},
+        ],
+        "focused_product_code": "G502",
+    }
+    state["metadata"]["customer_service"] = {
+        CUSTOMER_SERVICE_PENDING_KEY: pending,
+        "product_context": product_context,
+    }
 
     runtime._save_session("conversation:42", cast(Any, state))
     restored = _state(query="确认提交", conversation_id=42)
@@ -1014,6 +1210,10 @@ def test_runtime_persists_and_restores_customer_service_pending_state(monkeypatc
     assert (
         restored["metadata"]["customer_service"][CUSTOMER_SERVICE_PENDING_KEY]["draft_id"]
         == pending["draft_id"]
+    )
+    assert (
+        restored["metadata"]["customer_service"]["product_context"]
+        == product_context
     )
 
 

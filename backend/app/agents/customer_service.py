@@ -123,6 +123,15 @@ _PRODUCT_FILTER_KEYS = {
     "sort_by",
     "sort_order",
 }
+_PRODUCT_CONTEXT_KEY = "product_context"
+_PRODUCT_CONTEXT_MAX_CANDIDATES = 5
+_ORDINAL_PRODUCT_PATTERNS = (
+    (re.compile(r"(?:第\s*)?一(?:个|款|件|只)"), 0),
+    (re.compile(r"(?:第\s*)?二(?:个|款|件|只)"), 1),
+    (re.compile(r"(?:第\s*)?三(?:个|款|件|只)"), 2),
+    (re.compile(r"(?:第\s*)?四(?:个|款|件|只)"), 3),
+    (re.compile(r"(?:第\s*)?五(?:个|款|件|只)"), 4),
+)
 
 
 class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
@@ -227,6 +236,25 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             if order is None:
                 return _final("请提供订单号和手机号后四位后再查询订单。")
             return _tool_decision("query_order", order)
+        context_codes = _resolve_context_compare_codes(metadata, query)
+        if _is_compare(query) and len(context_codes) >= 2:
+            args: dict[str, Any] = {"product_codes": context_codes}
+            if isinstance(state.get("knowledge_base_id"), int):
+                args["knowledge_base_id"] = state["knowledge_base_id"]
+            return _tool_decision("compare_products", args)
+        product_reference = _resolve_context_product(metadata, query)
+        if product_reference == "ambiguous":
+            return _final("当前有多个候选商品，请明确说商品名称、商品编码或第几个商品。")
+        if product_reference == "out_of_range":
+            context = _product_context(metadata) or {}
+            candidate_count = len(context.get("candidates", []))
+            return _final(f"当前只有 {candidate_count} 个候选商品，请选择有效序号。")
+        if isinstance(product_reference, str):
+            _focus_context_product(metadata, product_reference)
+            return _tool_decision(
+                "search_products",
+                _focused_product_query_args(state, product_reference),
+            )
         if _is_manual_question(query) and not _is_recommend(query):
             return _tool_decision(
                 "search_products",
@@ -370,6 +398,22 @@ def update_customer_service_state_after_tool(
             for key, value in arguments.items()
             if key in _PRODUCT_FILTER_KEYS
         }
+        _update_product_context(
+            customer_service,
+            tool_name=tool_name,
+            result=result.result,
+        )
+        return
+    if tool_name == "compare_products" and result.success:
+        customer_service = state.setdefault("metadata", {}).setdefault(
+            "customer_service",
+            {},
+        )
+        _update_product_context(
+            customer_service,
+            tool_name=tool_name,
+            result=result.result,
+        )
         return
     if tool_name != "create_after_sales_ticket":
         return
@@ -696,6 +740,224 @@ def _product_query_args(state: Any, query: str, *, page_size: int) -> dict[str, 
     return args
 
 
+def _focused_product_query_args(state: Any, product_code: str) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "keyword": product_code,
+        "sale_status": None,
+        "in_stock_only": False,
+        "page_size": 1,
+    }
+    if isinstance(state.get("knowledge_base_id"), int):
+        args["knowledge_base_id"] = state["knowledge_base_id"]
+    return args
+
+
+def _update_product_context(
+    customer_service: dict[str, Any],
+    *,
+    tool_name: str,
+    result: Any,
+) -> None:
+    if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+        return
+    candidates = [
+        candidate
+        for item in result["items"]
+        if (candidate := _product_context_candidate(item)) is not None
+    ][:_PRODUCT_CONTEXT_MAX_CANDIDATES]
+    if not candidates:
+        return
+    previous = customer_service.get(_PRODUCT_CONTEXT_KEY)
+    focused_code = (
+        previous.get("focused_product_code")
+        if isinstance(previous, dict)
+        else None
+    )
+    previous_candidates = (
+        previous.get("candidates", [])
+        if isinstance(previous, dict)
+        else []
+    )
+    previous_codes = {
+        item.get("product_code")
+        for item in previous_candidates
+        if isinstance(item, dict)
+    }
+    if (
+        tool_name == "search_products"
+        and len(candidates) == 1
+        and candidates[0]["product_code"] == focused_code
+        and focused_code in previous_codes
+    ):
+        return
+    customer_service[_PRODUCT_CONTEXT_KEY] = {
+        "candidates": candidates,
+        "focused_product_code": (
+            candidates[0]["product_code"] if len(candidates) == 1 else None
+        ),
+    }
+
+
+def _product_context_candidate(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    product = item.get("product", item)
+    if not isinstance(product, dict):
+        return None
+    product_code = product.get("product_code")
+    if not isinstance(product_code, str) or not product_code.strip():
+        return None
+    return {
+        key: product.get(key)
+        for key in ("id", "product_code", "name", "model", "category")
+        if product.get(key) is not None
+    }
+
+
+def _product_context(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    customer_service = metadata.get("customer_service")
+    if not isinstance(customer_service, dict):
+        return None
+    context = customer_service.get(_PRODUCT_CONTEXT_KEY)
+    return context if isinstance(context, dict) else None
+
+
+def _resolve_context_product(
+    metadata: dict[str, Any],
+    query: str,
+) -> str | None:
+    context = _product_context(metadata)
+    if context is None:
+        return None
+    candidates = [
+        item
+        for item in context.get("candidates", [])
+        if isinstance(item, dict) and isinstance(item.get("product_code"), str)
+    ]
+    if not candidates:
+        return None
+    explicit = _explicit_context_matches(candidates, query)
+    if len(explicit) == 1:
+        return explicit[0]
+    ordinal = _ordinal_product_index(query, len(candidates))
+    if ordinal == -1:
+        return "out_of_range"
+    if ordinal is not None:
+        return str(candidates[ordinal]["product_code"])
+    if not _is_context_product_followup(query):
+        return None
+    focused_code = context.get("focused_product_code")
+    if isinstance(focused_code, str) and focused_code:
+        return focused_code
+    if len(candidates) == 1:
+        return str(candidates[0]["product_code"])
+    return "ambiguous"
+
+
+def _resolve_context_compare_codes(
+    metadata: dict[str, Any],
+    query: str,
+) -> list[str]:
+    if not _is_compare(query):
+        return []
+    context = _product_context(metadata)
+    if context is None:
+        return []
+    candidates = [
+        item
+        for item in context.get("candidates", [])
+        if isinstance(item, dict) and isinstance(item.get("product_code"), str)
+    ]
+    codes = _explicit_context_matches(candidates, query)
+    for pattern, index in _ORDINAL_PRODUCT_PATTERNS:
+        if pattern.search(query) and index < len(candidates):
+            code = str(candidates[index]["product_code"])
+            if code not in codes:
+                codes.append(code)
+    if "最后" in query and candidates:
+        code = str(candidates[-1]["product_code"])
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _explicit_context_matches(
+    candidates: list[dict[str, Any]],
+    query: str,
+) -> list[str]:
+    normalized_query = query.casefold()
+    result: list[str] = []
+    for candidate in candidates:
+        code = str(candidate["product_code"])
+        aliases = {
+            str(candidate.get(key) or "").strip().casefold()
+            for key in ("product_code", "name", "model")
+        }
+        if any(alias and alias in normalized_query for alias in aliases):
+            result.append(code)
+    return result
+
+
+def _ordinal_product_index(query: str, candidate_count: int) -> int | None:
+    for pattern, index in _ORDINAL_PRODUCT_PATTERNS:
+        if pattern.search(query):
+            return index if index < candidate_count else -1
+    if "最后" in query and candidate_count:
+        return candidate_count - 1
+    generic = re.search(r"第?\s*(\d+|[一二三四五六七八九十])\s*(?:个|款|件|只)", query)
+    if generic is not None:
+        raw_index = generic.group(1)
+        chinese_numbers = {
+            "一": 1,
+            "二": 2,
+            "三": 3,
+            "四": 4,
+            "五": 5,
+            "六": 6,
+            "七": 7,
+            "八": 8,
+            "九": 9,
+            "十": 10,
+        }
+        number = int(raw_index) if raw_index.isdigit() else chinese_numbers[raw_index]
+        return number - 1 if 1 <= number <= candidate_count else -1
+    return None
+
+
+def _focus_context_product(metadata: dict[str, Any], product_code: str) -> None:
+    context = _product_context(metadata)
+    if context is not None:
+        context["focused_product_code"] = product_code
+
+
+def _is_context_product_followup(query: str) -> bool:
+    reference_words = ["这个", "这款", "该商品", "它", "刚才", "上面"]
+    detail_words = [
+        "特色",
+        "特点",
+        "价格",
+        "多少钱",
+        "库存",
+        "有货",
+        "品牌",
+        "型号",
+        "参数",
+        "规格",
+        "适用",
+        "场景",
+        "怎么样",
+        "介绍",
+        "说明",
+        "使用",
+        "连接",
+        "安装",
+        "清洁",
+        "故障",
+        "安全",
+    ]
+    return any(word in query for word in reference_words + detail_words)
+
+
 def _extract_order_fields(query: str) -> dict[str, Any] | None:
     order_match = re.search(r"\b(\d{10,20})\b", query)
     last4_match = re.search(r"(?:后四位|尾号|手机号后四位)\D*(\d{4})", query)
@@ -805,11 +1067,25 @@ def _is_recommend(query: str) -> bool:
 
 
 def _is_compare(query: str) -> bool:
-    return "对比" in query or "比较" in query
+    return any(word in query for word in ["对比", "比较", "区别", "差别", "哪个好", "哪款好"])
 
 
 def _is_manual_question(query: str) -> bool:
-    return any(word in query for word in ["说明书", "怎么用", "清洁", "故障", "安全", "操作"])
+    return any(
+        word in query
+        for word in [
+            "说明书",
+            "怎么用",
+            "使用",
+            "连接",
+            "配对",
+            "安装",
+            "清洁",
+            "故障",
+            "安全",
+            "操作",
+        ]
+    )
 
 
 def _is_order(query: str) -> bool:
