@@ -22,6 +22,7 @@ class ProductListFilters:
     required_features: list[str] = field(default_factory=list)
     excluded_features: list[str] = field(default_factory=list)
     required_use_cases: list[str] = field(default_factory=list)
+    excluded_product_codes: list[str] = field(default_factory=list)
     in_stock_only: bool | None = None
     sale_status: str | None = None
     is_active: bool | None = True
@@ -289,6 +290,10 @@ class ProductRepository(BaseRepository):
             statement = statement.where(Product.category == filters.category)
         if filters.model:
             statement = statement.where(Product.model == filters.model)
+        if filters.excluded_product_codes:
+            statement = statement.where(
+                Product.product_code.not_in(filters.excluded_product_codes)
+            )
         if filters.price_min is not None:
             statement = statement.where(Product.price >= filters.price_min)
         if filters.price_max is not None:

@@ -70,6 +70,7 @@ class ProductToolQueryArgs(BaseModel):
     preferred_use_cases: list[str] = Field(default_factory=list, max_length=20)
     features: list[str] = Field(default_factory=list, max_length=20)
     use_cases: list[str] = Field(default_factory=list, max_length=20)
+    excluded_product_codes: list[str] = Field(default_factory=list, max_length=100)
     in_stock_only: StrictBool = True
     sale_status: SaleStatus | None = "on_sale"
     sort_by: SortBy = "popularity"
@@ -93,6 +94,7 @@ class ProductToolQueryArgs(BaseModel):
         "preferred_use_cases",
         "features",
         "use_cases",
+        "excluded_product_codes",
     )
     @classmethod
     def validate_text_list(cls, values: list[str]) -> list[str]:

@@ -208,6 +208,7 @@ def test_product_service_converts_legacy_features_and_use_cases() -> None:
             use_cases=["宿舍"],
             preferred_use_cases=["小户型"],
             required_use_cases=["办公室"],
+            excluded_product_codes=["P001", "P001", "P002"],
         )
     )
 
@@ -215,6 +216,7 @@ def test_product_service_converts_legacy_features_and_use_cases() -> None:
     assert repository.filters.required_features == ["易清洗"]
     assert repository.filters.required_use_cases == ["办公室"]
     assert "宿舍" not in repository.filters.required_use_cases
+    assert repository.filters.excluded_product_codes == ["P001", "P002"]
 
     normalized = service.normalize_query(ProductQuery(features=["易清洗"], use_cases=["宿舍"]))
     assert normalized.required_features == ["易清洗"]
@@ -727,6 +729,18 @@ def test_product_repository_jsonb_contains_sql_uses_jsonb_contains_operator() ->
     assert "products.features @>" in sql
     assert "products.use_cases @>" in sql
     assert "NOT" in sql
+
+
+def test_product_repository_excludes_product_codes_in_sql() -> None:
+    repository = ProductRepository(cast(Any, None))
+
+    sql = repository.compile_list_sql_for_dialect(
+        ProductListFilters(excluded_product_codes=["G304", "G502"]),
+        dialect=postgresql.dialect(),
+    )
+
+    assert "products.product_code NOT IN" in sql
+    assert "G304" not in sql
 
 
 def _product(

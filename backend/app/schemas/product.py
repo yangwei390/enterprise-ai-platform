@@ -166,6 +166,7 @@ class ProductQuery(BaseModel):
     preferred_use_cases: list[str] = Field(default_factory=list)
     features: list[str] = Field(default_factory=list)
     use_cases: list[str] = Field(default_factory=list)
+    excluded_product_codes: list[str] = Field(default_factory=list, max_length=100)
     in_stock_only: bool = True
     sale_status: str | None = "on_sale"
     sort_by: str = "popularity"

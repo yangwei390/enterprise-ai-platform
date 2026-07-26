@@ -245,6 +245,9 @@ class ProductService(BaseService[ProductRepository]):
                 *data.get("use_cases", []),
             ]
         )
+        data["excluded_product_codes"] = self._unique_texts(
+            data.get("excluded_product_codes", [])
+        )
         data["features"] = []
         data["use_cases"] = []
         return ProductQuery(**data)
@@ -366,6 +369,7 @@ class ProductService(BaseService[ProductRepository]):
             required_features=query.required_features,
             excluded_features=query.excluded_features,
             required_use_cases=query.required_use_cases,
+            excluded_product_codes=query.excluded_product_codes,
             in_stock_only=query.in_stock_only,
             sale_status=query.sale_status,
             is_active=True,
