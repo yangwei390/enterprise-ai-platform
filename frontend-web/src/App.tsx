@@ -8,6 +8,7 @@ import HistoryPage from "./pages/HistoryPage";
 import KnowledgeDetailPage from "./pages/KnowledgeDetailPage";
 import HomePage from "./pages/HomePage";
 import KnowledgePage from "./pages/KnowledgePage";
+import ProductsPage from "./pages/ProductsPage";
 
 export default function App() {
   return (
@@ -19,7 +20,8 @@ export default function App() {
         <Route path="agents/:agentId" element={<AgentDetailPage />} />
         <Route path="agents/:agentId/chat" element={<AgentChatPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
-        <Route path="knowledge/:knowledgeBaseId" element={<KnowledgeDetailPage />} />
+      <Route path="knowledge/:knowledgeBaseId" element={<KnowledgeDetailPage />} />
+      <Route path="products" element={<ProductsPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

@@ -23,7 +23,9 @@ export default function AgentChatPage() {
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<UiChatMessage[]>([]);
   const [query, setQuery] = useState("");
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState(DEFAULT_KNOWLEDGE_BASE_ID);
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState(
+    agentId === "customer_service_agent" ? "" : DEFAULT_KNOWLEDGE_BASE_ID
+  );
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [agentStatus, setAgentStatus] = useState("");
@@ -70,8 +72,8 @@ export default function AgentChatPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedCitation]);
 
-  async function handleSubmit() {
-    const trimmedQuery = query.trim();
+  async function handleSubmit(submittedQuery = query) {
+    const trimmedQuery = submittedQuery.trim();
     if (!trimmedQuery || streaming || !agentId) {
       return;
     }
@@ -210,6 +212,10 @@ export default function AgentChatPage() {
     }
   }
 
+  function confirmAfterSales() {
+    void handleSubmit("确认提交");
+  }
+
   function stopGeneration() {
     abortControllerRef.current?.abort();
     setAgentStatus("");
@@ -345,6 +351,16 @@ export default function AgentChatPage() {
                         >
                           Copy Answer
                         </button>
+                        {agentId === "customer_service_agent" && message.content.includes("确认提交") && (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            disabled={streaming}
+                            onClick={confirmAfterSales}
+                          >
+                            确认提交售后
+                          </button>
+                        )}
                       </div>
                     )}
                   </article>

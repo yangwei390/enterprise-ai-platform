@@ -20,8 +20,85 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
+}
+
+.products-layout {
+  display: grid;
+  grid-template-columns: minmax(380px, 520px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.product-form {
+  display: grid;
+  gap: 14px;
+}
+
+.product-form label {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.product-form input,
+.product-form textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.product-form textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.product-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.product-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.product-item {
+  border: 1px solid #dde5ef;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.product-item small {
+  display: block;
+  margin-top: 8px;
+  color: #64748b;
+}
+
+.product-status {
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #166534;
+  background: #dcfce7;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.form-error {
+  color: #b91c1c !important;
+  font-weight: 700;
+}
+
+.form-success {
+  color: #166534 !important;
+  font-weight: 700;
 }
 
 .app-shell {
@@ -1241,6 +1318,10 @@ textarea:disabled {
     align-items: start;
   }
 
+  .products-layout {
+    grid-template-columns: 1fr;
+  }
+
   .document-row {
     grid-template-columns: 1fr;
   }
@@ -1316,5 +1397,9 @@ textarea:disabled {
 
   .document-actions button {
     width: 100%;
+  }
+
+  .product-form-row {
+    grid-template-columns: 1fr;
   }
 }
