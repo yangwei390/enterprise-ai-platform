@@ -1,6 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
 import { listKnowledgeBases, listKnowledgeDocuments } from "../api/knowledge";
-import { bindPrimaryManual, createProduct, listProducts } from "../api/products";
+import {
+  bindPrimaryManual,
+  createProduct,
+  listProductDocuments,
+  listProducts
+} from "../api/products";
 import PageHeader from "../components/PageHeader";
 import type { KnowledgeBase, KnowledgeDocument } from "../types/knowledge";
 import type { ProductCreateRequest, ProductResponse } from "../types/product";
@@ -33,6 +38,7 @@ function splitValues(value: string): string[] {
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<ProductResponse[]>([]);
+  const [primaryManualByProduct, setPrimaryManualByProduct] = useState<Record<number, number>>({});
   const [form, setForm] = useState<ProductCreateRequest>(initialForm);
   const [features, setFeatures] = useState("");
   const [useCases, setUseCases] = useState("");
@@ -57,7 +63,28 @@ export default function ProductsPage() {
     setLoading(true);
     setError("");
     try {
-      setProducts((await listProducts()).items);
+      const items = (await listProducts()).items;
+      setProducts(items);
+      const primaryManualEntries = await Promise.all(
+        items.map(async (product) => {
+          try {
+            const links = await listProductDocuments(product.id);
+            const primaryManual = links.items.find(
+              (link) => link.document_type === "manual" && link.is_primary
+            );
+            return [product.id, primaryManual?.document_id] as const;
+          } catch {
+            return [product.id, undefined] as const;
+          }
+        })
+      );
+      setPrimaryManualByProduct(
+        Object.fromEntries(
+          primaryManualEntries.filter(
+            (entry): entry is readonly [number, number] => entry[1] !== undefined
+          )
+        )
+      );
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError));
     } finally {
@@ -101,6 +128,10 @@ export default function ProductsPage() {
         Number(selectedProductId),
         Number(selectedDocumentId)
       );
+      setPrimaryManualByProduct((current) => ({
+        ...current,
+        [link.product_id]: link.document_id
+      }));
       setBindingMessage(`主说明书已绑定：文档 #${link.document_id}`);
     } catch (requestError) {
       setBindingError(requestError instanceof Error ? requestError.message : String(requestError));
@@ -181,7 +212,9 @@ export default function ProductsPage() {
                 <select required value={selectedKnowledgeBaseId} onChange={(event) => void handleKnowledgeBaseChange(event.target.value)}>
                   <option value="">请选择知识库</option>
                   {knowledgeBases.map((knowledgeBase) => (
-                    <option key={knowledgeBase.id} value={knowledgeBase.id}>{knowledgeBase.name}</option>
+                    <option key={knowledgeBase.id} value={knowledgeBase.id}>
+                      {knowledgeBase.name} · ID #{knowledgeBase.id}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -219,6 +252,11 @@ export default function ProductsPage() {
                   </div>
                   <p>{product.brand} · {product.model} · {product.category}</p>
                   <small>{product.product_code} · ¥{product.price} · 库存 {product.stock_quantity}</small>
+                  <small>
+                    {primaryManualByProduct[product.id]
+                      ? `主说明书：文档 #${primaryManualByProduct[product.id]}`
+                      : "主说明书：未绑定"}
+                  </small>
                 </article>
               ))}
             </div>

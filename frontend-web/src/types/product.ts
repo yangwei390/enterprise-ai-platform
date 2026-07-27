@@ -38,3 +38,8 @@ export type ProductDocumentLink = {
   is_primary: boolean;
   manual_version?: string | null;
 };
+
+export type ProductDocumentLinkListResponse = {
+  items: ProductDocumentLink[];
+  total: number;
+};

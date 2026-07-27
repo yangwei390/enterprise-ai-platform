@@ -1,6 +1,7 @@
 import type {
   ProductCreateRequest,
   ProductDocumentLink,
+  ProductDocumentLinkListResponse,
   ProductListResponse,
   ProductResponse
 } from "../types/product";
@@ -26,4 +27,8 @@ export function bindPrimaryManual(productId: number, documentId: number) {
       is_primary: true
     }
   });
+}
+
+export function listProductDocuments(productId: number) {
+  return apiRequest<ProductDocumentLinkListResponse>(`/products/${productId}/documents`);
 }
