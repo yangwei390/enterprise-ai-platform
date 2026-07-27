@@ -1878,7 +1878,8 @@ def test_order_payload_keeps_list_scope_separate_from_active_order() -> None:
     assert list_request["payload"] == {
         "action": "list",
         "scope": "all",
-        "target_order_refs": [],
+        "target_order_refs": ["2026****0002", "2026****0001"],
+        "resolution_source": "all_candidates",
     }
     assert count_decision.action == "final"
     assert count_decision.content == "当前模拟账号下共有 2 笔订单。"
@@ -1930,6 +1931,76 @@ def test_order_payload_resolves_bare_selection_and_active_logistics() -> None:
     assert selection.tool_calls[0].arguments == {"order_ref": "2026****0002"}
     assert logistics.tool_calls[0].tool_name == "query_logistics"
     assert logistics.tool_calls[0].arguments == {"order_ref": "2026****0001"}
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["查一下物流", "发的什么快递", "快递单号是什么", "配送进度怎么样"],
+)
+def test_order_target_resolver_uses_active_order_for_logistics_actions(
+    query: str,
+) -> None:
+    order_items = [
+        {"order_no": "2026****0002", "status": "cancelled", "items": []},
+        {"order_no": "2026****0001", "status": "delivered", "items": []},
+    ]
+    state = _state(
+        query=query,
+        customer_service={
+            "order_candidates": order_items,
+            "active_order_ref": "2026****0001",
+            "contextualized_request": {
+                "raw_query": "第二个",
+                "rewritten_query": "查询第二个订单",
+                "domain": "order",
+                "intent": "order_query",
+                "source": "order_service",
+                "target_references": ["second"],
+                "payload": {
+                    "action": "detail",
+                    "scope": "selected",
+                    "target_order_refs": ["2026****0001"],
+                },
+            },
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+
+    assert decision.tool_calls[0].tool_name == "query_logistics"
+    assert decision.tool_calls[0].arguments == {"order_ref": "2026****0001"}
+    assert request["payload"]["resolution_source"] == "active"
+
+
+def test_order_target_resolver_requires_selection_when_multiple_orders() -> None:
+    state = _state(
+        query="查一下物流",
+        customer_service={
+            "order_candidates": [
+                {"order_no": "2026****0002"},
+                {"order_no": "2026****0001"},
+            ],
+            "contextualized_request": {
+                "raw_query": "我的订单",
+                "rewritten_query": "查询全部订单",
+                "domain": "order",
+                "intent": "order_query",
+                "source": "order_service",
+                "target_references": [],
+                "payload": {
+                    "action": "list",
+                    "scope": "all",
+                    "target_order_refs": [],
+                },
+            },
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    assert decision.tool_calls[0].tool_name == "query_order"
+    assert decision.tool_calls[0].arguments == {}
 
 
 def test_tool_failures_do_not_claim_business_success() -> None:

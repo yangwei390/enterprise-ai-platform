@@ -91,12 +91,46 @@ class ProductRequestConstraints(BaseModel):
     preferred_use_cases: list[str] = Field(default_factory=list, max_length=10)
 
 
+class TargetCardinality(StrEnum):
+    SINGLE = "single"
+    MULTIPLE = "multiple"
+    ALL = "all"
+    NONE = "none"
+
+
+class TargetResolutionSource(StrEnum):
+    EXPLICIT = "explicit"
+    ORDINAL = "ordinal"
+    ACTIVE = "active"
+    SINGLE_CANDIDATE = "single_candidate"
+    ALL_CANDIDATES = "all_candidates"
+    UNRESOLVED = "unresolved"
+
+
+class TargetResolutionPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cardinality: TargetCardinality
+    allow_active: bool = False
+    allow_single_candidate: bool = False
+
+
+class TargetResolution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resolved_ids: list[str] = Field(default_factory=list, max_length=5)
+    source: TargetResolutionSource = TargetResolutionSource.UNRESOLVED
+    clarification_required: bool = False
+    out_of_range: bool = False
+
+
 class ProductPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_product_codes: list[str] = Field(default_factory=list, max_length=5)
     attributes: list[str] = Field(default_factory=list, max_length=5)
     recommendation_count: int | None = Field(default=None, ge=1, le=5)
+    resolution_source: TargetResolutionSource = TargetResolutionSource.UNRESOLVED
     constraints: ProductRequestConstraints = Field(
         default_factory=ProductRequestConstraints
     )
@@ -121,6 +155,7 @@ class OrderPayload(BaseModel):
     action: OrderAction
     scope: OrderScope
     target_order_refs: list[str] = Field(default_factory=list, max_length=5)
+    resolution_source: TargetResolutionSource = TargetResolutionSource.UNRESOLVED
 
 
 class CustomerServiceIntentClassification(BaseModel):
@@ -1435,32 +1470,40 @@ def _resolve_context_product(
             return target_product_codes[0]
         return "ambiguous"
     explicit = _explicit_context_matches(candidates, query)
-    if len(explicit) == 1:
-        return explicit[0]
     route_reference = (
         None
         if _is_recommend(query)
         else _route_product_reference(metadata, candidates)
     )
-    if route_reference is not None:
-        return route_reference
+    if route_reference == "out_of_range":
+        return "out_of_range"
+    if route_reference is not None and route_reference not in explicit:
+        explicit.append(route_reference)
     ordinal = (
         None
         if _is_recommend(query)
         else _ordinal_product_index(query, len(candidates))
     )
-    if ordinal == -1:
-        return "out_of_range"
-    if ordinal is not None:
-        return str(candidates[ordinal]["product_code"])
-    if not allow_implicit and not _is_context_product_followup(query):
+    is_followup = allow_implicit or _is_context_product_followup(query)
+    if not explicit and ordinal is None and not is_followup:
         return None
     focused_code = context.get("focused_product_code")
-    if isinstance(focused_code, str) and focused_code:
-        return focused_code
-    if len(candidates) == 1:
-        return str(candidates[0]["product_code"])
-    return "ambiguous"
+    resolution = _resolve_targets(
+        candidate_ids=[str(candidate["product_code"]) for candidate in candidates],
+        explicit_ids=explicit,
+        ordinal_indices=[ordinal] if ordinal is not None else None,
+        active_id=focused_code if isinstance(focused_code, str) else None,
+        policy=TargetResolutionPolicy(
+            cardinality=TargetCardinality.SINGLE,
+            allow_active=is_followup,
+            allow_single_candidate=is_followup,
+        ),
+    )
+    if resolution.out_of_range:
+        return "out_of_range"
+    if len(resolution.resolved_ids) == 1:
+        return resolution.resolved_ids[0]
+    return "ambiguous" if resolution.clarification_required else None
 
 
 def _route_product_reference(
@@ -1946,47 +1989,120 @@ def _order_candidates(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in candidates if isinstance(item, dict)]
 
 
+def _resolve_targets(
+    *,
+    candidate_ids: list[str],
+    explicit_ids: list[str] | None = None,
+    ordinal_indices: list[int] | None = None,
+    active_id: str | None = None,
+    policy: TargetResolutionPolicy,
+) -> TargetResolution:
+    if policy.cardinality == TargetCardinality.NONE:
+        return TargetResolution()
+    if ordinal_indices:
+        if any(index < 0 or index >= len(candidate_ids) for index in ordinal_indices):
+            return TargetResolution(
+                clarification_required=True,
+                out_of_range=True,
+            )
+    if explicit_ids or ordinal_indices:
+        resolved: list[str] = []
+        for target_id in [
+            *(explicit_ids or []),
+            *(
+                [candidate_ids[index] for index in ordinal_indices]
+                if ordinal_indices
+                else []
+            ),
+        ]:
+            if target_id not in resolved:
+                resolved.append(target_id)
+        return TargetResolution(
+            resolved_ids=resolved[:5],
+            source=(
+                TargetResolutionSource.EXPLICIT
+                if explicit_ids
+                else TargetResolutionSource.ORDINAL
+            ),
+        )
+    if policy.cardinality == TargetCardinality.ALL:
+        return TargetResolution(
+            resolved_ids=candidate_ids[:5],
+            source=TargetResolutionSource.ALL_CANDIDATES,
+        )
+    if policy.allow_active and active_id:
+        return TargetResolution(
+            resolved_ids=[active_id],
+            source=TargetResolutionSource.ACTIVE,
+        )
+    if policy.allow_single_candidate and len(candidate_ids) == 1:
+        return TargetResolution(
+            resolved_ids=[candidate_ids[0]],
+            source=TargetResolutionSource.SINGLE_CANDIDATE,
+        )
+    return TargetResolution(
+        clarification_required=bool(candidate_ids),
+    )
+
+
 def _build_order_payload(
     metadata: dict[str, Any],
     query: str,
     intent: CustomerServiceIntent,
 ) -> OrderPayload:
     candidates = _order_candidates(metadata)
-    target_ref = _explicit_order_ref(query)
+    candidate_refs = [
+        str(item["order_no"])
+        for item in candidates
+        if isinstance(item.get("order_no"), str)
+    ]
+    explicit_ref = _explicit_order_ref(query)
     selection_index = _order_selection_index(query, len(candidates))
-    if target_ref is None and selection_index is not None and selection_index >= 0:
-        candidate_ref = candidates[selection_index].get("order_no")
-        if isinstance(candidate_ref, str):
-            target_ref = candidate_ref
-    if target_ref is None and _uses_active_order_reference(query):
-        customer_service = metadata.get("customer_service")
-        active_ref = (
-            customer_service.get(_ACTIVE_ORDER_REF_KEY)
-            if isinstance(customer_service, dict)
-            else None
-        )
-        if isinstance(active_ref, str) and active_ref:
-            target_ref = active_ref
-
-    if intent == CustomerServiceIntent.LOGISTICS_QUERY:
-        return OrderPayload(
-            action=OrderAction.LOGISTICS,
-            scope=OrderScope.SELECTED if target_ref else OrderScope.ALL,
-            target_order_refs=[target_ref] if target_ref else [],
-        )
+    customer_service = metadata.get("customer_service")
+    active_ref = (
+        customer_service.get(_ACTIVE_ORDER_REF_KEY)
+        if isinstance(customer_service, dict)
+        else None
+    )
+    if not isinstance(active_ref, str):
+        active_ref = None
     if _is_order_count_request(query):
-        return OrderPayload(action=OrderAction.COUNT, scope=OrderScope.ALL)
-    if _is_order_compare_request(query):
-        return OrderPayload(action=OrderAction.COMPARE, scope=OrderScope.ALL)
-    if _is_order_list_request(query):
-        return OrderPayload(action=OrderAction.LIST, scope=OrderScope.ALL)
-    if target_ref is not None:
-        return OrderPayload(
-            action=OrderAction.DETAIL,
-            scope=OrderScope.SELECTED,
-            target_order_refs=[target_ref],
-        )
-    return OrderPayload(action=OrderAction.LIST, scope=OrderScope.ALL)
+        action = OrderAction.COUNT
+    elif _is_order_compare_request(query):
+        action = OrderAction.COMPARE
+    elif _is_order_list_request(query):
+        action = OrderAction.LIST
+    elif intent == CustomerServiceIntent.LOGISTICS_QUERY:
+        action = OrderAction.LOGISTICS
+    else:
+        action = OrderAction.DETAIL
+    cardinality = (
+        TargetCardinality.ALL
+        if action in {OrderAction.LIST, OrderAction.COUNT, OrderAction.COMPARE}
+        else TargetCardinality.SINGLE
+    )
+    resolution = _resolve_targets(
+        candidate_ids=candidate_refs,
+        explicit_ids=[explicit_ref] if explicit_ref else None,
+        ordinal_indices=[selection_index] if selection_index is not None else None,
+        active_id=active_ref,
+        policy=TargetResolutionPolicy(
+            cardinality=cardinality,
+            allow_active=cardinality == TargetCardinality.SINGLE,
+            allow_single_candidate=cardinality == TargetCardinality.SINGLE,
+        ),
+    )
+    return OrderPayload(
+        action=action,
+        scope=(
+            OrderScope.ALL
+            if cardinality == TargetCardinality.ALL
+            or not resolution.resolved_ids
+            else OrderScope.SELECTED
+        ),
+        target_order_refs=resolution.resolved_ids,
+        resolution_source=resolution.source,
+    )
 
 
 def _explicit_order_ref(query: str) -> str | None:
@@ -2513,10 +2629,11 @@ def _validated_target_codes(
     target_references: list[str],
     *,
     raw_query: str,
-) -> tuple[list[str], str | None]:
+) -> tuple[list[str], str | None, TargetResolutionSource]:
     candidates = _recommendation_candidates(metadata)
     if not target_references:
-        return [], None
+        return [], None, TargetResolutionSource.UNRESOLVED
+    candidate_ids = [str(candidate["product_code"]) for candidate in candidates]
     positions = {
         "first": 0,
         "second": 1,
@@ -2526,18 +2643,15 @@ def _validated_target_codes(
         "top": 0,
         "former": 0,
     }
-    result: list[str] = []
+    explicit_ids: list[str] = []
+    ordinal_indices: list[int] = []
     for reference in target_references:
         normalized = reference.strip().casefold()
         index = positions.get(normalized)
         if normalized in {"bottom", "latter"} and candidates:
             index = len(candidates) - 1
         if index is not None:
-            if index >= len(candidates):
-                return [], f"当前只有 {len(candidates)} 个候选商品，请选择有效序号。"
-            code = str(candidates[index]["product_code"])
-            if code not in result:
-                result.append(code)
+            ordinal_indices.append(index)
             continue
         matched = [
             str(candidate["product_code"])
@@ -2548,23 +2662,49 @@ def _validated_target_codes(
                 for key in ("product_code", "name", "model")
             }
         ]
-        if len(matched) == 1 and matched[0] not in result:
-            result.append(matched[0])
+        if len(matched) == 1 and matched[0] not in explicit_ids:
+            explicit_ids.append(matched[0])
         elif explicit_codes := [
             code
             for code in _extract_product_codes(raw_query)
             if code.casefold() == normalized
         ]:
-            if explicit_codes[0] not in result:
-                result.append(explicit_codes[0])
+            if explicit_codes[0] not in explicit_ids:
+                explicit_ids.append(explicit_codes[0])
         elif normalized and normalized in raw_query.casefold():
-            if reference not in result:
-                result.append(reference)
+            if reference not in explicit_ids:
+                explicit_ids.append(reference)
         elif candidates:
-            return [], "没有在当前推荐列表中找到您指的商品，请说明商品名称或序号。"
+            return (
+                [],
+                "没有在当前推荐列表中找到您指的商品，请说明商品名称或序号。",
+                TargetResolutionSource.UNRESOLVED,
+            )
         else:
-            return [], "当前没有可引用的商品，请说明商品名称或型号。"
-    return result, None
+            return (
+                [],
+                "当前没有可引用的商品，请说明商品名称或型号。",
+                TargetResolutionSource.UNRESOLVED,
+            )
+    resolution = _resolve_targets(
+        candidate_ids=candidate_ids,
+        explicit_ids=explicit_ids,
+        ordinal_indices=ordinal_indices,
+        policy=TargetResolutionPolicy(
+            cardinality=(
+                TargetCardinality.MULTIPLE
+                if len(target_references) > 1
+                else TargetCardinality.SINGLE
+            )
+        ),
+    )
+    if resolution.out_of_range:
+        return (
+            [],
+            f"当前只有 {len(candidates)} 个候选商品，请选择有效序号。",
+            resolution.source,
+        )
+    return resolution.resolved_ids, None, resolution.source
 
 
 def _trusted_request_constraints(
@@ -2694,14 +2834,14 @@ def _store_customer_service_route(
         CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
         CustomerServiceIntent.PRODUCT_COMPARISON,
     }
-    target_product_codes, clarification_question = (
+    target_product_codes, clarification_question, product_resolution_source = (
         _validated_target_codes(
             metadata,
             target_references or [],
             raw_query=raw_query,
         )
         if requires_product_target
-        else ([], None)
+        else ([], None, TargetResolutionSource.UNRESOLVED)
     )
     constraints = (
         _trusted_request_constraints(
@@ -2717,6 +2857,7 @@ def _store_customer_service_route(
             target_product_codes=target_product_codes,
             attributes=attributes or [],
             recommendation_count=recommendation_count,
+            resolution_source=product_resolution_source,
             constraints=constraints,
         )
         if is_product_intent
@@ -2879,7 +3020,17 @@ def _is_order(query: str) -> bool:
 def _is_logistics(query: str) -> bool:
     return any(
         phrase in query
-        for phrase in ["物流", "快递", "到哪里", "到哪了", "到哪儿了", "送到哪"]
+        for phrase in [
+            "物流",
+            "快递",
+            "配送",
+            "运单",
+            "到哪里",
+            "到哪了",
+            "到哪儿了",
+            "送到哪",
+            "什么时候送到",
+        ]
     )
 
 
