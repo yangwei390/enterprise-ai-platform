@@ -397,11 +397,15 @@ class LangGraphAgentRuntime:
         allowed_knowledge_base_ids = request.allowed_knowledge_base_ids
         knowledge_base_id = requested_knowledge_base_id
         if definition.id == CUSTOMER_SERVICE_AGENT_ID:
-            knowledge_base_id = (
-                requested_knowledge_base_id
-                if requested_knowledge_base_id in allowed_knowledge_base_ids
-                else None
-            )
+            if requested_knowledge_base_id in allowed_knowledge_base_ids:
+                knowledge_base_id = requested_knowledge_base_id
+            elif (
+                requested_knowledge_base_id is None
+                and len(allowed_knowledge_base_ids) == 1
+            ):
+                knowledge_base_id = next(iter(allowed_knowledge_base_ids))
+            else:
+                knowledge_base_id = None
         state = create_initial_state(
             query=request.query,
             conversation_id=request.conversation_id,

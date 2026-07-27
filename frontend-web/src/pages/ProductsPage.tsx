@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
-import { createProduct, listProducts } from "../api/products";
+import { listKnowledgeBases, listKnowledgeDocuments } from "../api/knowledge";
+import { bindPrimaryManual, createProduct, listProducts } from "../api/products";
 import PageHeader from "../components/PageHeader";
+import type { KnowledgeBase, KnowledgeDocument } from "../types/knowledge";
 import type { ProductCreateRequest, ProductResponse } from "../types/product";
 
 const initialForm: ProductCreateRequest = {
@@ -35,11 +37,20 @@ export default function ProductsPage() {
   const [features, setFeatures] = useState("");
   const [useCases, setUseCases] = useState("");
   const [loading, setLoading] = useState(false);
+  const [binding, setBinding] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [bindingError, setBindingError] = useState("");
+  const [bindingMessage, setBindingMessage] = useState("");
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState("");
+  const [selectedDocumentId, setSelectedDocumentId] = useState("");
 
   useEffect(() => {
     void refreshProducts();
+    void refreshKnowledgeBases();
   }, []);
 
   async function refreshProducts() {
@@ -51,6 +62,50 @@ export default function ProductsPage() {
       setError(requestError instanceof Error ? requestError.message : String(requestError));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshKnowledgeBases() {
+    try {
+      setKnowledgeBases((await listKnowledgeBases()).items);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    }
+  }
+
+  async function handleKnowledgeBaseChange(value: string) {
+    setSelectedKnowledgeBaseId(value);
+    setSelectedDocumentId("");
+    setDocuments([]);
+    if (!value) {
+      return;
+    }
+    try {
+      const result = await listKnowledgeDocuments(Number(value));
+      setDocuments(result.items.filter((document) => document.parse_status === "success"));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    }
+  }
+
+  async function handleBindManual(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedProductId || !selectedDocumentId) {
+      return;
+    }
+    setBinding(true);
+    setBindingError("");
+    setBindingMessage("");
+    try {
+      const link = await bindPrimaryManual(
+        Number(selectedProductId),
+        Number(selectedDocumentId)
+      );
+      setBindingMessage(`主说明书已绑定：文档 #${link.document_id}`);
+    } catch (requestError) {
+      setBindingError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setBinding(false);
     }
   }
 
@@ -108,7 +163,46 @@ export default function ProductsPage() {
           <button type="submit" disabled={loading}>{loading ? "提交中..." : "创建商品"}</button>
         </form>
 
-        <section className="card">
+        <section className="card product-form">
+          <form className="product-form" onSubmit={handleBindManual}>
+            <h3>绑定主说明书</h3>
+            <label>
+              商品
+              <select required value={selectedProductId} onChange={(event) => setSelectedProductId(event.target.value)}>
+                <option value="">请选择商品</option>
+                {products.map((product) => (
+                  <option key={product.id} value={product.id}>{product.name} · {product.model}</option>
+                ))}
+              </select>
+            </label>
+            <div className="product-form-row">
+              <label>
+                知识库
+                <select required value={selectedKnowledgeBaseId} onChange={(event) => void handleKnowledgeBaseChange(event.target.value)}>
+                  <option value="">请选择知识库</option>
+                  {knowledgeBases.map((knowledgeBase) => (
+                    <option key={knowledgeBase.id} value={knowledgeBase.id}>{knowledgeBase.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                已解析文档
+                <select required value={selectedDocumentId} onChange={(event) => setSelectedDocumentId(event.target.value)}>
+                  <option value="">请选择文档</option>
+                  {documents.map((document) => (
+                    <option key={document.id} value={document.id}>
+                      {document.original_filename || document.filename} · #{document.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <button type="submit" disabled={binding || !selectedProductId || !selectedDocumentId}>
+              {binding ? "绑定中..." : "设为主说明书"}
+            </button>
+            {bindingError && <p className="form-error">{bindingError}</p>}
+            {bindingMessage && <p className="form-success">{bindingMessage}</p>}
+          </form>
           <div className="panel-header">
             <h3>商品列表</h3>
             <button className="secondary-button" type="button" onClick={() => void refreshProducts()} disabled={loading}>刷新</button>

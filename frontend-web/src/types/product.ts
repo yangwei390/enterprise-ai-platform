@@ -29,3 +29,12 @@ export type ProductListResponse = {
   page: number;
   page_size: number;
 };
+
+export type ProductDocumentLink = {
+  id: number;
+  product_id: number;
+  document_id: number;
+  document_type: string;
+  is_primary: boolean;
+  manual_version?: string | null;
+};

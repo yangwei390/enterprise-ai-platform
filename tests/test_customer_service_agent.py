@@ -285,11 +285,48 @@ def test_customer_runtime_only_accepts_server_allowed_knowledge_base_scope() -> 
         session_id="agent:test",
         session_state=None,
     )
+    server_default = runtime._create_state(
+        request=AgentRuntimeRequest(
+            query="型号 P001 怎么清洁",
+            agent_id=CUSTOMER_SERVICE_AGENT_ID,
+            allowed_knowledge_base_ids=frozenset({8}),
+        ),
+        definition=definition,
+        session_id="agent:test",
+        session_state=None,
+    )
+    rejected_explicit = runtime._create_state(
+        request=AgentRuntimeRequest(
+            query="型号 P001 怎么清洁",
+            agent_id=CUSTOMER_SERVICE_AGENT_ID,
+            knowledge_base_id=999,
+            allowed_knowledge_base_ids=frozenset({8}),
+        ),
+        definition=definition,
+        session_id="agent:test",
+        session_state=None,
+    )
+    ambiguous_scope = runtime._create_state(
+        request=AgentRuntimeRequest(
+            query="型号 P001 怎么清洁",
+            agent_id=CUSTOMER_SERVICE_AGENT_ID,
+            allowed_knowledge_base_ids=frozenset({8, 9}),
+        ),
+        definition=definition,
+        session_id="agent:test",
+        session_state=None,
+    )
 
-    assert untrusted["knowledge_base_id"] is None
-    assert untrusted["allowed_knowledge_base_ids"] == []
-    assert trusted["knowledge_base_id"] == 8
-    assert trusted["allowed_knowledge_base_ids"] == [8]
+    assert untrusted.get("knowledge_base_id") is None
+    assert untrusted.get("allowed_knowledge_base_ids") == []
+    assert trusted.get("knowledge_base_id") == 8
+    assert trusted.get("allowed_knowledge_base_ids") == [8]
+    assert server_default.get("knowledge_base_id") == 8
+    assert server_default.get("allowed_knowledge_base_ids") == [8]
+    assert rejected_explicit.get("knowledge_base_id") is None
+    assert rejected_explicit.get("allowed_knowledge_base_ids") == [8]
+    assert ambiguous_scope.get("knowledge_base_id") is None
+    assert ambiguous_scope.get("allowed_knowledge_base_ids") == [8, 9]
 
 
 def test_customer_planner_greeting_uses_no_tool() -> None:

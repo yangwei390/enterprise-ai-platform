@@ -1,5 +1,6 @@
 import type {
   ProductCreateRequest,
+  ProductDocumentLink,
   ProductListResponse,
   ProductResponse
 } from "../types/product";
@@ -13,5 +14,16 @@ export function createProduct(data: ProductCreateRequest) {
   return apiRequest<ProductResponse>("/products", {
     method: "POST",
     body: data
+  });
+}
+
+export function bindPrimaryManual(productId: number, documentId: number) {
+  return apiRequest<ProductDocumentLink>(`/products/${productId}/documents`, {
+    method: "POST",
+    body: {
+      document_id: documentId,
+      document_type: "manual",
+      is_primary: true
+    }
   });
 }

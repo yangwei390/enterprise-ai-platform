@@ -45,7 +45,8 @@ select {
 }
 
 .product-form input,
-.product-form textarea {
+.product-form textarea,
+.product-form select {
   width: 100%;
   border: 1px solid #cbd5e1;
   border-radius: 8px;

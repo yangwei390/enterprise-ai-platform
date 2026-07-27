@@ -256,6 +256,26 @@ class ProductDocumentLinkCreate(BaseModel):
         return self
 
 
+class ProductDocumentBindingCreate(BaseModel):
+    document_id: int = Field(ge=1)
+    document_type: str = "manual"
+    is_primary: bool = True
+    manual_version: str | None = None
+
+    @field_validator("document_type")
+    @classmethod
+    def validate_document_type(cls, value: str) -> str:
+        if value not in DOCUMENT_TYPE_VALUES:
+            raise ValueError("document_type 不合法")
+        return value
+
+    @model_validator(mode="after")
+    def validate_primary_type(self) -> ProductDocumentBindingCreate:
+        if self.is_primary and self.document_type != "manual":
+            raise ValueError("非 manual 类型不能设置为主说明书")
+        return self
+
+
 class ProductDocumentLinkResponse(BaseModel):
     id: int
     product_id: int

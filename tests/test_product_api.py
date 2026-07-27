@@ -16,6 +16,8 @@ class FakeProductService:
         self.last_query: ProductQuery | None = None
         self.created: ProductCreate | None = None
         self.updated: ProductUpdate | None = None
+        self.linked_document = None
+        self.allowed_knowledge_base_ids: set[int] | None = None
         self.called = False
 
     def list(self, query: ProductQuery):
@@ -68,6 +70,23 @@ class FakeProductService:
             )
         ]
 
+    def link_document(self, data, *, allowed_knowledge_base_ids: set[int]):
+        now = datetime.now(UTC)
+        self.linked_document = data
+        self.allowed_knowledge_base_ids = allowed_knowledge_base_ids
+        return SimpleNamespace(
+            id=2,
+            product_id=2,
+            document_id=data.document_id,
+            document_type=data.document_type,
+            is_primary=data.is_primary,
+            manual_version=data.manual_version,
+            source_url=None,
+            downloaded_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+
 
 def test_product_list_api_uses_service_and_converts_legacy_fields() -> None:
     service = FakeProductService()
@@ -109,9 +128,13 @@ def test_product_recommendation_api_returns_scores_and_reasons() -> None:
     assert service.last_query.preferred_use_cases == ["宿舍"]
 
 
-def test_product_create_update_delete_and_document_routes() -> None:
+def test_product_create_update_delete_and_document_routes(monkeypatch) -> None:
     service = FakeProductService()
     client = _client(service)
+    monkeypatch.setattr(
+        "backend.app.api.product.settings.CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS",
+        "8",
+    )
 
     create_response = client.post(
         "/products",
@@ -127,6 +150,15 @@ def test_product_create_update_delete_and_document_routes() -> None:
     update_response = client.put("/products/2", json={"name": "更新后商品"})
     delete_response = client.delete("/products/2")
     links_response = client.get("/products/2/documents")
+    link_response = client.post(
+        "/products/2/documents",
+        json={
+            "document_id": 10,
+            "document_type": "manual",
+            "is_primary": True,
+            "manual_version": "v1",
+        },
+    )
 
     assert create_response.status_code == 200
     assert create_response.json()["data"]["product_code"] == "P002"
@@ -135,6 +167,11 @@ def test_product_create_update_delete_and_document_routes() -> None:
     assert service.updated is not None
     assert delete_response.json()["data"]["deleted"] is True
     assert links_response.json()["data"]["items"][0]["document_id"] == 10
+    assert link_response.json()["data"]["document_id"] == 10
+    assert link_response.json()["data"]["is_primary"] is True
+    assert service.linked_document is not None
+    assert service.linked_document.product_code == "P001"
+    assert service.allowed_knowledge_base_ids == {8}
 
 
 def test_product_api_rejects_invalid_sort_before_service_call() -> None:

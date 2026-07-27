@@ -3,11 +3,18 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
+from backend.app.agents.customer_service_contract import (
+    CUSTOMER_SERVICE_AGENT_ID,
+    customer_service_allowed_knowledge_base_ids,
+)
+from backend.app.config.settings import settings
 from backend.app.db.session import get_db
 from backend.app.repositories.product import ProductRepository
 from backend.app.schemas import ApiResponse, success
 from backend.app.schemas.product import (
     ProductCreate,
+    ProductDocumentBindingCreate,
+    ProductDocumentLinkCreate,
     ProductDocumentLinkListResponse,
     ProductDocumentLinkResponse,
     ProductListResponse,
@@ -165,3 +172,24 @@ def list_product_documents(
     links = service.list_document_links(id)
     items = [ProductDocumentLinkResponse.model_validate(link) for link in links]
     return success(data=ProductDocumentLinkListResponse(items=items, total=len(items)))
+
+
+@router.post("/products/{id}/documents", response_model=ApiResponse)
+def link_product_document(
+    id: int,
+    data: ProductDocumentBindingCreate,
+    service: ProductService = Depends(get_product_service),
+) -> ApiResponse:
+    product = service.get(id)
+    allowed_knowledge_base_ids = customer_service_allowed_knowledge_base_ids(
+        agent_id=CUSTOMER_SERVICE_AGENT_ID,
+        configured_ids=settings.CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS,
+    )
+    link = service.link_document(
+        ProductDocumentLinkCreate(
+            product_code=product.product_code,
+            **data.model_dump(),
+        ),
+        allowed_knowledge_base_ids=set(allowed_knowledge_base_ids),
+    )
+    return success(data=ProductDocumentLinkResponse.model_validate(link))
