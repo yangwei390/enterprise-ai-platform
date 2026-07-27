@@ -25,7 +25,7 @@ from backend.app.agents.langgraph.tool_calling import (
 )
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.tools.base import ToolResult
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 class UserDecision(StrEnum):
@@ -63,6 +63,16 @@ class CustomerServiceSource(StrEnum):
     PLANNER = "planner"
 
 
+class CustomerServiceDomain(StrEnum):
+    PRODUCT = "product"
+    ORDER = "order"
+    LOGISTICS = "logistics"
+    AFTER_SALES = "after_sales"
+    KNOWLEDGE = "knowledge"
+    HUMAN_HANDOFF = "human_handoff"
+    GENERAL = "general"
+
+
 _ORDER_CANDIDATES_KEY = "order_candidates"
 _ACTIVE_ORDER_REF_KEY = "active_order_ref"
 
@@ -79,6 +89,38 @@ class ProductRequestConstraints(BaseModel):
     preferred_features: list[str] = Field(default_factory=list, max_length=10)
     required_use_cases: list[str] = Field(default_factory=list, max_length=10)
     preferred_use_cases: list[str] = Field(default_factory=list, max_length=10)
+
+
+class ProductPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_product_codes: list[str] = Field(default_factory=list, max_length=5)
+    attributes: list[str] = Field(default_factory=list, max_length=5)
+    recommendation_count: int | None = Field(default=None, ge=1, le=5)
+    constraints: ProductRequestConstraints = Field(
+        default_factory=ProductRequestConstraints
+    )
+
+
+class OrderAction(StrEnum):
+    LIST = "list"
+    COUNT = "count"
+    DETAIL = "detail"
+    LOGISTICS = "logistics"
+    COMPARE = "compare"
+
+
+class OrderScope(StrEnum):
+    ALL = "all"
+    SELECTED = "selected"
+
+
+class OrderPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: OrderAction
+    scope: OrderScope
+    target_order_refs: list[str] = Field(default_factory=list, max_length=5)
 
 
 class CustomerServiceIntentClassification(BaseModel):
@@ -100,18 +142,46 @@ class ContextualizedRequest(BaseModel):
 
     raw_query: str
     rewritten_query: str
+    domain: CustomerServiceDomain
     intent: CustomerServiceIntent
     source: CustomerServiceSource
     target_references: list[str] = Field(default_factory=list, max_length=5)
-    target_product_codes: list[str] = Field(default_factory=list, max_length=5)
-    attributes: list[str] = Field(default_factory=list, max_length=5)
-    recommendation_count: int | None = Field(default=None, ge=1, le=5)
-    constraints: ProductRequestConstraints = Field(
-        default_factory=ProductRequestConstraints
-    )
+    payload: ProductPayload | OrderPayload | None = None
     confidence: float = Field(default=1, ge=0, le=1)
     clarification_required: bool = False
     clarification_question: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_product_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        intent_value = migrated.get("intent")
+        try:
+            intent = CustomerServiceIntent(intent_value)
+        except ValueError:
+            return value
+        migrated.setdefault("domain", _domain_for_customer_service_intent(intent))
+        legacy_fields = {
+            "target_product_codes",
+            "attributes",
+            "recommendation_count",
+            "constraints",
+        }
+        if (
+            migrated["domain"] == CustomerServiceDomain.PRODUCT
+            and "payload" not in migrated
+            and any(field in migrated for field in legacy_fields)
+        ):
+            migrated["payload"] = {
+                field: migrated.get(field)
+                for field in legacy_fields
+                if field in migrated
+            }
+        for field in legacy_fields:
+            migrated.pop(field, None)
+        return migrated
 
 
 class _PendingCoordinator:
@@ -231,10 +301,27 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             query=query,
             runtime_turn_id=runtime_turn_id,
         )
+        if (
+            intent == CustomerServiceIntent.OTHER
+            and _is_order_context_followup(metadata, query)
+        ):
+            intent = CustomerServiceIntent.ORDER_QUERY
+            source = CustomerServiceSource.ORDER_SERVICE
         contextualized_request = _current_contextualized_request(
             metadata,
             runtime_turn_id,
         )
+        order_payload = (
+            contextualized_request.payload
+            if contextualized_request is not None
+            and isinstance(contextualized_request.payload, OrderPayload)
+            else None
+        )
+        if order_payload is None and intent in {
+            CustomerServiceIntent.ORDER_QUERY,
+            CustomerServiceIntent.LOGISTICS_QUERY,
+        }:
+            order_payload = _build_order_payload(metadata, query, intent)
         evidence_required = source in {
             CustomerServiceSource.PRIMARY_MANUAL,
             CustomerServiceSource.POLICY_KNOWLEDGE,
@@ -306,7 +393,10 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
         if _last_tool_name(observations) == "query_order":
             raw_result = observations[-1].get("raw_result")
             if isinstance(raw_result, dict) and raw_result.get("mode") == "list":
-                return _order_list_final(raw_result)
+                return _order_list_final(
+                    raw_result,
+                    action=order_payload.action if order_payload is not None else None,
+                )
         if _last_tool_name(observations) in {
             "search_products",
             "recommend_products",
@@ -343,20 +433,22 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                     "message": query[:500],
                 },
             )
-        if _is_logistics(query) or intent == CustomerServiceIntent.LOGISTICS_QUERY:
-            order_ref = _resolve_demo_order_ref(metadata, query)
-            if order_ref is None:
+        if order_payload is not None and order_payload.action == OrderAction.LOGISTICS:
+            if not order_payload.target_order_refs:
                 return _tool_decision("query_order", {})
-            return _tool_decision("query_logistics", {"order_ref": order_ref})
-        if _is_order(query) or intent == CustomerServiceIntent.ORDER_QUERY:
-            order_ref = _resolve_demo_order_ref(metadata, query)
             return _tool_decision(
-                "query_order",
-                {"order_ref": order_ref} if order_ref is not None else {},
+                "query_logistics",
+                {"order_ref": order_payload.target_order_refs[0]},
             )
-        order_ref = _resolve_demo_order_ref(metadata, query)
-        if order_ref is not None and _order_candidates(metadata):
-            return _tool_decision("query_order", {"order_ref": order_ref})
+        if order_payload is not None:
+            if order_payload.scope == OrderScope.ALL:
+                return _tool_decision("query_order", {})
+            if order_payload.target_order_refs:
+                return _tool_decision(
+                    "query_order",
+                    {"order_ref": order_payload.target_order_refs[0]},
+                )
+            return _tool_decision("query_order", {})
         if (
             contextualized_request is not None
             and contextualized_request.clarification_required
@@ -370,9 +462,10 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             contextualized_request is not None
             and contextualized_request.intent
             == CustomerServiceIntent.PRODUCT_COMPARISON
-            and len(contextualized_request.target_product_codes) >= 2
+            and isinstance(contextualized_request.payload, ProductPayload)
+            and len(contextualized_request.payload.target_product_codes) >= 2
         ):
-            context_codes = contextualized_request.target_product_codes
+            context_codes = contextualized_request.payload.target_product_codes
         if _is_contextual_product_choice(query):
             context_codes = [
                 str(item["product_code"])
@@ -846,10 +939,16 @@ def _observation_final(observation: dict[str, Any]) -> AgentDecision:
     )
 
 
-def _order_list_final(raw_result: dict[str, Any]) -> AgentDecision:
+def _order_list_final(
+    raw_result: dict[str, Any],
+    *,
+    action: OrderAction | None = None,
+) -> AgentDecision:
     items = raw_result.get("items")
     if not isinstance(items, list) or not items:
         return _final("当前模拟账号下没有订单。")
+    if action == OrderAction.COUNT:
+        return _final(f"当前模拟账号下共有 {len(items)} 笔订单。")
     lines = [f"当前模拟账号下有 {len(items)} 笔订单："]
     for index, item in enumerate(items, start=1):
         if not isinstance(item, dict):
@@ -869,6 +968,9 @@ def _order_list_final(raw_result: dict[str, Any]) -> AgentDecision:
             f"订单 {item.get('order_no')}，状态 {item.get('status')}，"
             f"金额 {item.get('amount')} {item.get('currency') or 'CNY'}"
         )
+    if action == OrderAction.COMPARE:
+        lines.append("以上是这些订单在商品、状态和金额上的主要区别。")
+        return _final("\n".join(lines))
     lines.append("请告诉我第几笔订单，我可以继续查询订单详情或物流。")
     return _final("\n".join(lines))
 
@@ -1029,8 +1131,8 @@ def _product_query_args(state: Any, query: str, *, page_size: int) -> dict[str, 
         state.get("metadata", {}),
         str(state.get("metadata", {}).get("runtime_turn_id") or ""),
     )
-    if request is not None:
-        request_constraints = request.constraints.model_dump(exclude_none=True)
+    if request is not None and isinstance(request.payload, ProductPayload):
+        request_constraints = request.payload.constraints.model_dump(exclude_none=True)
         args.update(
             {
                 key: value
@@ -1324,9 +1426,13 @@ def _resolve_context_product(
         metadata,
         str(metadata.get("runtime_turn_id") or ""),
     )
-    if request is not None and request.target_product_codes:
-        if len(request.target_product_codes) == 1:
-            return request.target_product_codes[0]
+    if request is not None and isinstance(request.payload, ProductPayload):
+        target_product_codes = request.payload.target_product_codes
+    else:
+        target_product_codes = []
+    if target_product_codes:
+        if len(target_product_codes) == 1:
+            return target_product_codes[0]
         return "ambiguous"
     explicit = _explicit_context_matches(candidates, query)
     if len(explicit) == 1:
@@ -1840,28 +1946,126 @@ def _order_candidates(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in candidates if isinstance(item, dict)]
 
 
-def _resolve_demo_order_ref(metadata: dict[str, Any], query: str) -> str | None:
+def _build_order_payload(
+    metadata: dict[str, Any],
+    query: str,
+    intent: CustomerServiceIntent,
+) -> OrderPayload:
+    candidates = _order_candidates(metadata)
+    target_ref = _explicit_order_ref(query)
+    selection_index = _order_selection_index(query, len(candidates))
+    if target_ref is None and selection_index is not None and selection_index >= 0:
+        candidate_ref = candidates[selection_index].get("order_no")
+        if isinstance(candidate_ref, str):
+            target_ref = candidate_ref
+    if target_ref is None and _uses_active_order_reference(query):
+        customer_service = metadata.get("customer_service")
+        active_ref = (
+            customer_service.get(_ACTIVE_ORDER_REF_KEY)
+            if isinstance(customer_service, dict)
+            else None
+        )
+        if isinstance(active_ref, str) and active_ref:
+            target_ref = active_ref
+
+    if intent == CustomerServiceIntent.LOGISTICS_QUERY:
+        return OrderPayload(
+            action=OrderAction.LOGISTICS,
+            scope=OrderScope.SELECTED if target_ref else OrderScope.ALL,
+            target_order_refs=[target_ref] if target_ref else [],
+        )
+    if _is_order_count_request(query):
+        return OrderPayload(action=OrderAction.COUNT, scope=OrderScope.ALL)
+    if _is_order_compare_request(query):
+        return OrderPayload(action=OrderAction.COMPARE, scope=OrderScope.ALL)
+    if _is_order_list_request(query):
+        return OrderPayload(action=OrderAction.LIST, scope=OrderScope.ALL)
+    if target_ref is not None:
+        return OrderPayload(
+            action=OrderAction.DETAIL,
+            scope=OrderScope.SELECTED,
+            target_order_refs=[target_ref],
+        )
+    return OrderPayload(action=OrderAction.LIST, scope=OrderScope.ALL)
+
+
+def _explicit_order_ref(query: str) -> str | None:
     explicit = re.search(r"\b(\d{10,20})\b", query)
     if explicit is not None:
         return explicit.group(1)
     masked = re.search(r"\b(\d{4}\*{4}\d{4})\b", query)
-    if masked is not None:
-        return masked.group(1)
-    candidates = _order_candidates(metadata)
-    if candidates:
-        index = _ordinal_product_index(query, len(candidates))
-        if index is not None and index >= 0:
-            order_ref = candidates[index].get("order_no")
-            return order_ref if isinstance(order_ref, str) else None
+    return masked.group(1) if masked is not None else None
+
+
+def _order_selection_index(query: str, candidate_count: int) -> int | None:
+    index = _ordinal_product_index(query, candidate_count)
+    if index is not None:
+        return index
+    bare_number = re.fullmatch(r"\s*([1-5])\s*", query)
+    if bare_number is None:
+        return None
+    index = int(bare_number.group(1)) - 1
+    return index if index < candidate_count else -1
+
+
+def _is_order_count_request(query: str) -> bool:
+    return "订单" in query and any(
+        phrase in query for phrase in ["几个", "多少个", "多少笔", "数量"]
+    )
+
+
+def _is_order_compare_request(query: str) -> bool:
+    return "订单" in query and _is_compare(query)
+
+
+def _is_order_list_request(query: str) -> bool:
+    return "订单" in query and any(
+        phrase in query
+        for phrase in [
+            "我的订单",
+            "订单列表",
+            "所有订单",
+            "全部订单",
+            "还有其他",
+            "还有别的",
+        ]
+    )
+
+
+def _uses_active_order_reference(query: str) -> bool:
+    return any(
+        phrase in query
+        for phrase in ["这个订单", "该订单", "这笔", "它", "刚才", "当前订单", "物流呢"]
+    )
+
+
+def _is_order_context_followup(metadata: dict[str, Any], query: str) -> bool:
+    if not _order_candidates(metadata):
+        return False
     customer_service = metadata.get("customer_service")
-    if isinstance(customer_service, dict):
-        active_order_ref = customer_service.get(_ACTIVE_ORDER_REF_KEY)
-        if isinstance(active_order_ref, str) and active_order_ref:
-            return active_order_ref
-    if len(candidates) == 1:
-        order_ref = candidates[0].get("order_no")
-        return order_ref if isinstance(order_ref, str) else None
-    return None
+    previous_request = (
+        customer_service.get(_CONTEXTUALIZED_REQUEST_KEY)
+        if isinstance(customer_service, dict)
+        else None
+    )
+    previous_domain = (
+        previous_request.get("domain")
+        if isinstance(previous_request, dict)
+        else None
+    )
+    if previous_domain not in {
+        CustomerServiceDomain.ORDER,
+        CustomerServiceDomain.LOGISTICS,
+        CustomerServiceDomain.ORDER.value,
+        CustomerServiceDomain.LOGISTICS.value,
+    }:
+        return False
+    return (
+        _order_selection_index(query, len(_order_candidates(metadata))) is not None
+        or _uses_active_order_reference(query)
+        or _is_order(query)
+        or _is_logistics(query)
+    )
 
 
 def _extract_product_codes(query: str) -> list[str]:
@@ -2027,6 +2231,12 @@ async def _ensure_customer_service_route(state: Any, query: str) -> None:
         return
 
     rule_intent, rule_source = _customer_service_route(query)
+    if (
+        rule_intent == CustomerServiceIntent.OTHER
+        and _is_order_context_followup(metadata, query)
+    ):
+        rule_intent = CustomerServiceIntent.ORDER_QUERY
+        rule_source = CustomerServiceSource.ORDER_SERVICE
     inherited_intent = _inherited_product_fact_intent(metadata, query)
     if rule_intent == CustomerServiceIntent.OTHER and inherited_intent is not None:
         rule_intent = inherited_intent
@@ -2502,6 +2712,25 @@ def _store_customer_service_route(
         if is_product_intent
         else ProductRequestConstraints()
     )
+    product_payload = (
+        ProductPayload(
+            target_product_codes=target_product_codes,
+            attributes=attributes or [],
+            recommendation_count=recommendation_count,
+            constraints=constraints,
+        )
+        if is_product_intent
+        else None
+    )
+    order_payload = (
+        _build_order_payload(metadata, raw_query, intent)
+        if intent
+        in {
+            CustomerServiceIntent.ORDER_QUERY,
+            CustomerServiceIntent.LOGISTICS_QUERY,
+        }
+        else None
+    )
     request = ContextualizedRequest(
         raw_query=raw_query,
         rewritten_query=rewritten_query
@@ -2512,13 +2741,11 @@ def _store_customer_service_route(
             attributes=attributes or [],
             constraints=constraints,
         ),
+        domain=_domain_for_customer_service_intent(intent),
         intent=intent,
         source=source,
         target_references=target_references or [],
-        target_product_codes=target_product_codes,
-        attributes=attributes or [],
-        recommendation_count=recommendation_count,
-        constraints=constraints,
+        payload=product_payload or order_payload,
         confidence=confidence if confidence is not None else 1,
         clarification_required=clarification_question is not None,
         clarification_question=clarification_question,
@@ -2529,6 +2756,30 @@ def _store_customer_service_route(
         CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
     }:
         customer_service[_LAST_PRODUCT_FACT_INTENT_KEY] = intent
+
+
+def _domain_for_customer_service_intent(
+    intent: CustomerServiceIntent,
+) -> CustomerServiceDomain:
+    if intent in {
+        CustomerServiceIntent.PRODUCT_RECOMMENDATION,
+        CustomerServiceIntent.PRODUCT_SEARCH,
+        CustomerServiceIntent.PRODUCT_REALTIME_FACT,
+        CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
+        CustomerServiceIntent.PRODUCT_COMPARISON,
+    }:
+        return CustomerServiceDomain.PRODUCT
+    if intent == CustomerServiceIntent.ORDER_QUERY:
+        return CustomerServiceDomain.ORDER
+    if intent == CustomerServiceIntent.LOGISTICS_QUERY:
+        return CustomerServiceDomain.LOGISTICS
+    if intent == CustomerServiceIntent.AFTER_SALES:
+        return CustomerServiceDomain.AFTER_SALES
+    if intent == CustomerServiceIntent.POLICY_QUESTION:
+        return CustomerServiceDomain.KNOWLEDGE
+    if intent == CustomerServiceIntent.HUMAN_HANDOFF:
+        return CustomerServiceDomain.HUMAN_HANDOFF
+    return CustomerServiceDomain.GENERAL
 
 
 def _source_for_customer_service_intent(

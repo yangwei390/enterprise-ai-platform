@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from backend.app.agents.catalog import AgentCatalog
 from backend.app.agents.customer_service import (
+    ContextualizedRequest,
     CustomerServiceHybridPlannerStrategy,
     CustomerServicePlannerStrategy,
     _PendingCoordinator,
@@ -1231,9 +1232,31 @@ def test_contextualized_request_resolves_llm_reference_to_trusted_product(
 
     assert decision.tool_calls[0].arguments["keyword"] == "MX4"
     assert request["rewritten_query"] == "查询 MX4 的按键数量"
-    assert request["target_product_codes"] == ["MX4"]
+    assert request["domain"] == "product"
+    assert request["payload"]["target_product_codes"] == ["MX4"]
     assert request["source"] == "primary_manual"
     assert request["clarification_required"] is False
+
+
+def test_contextualized_request_migrates_legacy_product_shape() -> None:
+    request = ContextualizedRequest.model_validate(
+        {
+            "raw_query": "第二个呢",
+            "rewritten_query": "查询 MX4 的特点",
+            "intent": "product_realtime_fact",
+            "source": "product_catalog",
+            "target_references": ["second"],
+            "target_product_codes": ["MX4"],
+            "attributes": ["features"],
+            "recommendation_count": None,
+            "constraints": {"category": "鼠标"},
+        }
+    )
+
+    assert request.domain.value == "product"
+    assert request.payload is not None
+    assert request.payload.target_product_codes == ["MX4"]
+    assert request.payload.constraints.category == "鼠标"
 
 
 def test_contextualized_request_rejects_untrusted_product_reference(
@@ -1278,7 +1301,7 @@ def test_contextualized_request_rejects_untrusted_product_reference(
     request = state["metadata"]["customer_service"]["contextualized_request"]
 
     assert decision.tool_calls == []
-    assert request["target_product_codes"] == []
+    assert request["payload"]["target_product_codes"] == []
     assert request["clarification_required"] is True
     assert "当前推荐列表" in str(decision.content)
 
@@ -1389,8 +1412,8 @@ def test_contextualizer_cannot_override_trusted_constraints(monkeypatch) -> None
 
     assert decision.tool_calls[0].arguments["category"] == "鼠标"
     assert decision.tool_calls[0].arguments["price_max"] == 500
-    assert request["constraints"]["category"] == "鼠标"
-    assert request["constraints"]["price_max"] == 500
+    assert request["payload"]["constraints"]["category"] == "鼠标"
+    assert request["payload"]["constraints"]["price_max"] == 500
 
 
 def test_customer_llm_intent_invalid_output_falls_back_safely(monkeypatch) -> None:
@@ -1802,6 +1825,111 @@ def test_demo_order_list_and_multi_turn_logistics_selection() -> None:
     assert logistics_decision.tool_calls[0].arguments == {
         "order_ref": "2026****0001"
     }
+
+
+def test_order_payload_keeps_list_scope_separate_from_active_order() -> None:
+    order_items = [
+        {"order_no": "2026****0002", "status": "cancelled", "items": []},
+        {"order_no": "2026****0001", "status": "delivered", "items": []},
+    ]
+    customer_service = {
+        "order_candidates": order_items,
+        "active_order_ref": "2026****0001",
+        "contextualized_request": {
+            "raw_query": "第二个呢",
+            "rewritten_query": "第二个呢",
+            "domain": "order",
+            "intent": "order_query",
+            "source": "order_service",
+            "target_references": ["second"],
+            "payload": {
+                "action": "detail",
+                "scope": "selected",
+                "target_order_refs": ["2026****0001"],
+            },
+        },
+    }
+
+    list_state = _state(
+        query="我要查询我的订单",
+        customer_service=deepcopy(customer_service),
+    )
+    list_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(list_state)
+    )
+    count_state = _state(
+        query="我有几个订单",
+        customer_service=deepcopy(customer_service),
+        observations=[
+            {
+                "tool_name": "query_order",
+                "success": True,
+                "raw_result": {"mode": "list", "items": order_items, "total": 2},
+            }
+        ],
+    )
+    count_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(count_state)
+    )
+
+    assert list_decision.tool_calls[0].tool_name == "query_order"
+    assert list_decision.tool_calls[0].arguments == {}
+    list_request = list_state["metadata"]["customer_service"]["contextualized_request"]
+    assert list_request["payload"] == {
+        "action": "list",
+        "scope": "all",
+        "target_order_refs": [],
+    }
+    assert count_decision.action == "final"
+    assert count_decision.content == "当前模拟账号下共有 2 笔订单。"
+
+
+def test_order_payload_resolves_bare_selection_and_active_logistics() -> None:
+    order_items = [
+        {"order_no": "2026****0002", "status": "cancelled", "items": []},
+        {"order_no": "2026****0001", "status": "delivered", "items": []},
+    ]
+    previous_request = {
+        "raw_query": "我的订单",
+        "rewritten_query": "我的订单",
+        "domain": "order",
+        "intent": "order_query",
+        "source": "order_service",
+        "target_references": [],
+        "payload": {
+            "action": "list",
+            "scope": "all",
+            "target_order_refs": [],
+        },
+    }
+    selection = asyncio.run(
+        _decide(
+            _state(
+                query="1",
+                customer_service={
+                    "order_candidates": order_items,
+                    "contextualized_request": previous_request,
+                },
+            )
+        )
+    )
+    logistics = asyncio.run(
+        _decide(
+            _state(
+                query="物流呢",
+                customer_service={
+                    "order_candidates": order_items,
+                    "active_order_ref": "2026****0001",
+                    "contextualized_request": previous_request,
+                },
+            )
+        )
+    )
+
+    assert selection.tool_calls[0].tool_name == "query_order"
+    assert selection.tool_calls[0].arguments == {"order_ref": "2026****0002"}
+    assert logistics.tool_calls[0].tool_name == "query_logistics"
+    assert logistics.tool_calls[0].arguments == {"order_ref": "2026****0001"}
 
 
 def test_tool_failures_do_not_claim_business_success() -> None:
@@ -2370,19 +2498,22 @@ def test_runtime_persists_and_restores_customer_service_state(monkeypatch) -> No
         "contextualized_request": {
             "raw_query": "第二个呢",
             "rewritten_query": "查询 G502 的特点",
+            "domain": "product",
             "intent": "product_realtime_fact",
             "source": "product_catalog",
             "target_references": ["second"],
-            "target_product_codes": ["G502"],
-            "attributes": ["features"],
-            "recommendation_count": None,
-            "constraints": {
-                "category": "鼠标",
-                "price_max": 800,
-                "required_features": [],
-                "preferred_features": [],
-                "required_use_cases": [],
-                "preferred_use_cases": [],
+            "payload": {
+                "target_product_codes": ["G502"],
+                "attributes": ["features"],
+                "recommendation_count": None,
+                "constraints": {
+                    "category": "鼠标",
+                    "price_max": 800,
+                    "required_features": [],
+                    "preferred_features": [],
+                    "required_use_cases": [],
+                    "preferred_use_cases": [],
+                },
             },
             "confidence": 0.98,
             "clarification_required": False,
@@ -2407,7 +2538,9 @@ def test_runtime_persists_and_restores_customer_service_state(monkeypatch) -> No
     assert restored_customer_service["active_product_code"] == "G502"
     assert restored_customer_service["product_filters"]["price_max"] == 800
     assert (
-        restored_customer_service["contextualized_request"]["target_product_codes"]
+        restored_customer_service["contextualized_request"]["payload"][
+            "target_product_codes"
+        ]
         == ["G502"]
     )
 
