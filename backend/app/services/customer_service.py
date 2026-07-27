@@ -157,9 +157,48 @@ class CustomerServiceMockService:
         logger.info("Customer mock order query succeeded | order_no=%s", query.order_no)
         return result
 
+    def list_demo_orders(self) -> dict:
+        items = [
+            {
+                "order_no": _mask_order_no(order.order_no),
+                "status": order.status,
+                "placed_at": order.placed_at.isoformat(),
+                "items": [
+                    {
+                        "product_code": item.product_code,
+                        "product_name": item.product_name,
+                        "quantity": item.quantity,
+                    }
+                    for item in order.items
+                ],
+                "amount": f"{order.amount:.2f}",
+                "currency": "CNY",
+            }
+            for order in sorted(
+                self.store.orders.values(),
+                key=lambda item: item.placed_at,
+                reverse=True,
+            )
+        ]
+        return {
+            "mode": "list",
+            "items": items,
+            "total": len(items),
+            "mock": True,
+        }
+
+    def query_demo_order(self, order_ref: str) -> CustomerOrderResult:
+        return self._order_result(self._get_demo_order(order_ref))
+
+    def query_demo_logistics(self, order_ref: str) -> CustomerLogisticsResult:
+        return self._logistics_result(self._get_demo_order(order_ref))
+
     def query_logistics(self, query: CustomerOrderQuery) -> CustomerLogisticsResult:
         logger.info("Customer mock logistics query started | order_no=%s", query.order_no)
         order = self._get_authorized_order(query)
+        return self._logistics_result(order)
+
+    def _logistics_result(self, order: MockOrder) -> CustomerLogisticsResult:
         if order.tracking_no is None:
             raise BusinessException(CUSTOMER_SERVICE_ERROR_NOT_FOUND, "该订单暂无物流信息")
         logistics = self.store.logistics.get(order.tracking_no)
@@ -181,8 +220,15 @@ class CustomerServiceMockService:
             ],
             mock=True,
         )
-        logger.info("Customer mock logistics query succeeded | order_no=%s", query.order_no)
+        logger.info("Customer mock logistics query succeeded | order_no=%s", order.order_no)
         return result
+
+    def _get_demo_order(self, order_ref: str) -> MockOrder:
+        normalized = order_ref.strip()
+        for order in self.store.orders.values():
+            if normalized in {order.order_no, _mask_order_no(order.order_no)}:
+                return order
+        raise BusinessException(CUSTOMER_SERVICE_ERROR_NOT_FOUND, "订单不存在")
 
     def create_after_sales_draft(
         self,

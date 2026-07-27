@@ -12,7 +12,6 @@ from backend.app.schemas.customer_service import (
     AfterSalesConfirmRequest,
     AfterSalesDraftRequest,
     AfterSalesIssueType,
-    CustomerOrderQuery,
     HandoffReason,
     HumanHandoffRequest,
 )
@@ -232,6 +231,18 @@ class HumanHandoffToolArgs(BaseModel):
     message: str = Field(min_length=2, max_length=1000)
 
 
+class DemoOrderToolArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    order_ref: str | None = Field(default=None, min_length=4, max_length=64)
+
+
+class DemoLogisticsToolArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    order_ref: str = Field(min_length=4, max_length=64)
+
+
 @dataclass(slots=True)
 class ProductServiceResource:
     service: Any
@@ -407,17 +418,23 @@ class _CustomerServiceTool(BaseTool):
 
 class QueryOrderTool(_CustomerServiceTool):
     name = "query_order"
-    description = "查询 Mock 订单状态；必须提供订单号和手机号后四位，返回内容已由 Service 脱敏。"
-    args_schema = CustomerOrderQuery
+    description = "查询当前模拟登录用户的 Mock 订单列表或指定订单详情，返回内容已脱敏。"
+    args_schema = DemoOrderToolArgs
 
     def run(self, arguments: dict) -> ToolResult:
-        args = CustomerOrderQuery.model_validate(arguments)
+        args = DemoOrderToolArgs.model_validate(arguments)
         return _safe_tool_call(
             self.name,
             lambda: ToolResult(
                 name=self.name,
                 success=True,
-                result=self.customer_service.query_order(args).model_dump(mode="json"),
+                result=(
+                    self.customer_service.query_demo_order(args.order_ref).model_dump(
+                        mode="json"
+                    )
+                    if args.order_ref is not None
+                    else self.customer_service.list_demo_orders()
+                ),
                 metadata={"mock": True, "failed": False},
             ),
         )
@@ -425,17 +442,19 @@ class QueryOrderTool(_CustomerServiceTool):
 
 class QueryLogisticsTool(_CustomerServiceTool):
     name = "query_logistics"
-    description = "查询 Mock 物流状态；必须先通过订单归属校验，不提供实时物流承诺。"
-    args_schema = CustomerOrderQuery
+    description = "查询当前模拟登录用户指定订单的 Mock 物流，不提供实时物流承诺。"
+    args_schema = DemoLogisticsToolArgs
 
     def run(self, arguments: dict) -> ToolResult:
-        args = CustomerOrderQuery.model_validate(arguments)
+        args = DemoLogisticsToolArgs.model_validate(arguments)
         return _safe_tool_call(
             self.name,
             lambda: ToolResult(
                 name=self.name,
                 success=True,
-                result=self.customer_service.query_logistics(args).model_dump(mode="json"),
+                result=self.customer_service.query_demo_logistics(
+                    args.order_ref
+                ).model_dump(mode="json"),
                 metadata={"mock": True, "failed": False},
             ),
         )

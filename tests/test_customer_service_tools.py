@@ -10,8 +10,6 @@ import pytest
 from backend.app.exceptions import BusinessException
 from backend.app.schemas.product import ProductQuery
 from backend.app.services.customer_service import (
-    CUSTOMER_SERVICE_ERROR_FORBIDDEN,
-    CUSTOMER_SERVICE_ORDER_AUTH_FAILED_MESSAGE,
     CustomerServiceMockService,
     default_customer_service_mock_store,
 )
@@ -362,23 +360,22 @@ def test_order_and_logistics_tools_use_customer_service_and_keep_safe_error() ->
     order_tool = QueryOrderTool(lambda: service)
     logistics_tool = QueryLogisticsTool(lambda: service)
 
-    order_result = order_tool.run(
-        {"order_no": "202607240001", "customer_phone_last4": "5678"}
-    )
-    wrong_order = order_tool.run(
-        {"order_no": "202607240001", "customer_phone_last4": "0000"}
-    )
-    missing_order = logistics_tool.run(
-        {"order_no": "202607249999", "customer_phone_last4": "0000"}
-    )
+    order_list = order_tool.run({})
+    order_result = order_tool.run({"order_ref": "2026****0001"})
+    logistics_result = logistics_tool.run({"order_ref": "2026****0001"})
+    missing_order = logistics_tool.run({"order_ref": "2026****9999"})
+    order_list_data = _result_dict(order_list)
     order_data = _result_dict(order_result)
 
+    assert order_list.success is True
+    assert order_list_data["mode"] == "list"
+    assert order_list_data["total"] == 2
+    assert order_list_data["items"][0]["order_no"] == "2026****0002"
     assert order_result.success is True
     assert order_data["phone"] == "138****5678"
-    assert wrong_order.success is False
+    assert logistics_result.success is True
     assert missing_order.success is False
-    assert wrong_order.error == missing_order.error == CUSTOMER_SERVICE_ORDER_AUTH_FAILED_MESSAGE
-    assert wrong_order.metadata["error_code"] == CUSTOMER_SERVICE_ERROR_FORBIDDEN
+    assert missing_order.error == "订单不存在"
 
 
 def test_after_sales_tool_draft_confirm_replay_and_store_sharing() -> None:

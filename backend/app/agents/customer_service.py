@@ -63,6 +63,10 @@ class CustomerServiceSource(StrEnum):
     PLANNER = "planner"
 
 
+_ORDER_CANDIDATES_KEY = "order_candidates"
+_ACTIVE_ORDER_REF_KEY = "active_order_ref"
+
+
 class ProductRequestConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -206,11 +210,11 @@ _LAST_PRODUCT_FACT_INTENT_KEY = "last_product_fact_intent"
 _CONTEXTUALIZED_REQUEST_KEY = "contextualized_request"
 _PRODUCT_CONTEXT_MAX_CANDIDATES = 5
 _ORDINAL_PRODUCT_PATTERNS = (
-    (re.compile(r"(?:第\s*)?一(?:个|款|件|只)"), 0),
-    (re.compile(r"(?:第\s*)?二(?:个|款|件|只)"), 1),
-    (re.compile(r"(?:第\s*)?三(?:个|款|件|只)"), 2),
-    (re.compile(r"(?:第\s*)?四(?:个|款|件|只)"), 3),
-    (re.compile(r"(?:第\s*)?五(?:个|款|件|只)"), 4),
+    (re.compile(r"(?:第\s*)?一(?:个|款|件|只|笔)"), 0),
+    (re.compile(r"(?:第\s*)?二(?:个|款|件|只|笔)"), 1),
+    (re.compile(r"(?:第\s*)?三(?:个|款|件|只|笔)"), 2),
+    (re.compile(r"(?:第\s*)?四(?:个|款|件|只|笔)"), 3),
+    (re.compile(r"(?:第\s*)?五(?:个|款|件|只|笔)"), 4),
 )
 
 
@@ -299,11 +303,10 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             return _knowledge_final(state, observations[-1])
         if _last_tool_name(observations) == "create_after_sales_ticket":
             return _after_sales_final(metadata, observations[-1])
-        if _last_tool_name(observations) == "query_order" and _is_logistics(query):
-            order = _extract_order_fields(query)
-            if order is None:
-                return _final("请提供订单号和手机号后四位后再查询物流。")
-            return _tool_decision("query_logistics", order)
+        if _last_tool_name(observations) == "query_order":
+            raw_result = observations[-1].get("raw_result")
+            if isinstance(raw_result, dict) and raw_result.get("mode") == "list":
+                return _order_list_final(raw_result)
         if _last_tool_name(observations) in {
             "search_products",
             "recommend_products",
@@ -341,15 +344,19 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                 },
             )
         if _is_logistics(query) or intent == CustomerServiceIntent.LOGISTICS_QUERY:
-            order = _extract_order_fields(query)
-            if order is None:
-                return _final("请提供订单号和手机号后四位后再查询物流。")
-            return _tool_decision("query_order", order)
+            order_ref = _resolve_demo_order_ref(metadata, query)
+            if order_ref is None:
+                return _tool_decision("query_order", {})
+            return _tool_decision("query_logistics", {"order_ref": order_ref})
         if _is_order(query) or intent == CustomerServiceIntent.ORDER_QUERY:
-            order = _extract_order_fields(query)
-            if order is None:
-                return _final("请提供订单号和手机号后四位后再查询订单。")
-            return _tool_decision("query_order", order)
+            order_ref = _resolve_demo_order_ref(metadata, query)
+            return _tool_decision(
+                "query_order",
+                {"order_ref": order_ref} if order_ref is not None else {},
+            )
+        order_ref = _resolve_demo_order_ref(metadata, query)
+        if order_ref is not None and _order_candidates(metadata):
+            return _tool_decision("query_order", {"order_ref": order_ref})
         if (
             contextualized_request is not None
             and contextualized_request.clarification_required
@@ -679,6 +686,22 @@ def update_customer_service_state_after_tool(
             result=result.result,
         )
         return
+    if tool_name in {"query_order", "query_logistics"} and result.success:
+        customer_service = state.setdefault("metadata", {}).setdefault(
+            "customer_service",
+            {},
+        )
+        if isinstance(result.result, dict) and result.result.get("mode") == "list":
+            items = result.result.get("items")
+            customer_service[_ORDER_CANDIDATES_KEY] = (
+                items if isinstance(items, list) else []
+            )
+            customer_service.pop(_ACTIVE_ORDER_REF_KEY, None)
+        else:
+            order_ref = arguments.get("order_ref")
+            if isinstance(order_ref, str) and order_ref:
+                customer_service[_ACTIVE_ORDER_REF_KEY] = order_ref
+        return
     if tool_name != "create_after_sales_ticket":
         return
     metadata = state.setdefault("metadata", {})
@@ -821,6 +844,33 @@ def _observation_final(observation: dict[str, Any]) -> AgentDecision:
     return _final(
         str(observation.get("content") or observation.get("raw_result") or "已完成查询。")
     )
+
+
+def _order_list_final(raw_result: dict[str, Any]) -> AgentDecision:
+    items = raw_result.get("items")
+    if not isinstance(items, list) or not items:
+        return _final("当前模拟账号下没有订单。")
+    lines = [f"当前模拟账号下有 {len(items)} 笔订单："]
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        products = item.get("items")
+        product_names = (
+            "、".join(
+                str(product.get("product_name") or "")
+                for product in products
+                if isinstance(product, dict) and product.get("product_name")
+            )
+            if isinstance(products, list)
+            else ""
+        )
+        lines.append(
+            f"{index}. {product_names or '模拟商品'}，"
+            f"订单 {item.get('order_no')}，状态 {item.get('status')}，"
+            f"金额 {item.get('amount')} {item.get('currency') or 'CNY'}"
+        )
+    lines.append("请告诉我第几笔订单，我可以继续查询订单详情或物流。")
+    return _final("\n".join(lines))
 
 
 def _after_sales_draft_or_clarify(query: str) -> AgentDecision:
@@ -1407,7 +1457,10 @@ def _ordinal_product_index(query: str, candidate_count: int) -> int | None:
             return index if index < candidate_count else -1
     if "最后" in query and candidate_count:
         return candidate_count - 1
-    generic = re.search(r"第?\s*(\d+|[一二三四五六七八九十])\s*(?:个|款|件|只)", query)
+    generic = re.search(
+        r"第?\s*(\d+|[一二三四五六七八九十])\s*(?:个|款|件|只|笔)",
+        query,
+    )
     if generic is not None:
         raw_index = generic.group(1)
         chinese_numbers = {
@@ -1775,6 +1828,40 @@ def _extract_order_fields(query: str) -> dict[str, Any] | None:
         "order_no": order_match.group(1),
         "customer_phone_last4": last4_match.group(1),
     }
+
+
+def _order_candidates(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    customer_service = metadata.get("customer_service")
+    if not isinstance(customer_service, dict):
+        return []
+    candidates = customer_service.get(_ORDER_CANDIDATES_KEY)
+    if not isinstance(candidates, list):
+        return []
+    return [item for item in candidates if isinstance(item, dict)]
+
+
+def _resolve_demo_order_ref(metadata: dict[str, Any], query: str) -> str | None:
+    explicit = re.search(r"\b(\d{10,20})\b", query)
+    if explicit is not None:
+        return explicit.group(1)
+    masked = re.search(r"\b(\d{4}\*{4}\d{4})\b", query)
+    if masked is not None:
+        return masked.group(1)
+    candidates = _order_candidates(metadata)
+    if candidates:
+        index = _ordinal_product_index(query, len(candidates))
+        if index is not None and index >= 0:
+            order_ref = candidates[index].get("order_no")
+            return order_ref if isinstance(order_ref, str) else None
+    customer_service = metadata.get("customer_service")
+    if isinstance(customer_service, dict):
+        active_order_ref = customer_service.get(_ACTIVE_ORDER_REF_KEY)
+        if isinstance(active_order_ref, str) and active_order_ref:
+            return active_order_ref
+    if len(candidates) == 1:
+        order_ref = candidates[0].get("order_no")
+        return order_ref if isinstance(order_ref, str) else None
+    return None
 
 
 def _extract_product_codes(query: str) -> list[str]:
@@ -2539,7 +2626,10 @@ def _is_order(query: str) -> bool:
 
 
 def _is_logistics(query: str) -> bool:
-    return "物流" in query or "快递" in query
+    return any(
+        phrase in query
+        for phrase in ["物流", "快递", "到哪里", "到哪了", "到哪儿了", "送到哪"]
+    )
 
 
 def _is_after_sales(query: str) -> bool:

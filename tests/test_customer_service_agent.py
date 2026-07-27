@@ -1524,7 +1524,7 @@ def test_customer_high_risk_rules_do_not_call_llm_classifier(monkeypatch) -> Non
     assert "订单号" in str(decision.content)
 
 
-def test_customer_llm_logistics_intent_still_requires_business_fields(
+def test_customer_llm_logistics_intent_lists_demo_user_orders(
     monkeypatch,
 ) -> None:
     class IntentLLM:
@@ -1547,12 +1547,12 @@ def test_customer_llm_logistics_intent_still_requires_business_fields(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
         lambda: IntentLLM(),
     )
-    state = _state(query="我的包裹到哪了")
+    state = _state(query="我的包裹进度怎么样")
 
     decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
 
-    assert decision.tool_calls == []
-    assert "订单号和手机号后四位" in str(decision.content)
+    assert decision.tool_calls[0].tool_name == "query_order"
+    assert decision.tool_calls[0].arguments == {}
     route = state["metadata"]["customer_service"]["route"]
     assert route["intent"] == "logistics_query"
     assert route["source"] == "order_service"
@@ -1741,14 +1741,67 @@ def test_product_search_observation_finishes_without_repeating_same_tool() -> No
     assert decision.tool_calls == []
 
 
-def test_order_and_logistics_missing_fields_do_not_call_tool() -> None:
-    order_missing_last4 = asyncio.run(_decide(_state(query="查询订单 202607240001")))
-    logistics_missing_order = asyncio.run(_decide(_state(query="查物流，手机号后四位 5678")))
+def test_order_and_logistics_use_demo_login_context_without_phone_verification() -> None:
+    order = asyncio.run(_decide(_state(query="查询订单 202607240001")))
+    logistics = asyncio.run(_decide(_state(query="我的订单到哪里")))
 
-    assert order_missing_last4.tool_calls == []
-    assert "手机号后四位" in str(order_missing_last4.content)
-    assert logistics_missing_order.tool_calls == []
-    assert "订单号" in str(logistics_missing_order.content)
+    assert order.tool_calls[0].tool_name == "query_order"
+    assert order.tool_calls[0].arguments == {"order_ref": "202607240001"}
+    assert logistics.tool_calls[0].tool_name == "query_order"
+    assert logistics.tool_calls[0].arguments == {}
+
+
+def test_demo_order_list_and_multi_turn_logistics_selection() -> None:
+    order_items = [
+        {
+            "order_no": "2026****0002",
+            "status": "cancelled",
+            "items": [{"product_name": "模拟豆浆机 M2", "quantity": 1}],
+            "amount": "199.00",
+            "currency": "CNY",
+        },
+        {
+            "order_no": "2026****0001",
+            "status": "delivered",
+            "items": [{"product_name": "模拟豆浆机 M1", "quantity": 1}],
+            "amount": "299.00",
+            "currency": "CNY",
+        },
+    ]
+    list_decision = asyncio.run(
+        _decide(
+            _state(
+                query="我的订单到哪里",
+                observations=[
+                    {
+                        "tool_name": "query_order",
+                        "success": True,
+                        "raw_result": {
+                            "mode": "list",
+                            "items": order_items,
+                            "total": 2,
+                        },
+                    }
+                ],
+            )
+        )
+    )
+    logistics_decision = asyncio.run(
+        _decide(
+            _state(
+                query="第二笔到哪里了",
+                customer_service={"order_candidates": order_items},
+            )
+        )
+    )
+
+    assert list_decision.action == "final"
+    assert "当前模拟账号下有 2 笔订单" in str(list_decision.content)
+    assert "请告诉我第几笔订单" in str(list_decision.content)
+    assert logistics_decision.tool_calls[0].tool_name == "query_logistics"
+    assert logistics_decision.tool_calls[0].arguments == {
+        "order_ref": "2026****0001"
+    }
 
 
 def test_tool_failures_do_not_claim_business_success() -> None:
