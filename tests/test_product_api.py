@@ -140,10 +140,10 @@ def test_product_create_update_delete_and_document_routes(monkeypatch) -> None:
         "/products",
         json={
             "product_code": "P002",
-            "brand": "九阳",
-            "name": "模拟商品",
-            "model": "M2",
-            "category": "豆浆机",
+            "brand": "罗技",
+            "name": "模拟鼠标",
+            "model": "MOUSE-2",
+            "category": "鼠标和指针设备",
             "price": "299.00",
         },
     )
@@ -172,6 +172,24 @@ def test_product_create_update_delete_and_document_routes(monkeypatch) -> None:
     assert service.linked_document is not None
     assert service.linked_document.product_code == "P001"
     assert service.allowed_knowledge_base_ids == {8}
+
+
+def test_product_api_rejects_nonstandard_category_before_service_call() -> None:
+    service = FakeProductService()
+    response = _client(service).post(
+        "/products",
+        json={
+            "product_code": "P002",
+            "brand": "罗技",
+            "name": "模拟鼠标",
+            "model": "MOUSE-2",
+            "category": "办公用品",
+            "price": "299.00",
+        },
+    )
+
+    assert response.status_code == 422
+    assert service.created is None
 
 
 def test_product_api_rejects_invalid_sort_before_service_call() -> None:

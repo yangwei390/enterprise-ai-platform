@@ -10,6 +10,17 @@ import PageHeader from "../components/PageHeader";
 import type { KnowledgeBase, KnowledgeDocument } from "../types/knowledge";
 import type { ProductCreateRequest, ProductResponse } from "../types/product";
 
+const PRODUCT_CATEGORIES = [
+  "耳机、麦克风和耳麦",
+  "键盘",
+  "鼠标和指针设备",
+  "手机和平板电脑配件",
+  "遥控器和智能家居",
+  "音箱和音响系统",
+  "网络摄像头、灯光和摄像系统",
+  "游戏控制器"
+] as const;
+
 const initialForm: ProductCreateRequest = {
   product_code: "",
   brand: "",
@@ -180,14 +191,26 @@ export default function ProductsPage() {
           <label>商品名称<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
           <div className="product-form-row">
             <label>型号<input required value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} /></label>
-            <label>分类<input required value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} /></label>
+            <label>
+              标准大类
+              <select
+                required
+                value={form.category}
+                onChange={(event) => setForm({ ...form, category: event.target.value })}
+              >
+                <option value="">请选择标准大类</option>
+                {PRODUCT_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="product-form-row">
             <label>价格<input required min="0" step="0.01" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: Number(event.target.value) })} /></label>
             <label>库存<input required min="0" type="number" value={form.stock_quantity} onChange={(event) => setForm({ ...form, stock_quantity: Number(event.target.value) })} /></label>
           </div>
-          <label>商品特征（逗号分隔）<input value={features} onChange={(event) => setFeatures(event.target.value)} placeholder="容易清洗，低噪音" /></label>
-          <label>使用场景（逗号分隔）<input value={useCases} onChange={(event) => setUseCases(event.target.value)} placeholder="两人家庭，宿舍" /></label>
+          <label>商品特征（逗号分隔）<input value={features} onChange={(event) => setFeatures(event.target.value)} placeholder="无线，蓝牙，静音" /></label>
+          <label>使用场景（逗号分隔）<input value={useCases} onChange={(event) => setUseCases(event.target.value)} placeholder="游戏，办公" /></label>
           <label>商品描述<textarea value={form.description ?? ""} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
           {error && <p className="form-error">{error}</p>}
           {message && <p className="form-success">{message}</p>}

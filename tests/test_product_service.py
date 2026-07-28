@@ -8,7 +8,11 @@ from typing import Any, cast
 import pytest
 from backend.app.exceptions import BusinessException
 from backend.app.repositories.product import ProductListFilters, ProductRepository
-from backend.app.schemas.product import ProductDocumentLinkCreate, ProductQuery
+from backend.app.schemas.product import (
+    ProductDocumentLinkCreate,
+    ProductQuery,
+    product_category_storage_values,
+)
 from backend.app.services.product import (
     PRODUCT_ERROR_DOCUMENT_LINK,
     ProductService,
@@ -226,6 +230,20 @@ def test_product_service_converts_legacy_features_and_use_cases() -> None:
 def test_product_service_rejects_non_allowlisted_sort_field() -> None:
     with pytest.raises(ValueError, match="sort_by 不在白名单中"):
         ProductQuery(sort_by="deleted_at")
+
+
+def test_product_category_query_normalizes_and_includes_legacy_storage_values() -> None:
+    service = _product_service(FakeProductRepository())
+
+    normalized = service.normalize_query(ProductQuery(category="鼠标"))
+
+    assert normalized.category == "鼠标和指针设备"
+    assert product_category_storage_values(normalized.category) == (
+        "鼠标和指针设备",
+        "鼠标",
+        "办公鼠标",
+        "游戏鼠标",
+    )
 
 
 def test_product_service_recommendation_normalizes_score_and_uses_stable_order() -> None:

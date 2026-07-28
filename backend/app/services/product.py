@@ -15,6 +15,7 @@ from backend.app.schemas.product import (
     ProductDocumentLinkCreate,
     ProductQuery,
     ProductUpdate,
+    normalize_product_category,
 )
 from backend.app.services.base import BaseService
 from sqlalchemy.exc import IntegrityError
@@ -231,6 +232,8 @@ class ProductService(BaseService[ProductRepository]):
 
     def normalize_query(self, query: ProductQuery) -> ProductQuery:
         data = query.model_dump()
+        if normalized_category := normalize_product_category(data.get("category") or ""):
+            data["category"] = normalized_category
         data["required_features"] = self._unique_texts(
             [
                 *data.get("required_features", []),

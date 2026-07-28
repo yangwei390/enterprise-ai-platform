@@ -5,6 +5,7 @@ from typing import Any
 
 from backend.app.models import Document, Product, ProductDocumentLink
 from backend.app.repositories.base import BaseRepository
+from backend.app.schemas.product import product_category_storage_values
 from sqlalchemy import Select, exists, func, not_, or_, select
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import InstrumentedAttribute, selectinload
@@ -291,7 +292,9 @@ class ProductRepository(BaseRepository):
         if filters.brand:
             statement = statement.where(Product.brand == filters.brand)
         if filters.category:
-            statement = statement.where(Product.category == filters.category)
+            statement = statement.where(
+                Product.category.in_(product_category_storage_values(filters.category))
+            )
         if filters.model:
             statement = statement.where(Product.model == filters.model)
         if filters.excluded_product_codes:

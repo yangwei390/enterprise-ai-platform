@@ -9,6 +9,42 @@ SALE_STATUS_VALUES = {"on_sale", "off_sale", "pre_sale", "discontinued"}
 DOCUMENT_TYPE_VALUES = {"manual", "warranty", "policy", "other"}
 SORT_BY_VALUES = {"popularity", "price", "stock_quantity", "created_at", "updated_at"}
 SORT_ORDER_VALUES = {"asc", "desc"}
+PRODUCT_CATEGORY_VALUES = (
+    "耳机、麦克风和耳麦",
+    "键盘",
+    "鼠标和指针设备",
+    "手机和平板电脑配件",
+    "遥控器和智能家居",
+    "音箱和音响系统",
+    "网络摄像头、灯光和摄像系统",
+    "游戏控制器",
+)
+PRODUCT_CATEGORY_ALIASES = {
+    "耳机": "耳机、麦克风和耳麦",
+    "耳机麦克风和耳机": "耳机、麦克风和耳麦",
+    "麦克风": "耳机、麦克风和耳麦",
+    "鼠标": "鼠标和指针设备",
+    "办公鼠标": "鼠标和指针设备",
+    "游戏鼠标": "鼠标和指针设备",
+    "网络摄像头、灯光和摄像头系统": "网络摄像头、灯光和摄像系统",
+}
+
+
+def normalize_product_category(value: str) -> str | None:
+    cleaned = value.strip()
+    if cleaned in PRODUCT_CATEGORY_VALUES:
+        return cleaned
+    return PRODUCT_CATEGORY_ALIASES.get(cleaned)
+
+
+def product_category_storage_values(value: str) -> tuple[str, ...]:
+    canonical = normalize_product_category(value)
+    if canonical is None:
+        return (value.strip(),)
+    aliases = [
+        alias for alias, target in PRODUCT_CATEGORY_ALIASES.items() if target == canonical
+    ]
+    return canonical, *aliases
 
 
 class ProductBase(BaseModel):
@@ -30,12 +66,21 @@ class ProductBase(BaseModel):
     source_checked_at: datetime | None = None
     is_active: bool = True
 
-    @field_validator("brand", "name", "model", "category")
+    @field_validator("brand", "name", "model")
     @classmethod
     def validate_required_text(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("字段不能为空")
         return value.strip()
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, value: str) -> str:
+        normalized = normalize_product_category(value)
+        if normalized is None:
+            allowed = "、".join(PRODUCT_CATEGORY_VALUES)
+            raise ValueError(f"category 必须是标准商品大类：{allowed}")
+        return normalized
 
     @field_validator("currency")
     @classmethod
@@ -104,7 +149,7 @@ class ProductUpdate(BaseModel):
     source_checked_at: datetime | None = None
     is_active: bool | None = None
 
-    @field_validator("brand", "name", "model", "category")
+    @field_validator("brand", "name", "model")
     @classmethod
     def validate_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -112,6 +157,17 @@ class ProductUpdate(BaseModel):
         if not value.strip():
             raise ValueError("字段不能为空")
         return value.strip()
+
+    @field_validator("category")
+    @classmethod
+    def validate_optional_category(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = normalize_product_category(value)
+        if normalized is None:
+            allowed = "、".join(PRODUCT_CATEGORY_VALUES)
+            raise ValueError(f"category 必须是标准商品大类：{allowed}")
+        return normalized
 
     @field_validator("currency")
     @classmethod

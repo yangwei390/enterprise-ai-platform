@@ -72,7 +72,7 @@ def test_seed_creates_product_then_skips_second_run(tmp_path) -> None:
                 "brand": "九阳",
                 "name": "模拟豆浆机",
                 "model": "M1",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "199.00",
                 "features": ["易清洗"],
                 "use_cases": ["宿舍"],
@@ -121,7 +121,7 @@ def test_seed_updates_stable_fields_without_deleting_manual_data(tmp_path) -> No
                 "brand": "九阳",
                 "name": "新名称",
                 "model": "M1",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "199.00",
             }
         ],
@@ -143,7 +143,7 @@ def test_seed_dry_run_does_not_write(tmp_path) -> None:
                 "brand": "九阳",
                 "name": "模拟豆浆机",
                 "model": "M1",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "199.00",
             }
         ],
@@ -166,7 +166,7 @@ def test_seed_apply_counts_item_failures_and_continues(tmp_path) -> None:
                 "brand": "九阳",
                 "name": "模拟豆浆机 1",
                 "model": "M1",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "199.00",
             },
             {
@@ -174,7 +174,7 @@ def test_seed_apply_counts_item_failures_and_continues(tmp_path) -> None:
                 "brand": "九阳",
                 "name": "模拟豆浆机 2",
                 "model": "M2",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "299.00",
             },
             {
@@ -182,7 +182,7 @@ def test_seed_apply_counts_item_failures_and_continues(tmp_path) -> None:
                 "brand": "九阳",
                 "name": "模拟豆浆机 3",
                 "model": "M3",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "399.00",
             },
         ],
@@ -209,7 +209,7 @@ def test_seed_dry_run_does_not_call_write_methods_for_items_that_would_fail(tmp_
                 "brand": "九阳",
                 "name": "模拟豆浆机",
                 "model": "M1",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "199.00",
             }
         ],
@@ -234,7 +234,7 @@ def test_seed_cli_returns_non_zero_when_any_item_failed(monkeypatch, tmp_path) -
                 "brand": "九阳",
                 "name": "模拟豆浆机",
                 "model": "M1",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "199.00",
             }
         ],
@@ -263,7 +263,7 @@ def test_seed_fixture_rejects_document_id(tmp_path) -> None:
                 "brand": "九阳",
                 "name": "模拟豆浆机",
                 "model": "M1",
-                "category": "豆浆机",
+                "category": "鼠标和指针设备",
                 "price": "199.00",
                 "document_id": 99,
             }
