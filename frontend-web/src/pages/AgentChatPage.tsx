@@ -30,6 +30,7 @@ export default function AgentChatPage() {
   const [streaming, setStreaming] = useState(false);
   const [agentStatus, setAgentStatus] = useState("");
   const [selectedCitation, setSelectedCitation] = useState<CitationView | null>(null);
+  const [selectedDebugTrace, setSelectedDebugTrace] = useState<Record<string, unknown> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const { enableFollow, handleScroll, scrollToBottom } = useAutoScroll(messageListRef);
@@ -60,17 +61,18 @@ export default function AgentChatPage() {
   }, [messages, agentStatus, scrollToBottom]);
 
   useEffect(() => {
-    if (!selectedCitation) {
+    if (!selectedCitation && !selectedDebugTrace) {
       return undefined;
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setSelectedCitation(null);
+        setSelectedDebugTrace(null);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedCitation]);
+  }, [selectedCitation, selectedDebugTrace]);
 
   async function handleSubmit(submittedQuery = query) {
     const trimmedQuery = submittedQuery.trim();
@@ -156,6 +158,7 @@ export default function AgentChatPage() {
                         content: event.data.answer || message.content,
                         citations: event.data.citations,
                         sources: event.data.sources,
+                        debug_trace: event.data.debug_trace,
                         status: "complete"
                       }
                     : message
@@ -351,6 +354,15 @@ export default function AgentChatPage() {
                         >
                           Copy Answer
                         </button>
+                        {message.debug_trace && (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => setSelectedDebugTrace(message.debug_trace ?? null)}
+                          >
+                            执行详情
+                          </button>
+                        )}
                         {agentId === "customer_service_agent" && message.content.includes("确认提交") && (
                           <button
                             type="button"
@@ -413,6 +425,31 @@ export default function AgentChatPage() {
                     <p>{selectedCitation.text}</p>
                   </div>
                 </div>
+              </aside>
+            </>
+          )}
+          {selectedDebugTrace && (
+            <>
+              <button
+                type="button"
+                aria-label="Close execution details drawer"
+                className="drawer-overlay"
+                onClick={() => setSelectedDebugTrace(null)}
+              />
+              <aside className="citation-drawer">
+                <div className="panel-header">
+                  <h2>单轮执行详情</h2>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setSelectedDebugTrace(null)}
+                  >
+                    Close
+                  </button>
+                </div>
+                <pre className="debug-trace">
+                  {JSON.stringify(selectedDebugTrace, null, 2)}
+                </pre>
               </aside>
             </>
           )}

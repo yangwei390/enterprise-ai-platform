@@ -2220,6 +2220,15 @@ async def _ensure_customer_service_route(state: Any, query: str) -> None:
 
     intent_mode = CustomerServiceIntentMode(settings.CUSTOMER_SERVICE_INTENT_MODE)
     rule_intent, rule_source = _customer_service_route(query)
+    if settings.CUSTOMER_SERVICE_TURN_DEBUG_ENABLED:
+        metadata.setdefault("customer_service", {})["turn_debug"] = {
+            "input": {"query": query, "runtime_turn_id": runtime_turn_id},
+            "pre_route": {
+                "intent_mode": intent_mode,
+                "rule_intent": rule_intent,
+                "rule_source": rule_source,
+            },
+        }
     if _pending_after_sales(metadata) is not None:
         rule_intent = CustomerServiceIntent.AFTER_SALES
         rule_source = CustomerServiceSource.AFTER_SALES_WORKFLOW
@@ -2269,6 +2278,15 @@ async def _ensure_customer_service_route(state: Any, query: str) -> None:
         state,
         query,
     )
+    if settings.CUSTOMER_SERVICE_TURN_DEBUG_ENABLED:
+        turn_debug = metadata.setdefault("customer_service", {}).setdefault(
+            "turn_debug",
+            {},
+        )
+        turn_debug["llm_classification"] = (
+            classification.model_dump(mode="json") if classification is not None else None
+        )
+        turn_debug["classification_failure_reason"] = failure_reason
     if classification is None or classification.confidence < 0.6:
         if intent_mode == CustomerServiceIntentMode.LLM_ONLY:
             _store_customer_service_route(
@@ -2833,11 +2851,19 @@ def _store_customer_service_route(
         clarification_question=effective_clarification,
     )
     customer_service[_CONTEXTUALIZED_REQUEST_KEY] = request.model_dump(mode="json")
+    if settings.CUSTOMER_SERVICE_TURN_DEBUG_ENABLED:
+        turn_debug = customer_service.setdefault("turn_debug", {})
+        turn_debug["contextualized_request"] = request.model_dump(mode="json")
+        turn_debug["dst_before"] = load_dst(metadata).model_dump(mode="json")
     dst = mutate_dst(metadata, lambda value: apply_request(value, request))
-    customer_service["fsm_directive"] = next_directive(
+    directive = next_directive(
         dst,
         request,
-    ).model_dump(mode="json")
+    )
+    customer_service["fsm_directive"] = directive.model_dump(mode="json")
+    if settings.CUSTOMER_SERVICE_TURN_DEBUG_ENABLED:
+        turn_debug["dst_after"] = dst.model_dump(mode="json")
+        turn_debug["fsm_directive"] = directive.model_dump(mode="json")
     if intent in {
         CustomerServiceIntent.PRODUCT_REALTIME_FACT,
         CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,

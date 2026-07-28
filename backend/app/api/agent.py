@@ -19,6 +19,7 @@ from backend.app.agents.schemas import (
     AgentStreamRequest,
 )
 from backend.app.agents.service import AgentService
+from backend.app.agents.trace_builder import sanitize
 from backend.app.config.settings import settings
 from backend.app.conversations import ConversationRepository, ConversationService
 from backend.app.db.session import get_db
@@ -212,6 +213,11 @@ async def _stream_agent_events(
                 )
                 if isinstance(final_result.metadata.get("agent_trace"), dict)
                 else None,
+                "debug_trace": _customer_service_turn_debug(
+                    request=request,
+                    result=final_result,
+                    answer=answer,
+                ),
             },
         )
     except asyncio.CancelledError:
@@ -239,6 +245,38 @@ def _prepare_agent_conversation(
         )
     )
     return conversation.id
+
+
+def _customer_service_turn_debug(
+    *,
+    request: AgentStreamRequest,
+    result: AgentChatResponseData,
+    answer: str,
+) -> dict | None:
+    if (
+        not settings.CUSTOMER_SERVICE_TURN_DEBUG_ENABLED
+        or request.agent_id != "customer_service_agent"
+    ):
+        return None
+    customer_service = result.metadata.get("customer_service")
+    trace = result.metadata.get("agent_trace")
+    payload = {
+        "input": {
+            "query": request.query,
+            "conversation_id": request.conversation_id,
+            "knowledge_base_id": request.knowledge_base_id,
+        },
+        "customer_service": (customer_service if isinstance(customer_service, dict) else {}),
+        "runtime_trace": trace if isinstance(trace, dict) else {},
+        "tool_calls": result.tool_calls,
+        "observations": result.observations,
+        "output": {
+            "action": result.action,
+            "answer": answer,
+        },
+    }
+    sanitized = sanitize(payload)
+    return sanitized if isinstance(sanitized, dict) else {}
 
 
 def _sse(event: str, data: dict) -> str:

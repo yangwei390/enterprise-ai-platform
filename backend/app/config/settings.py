@@ -227,6 +227,7 @@ class Settings(BaseSettings):
         ge=0,
         le=2,
     )
+    CUSTOMER_SERVICE_TURN_DEBUG_ENABLED: bool = False
 
     DYNAMIC_TOOL_REGISTRY_ENABLED: bool = True
     TOOL_REGISTRY_AUTO_REFRESH: bool = False

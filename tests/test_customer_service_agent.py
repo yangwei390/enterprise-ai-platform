@@ -1591,6 +1591,21 @@ def test_customer_rule_only_mode_never_calls_intent_llm(monkeypatch) -> None:
     assert request["action"] == "clarify"
 
 
+def test_customer_turn_debug_records_route_request_and_dst_change(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "rule_only")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_TURN_DEBUG_ENABLED", True)
+    state = _state(query="推荐一个键盘")
+
+    asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    turn_debug = state["metadata"]["customer_service"]["turn_debug"]
+    assert turn_debug["pre_route"]["rule_intent"] == "other"
+    assert turn_debug["contextualized_request"]["intent"] == "product_recommendation"
+    assert turn_debug["dst_before"]["status"] == "idle"
+    assert turn_debug["dst_after"]["status"] == "ready_to_execute"
+    assert turn_debug["fsm_directive"]["action"] == "execute"
+
+
 def test_customer_llm_only_mode_classifies_clear_rule_intent(monkeypatch) -> None:
     calls = 0
 

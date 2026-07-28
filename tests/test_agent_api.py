@@ -1,3 +1,5 @@
+import json
+
 from backend.app.agents import AgentRuntimeResult
 from backend.app.agents.langgraph.runtime import LangGraphAgentRuntime
 from backend.app.agents.trace import AgentTraceStep
@@ -6,6 +8,7 @@ from backend.app.api.agent import router as agent_router
 from backend.app.api.chat import get_chat_service
 from backend.app.api.chat import router as chat_router
 from backend.app.chat import ChatRequest, ChatResponse
+from backend.app.config.settings import settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -392,6 +395,94 @@ def test_customer_agent_stream_creates_stable_conversation(monkeypatch):
     assert response.status_code == 200
     assert called["request"].agent_id == "customer_service_agent"
     assert called["request"].conversation_id == 901
+
+
+def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
+    monkeypatch,
+) -> None:
+    service = FakeConversationService()
+
+    async def fake_astream_events(self, request):
+        yield {
+            "event": "result",
+            "data": {
+                "result": AgentRuntimeResult(
+                    answer="订单已送达",
+                    action="tool",
+                    tool_calls=[
+                        {
+                            "tool_name": "query_order",
+                            "arguments": {"order_no": "202607240001"},
+                        }
+                    ],
+                    metadata={
+                        "customer_service": {
+                            "route": {"intent": "order_query"},
+                            "contextualized_request": {"raw_query": "查询订单 202607240001"},
+                            "dst": {"status": "completed"},
+                            "fsm_directive": {"action": "execute"},
+                        },
+                        "agent_trace": {"graph_nodes": [{"node": "planner"}]},
+                    },
+                ).model_dump()
+            },
+        }
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_TURN_DEBUG_ENABLED", True)
+    monkeypatch.setattr(LangGraphAgentRuntime, "astream_events", fake_astream_events)
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_conversation_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/agent/chat/stream",
+        json={
+            "agent_id": "customer_service_agent",
+            "query": "查询订单 202607240001",
+        },
+    )
+    events = _parse_sse_events(response.text)
+    completed = next(event for event in events if event["event"] == "completed")
+    debug_trace = completed["data"]["debug_trace"]
+
+    assert debug_trace["customer_service"]["route"]["intent"] == "order_query"
+    assert debug_trace["customer_service"]["dst"]["status"] == "completed"
+    assert debug_trace["runtime_trace"]["graph_nodes"][0]["node"] == "planner"
+    assert debug_trace["tool_calls"][0]["arguments"]["order_no"] == "[REDACTED]"
+    assert "202607240001" not in json.dumps(debug_trace, ensure_ascii=False)
+
+
+def test_customer_agent_stream_omits_debug_trace_when_disabled(monkeypatch) -> None:
+    service = FakeConversationService()
+
+    async def fake_astream_events(self, request):
+        yield {
+            "event": "result",
+            "data": {
+                "result": AgentRuntimeResult(
+                    answer="客服回答",
+                    action="direct_answer",
+                    metadata={"customer_service": {"route": {"intent": "greeting"}}},
+                ).model_dump()
+            },
+        }
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_TURN_DEBUG_ENABLED", False)
+    monkeypatch.setattr(LangGraphAgentRuntime, "astream_events", fake_astream_events)
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_conversation_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/agent/chat/stream",
+        json={"agent_id": "customer_service_agent", "query": "你好"},
+    )
+    events = _parse_sse_events(response.text)
+    completed = next(event for event in events if event["event"] == "completed")
+
+    assert completed["data"]["debug_trace"] is None
 
 
 def test_agent_stream_api_no_evidence_completes_without_error(monkeypatch):

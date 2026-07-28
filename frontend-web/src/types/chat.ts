@@ -93,6 +93,7 @@ export type UiChatMessage = {
   status: "complete" | "streaming" | "error" | "aborted";
   citations: ChatCitation[];
   sources: ChatSource[];
+  debug_trace?: Record<string, unknown> | null;
   error?: string;
   created_at?: string;
 };

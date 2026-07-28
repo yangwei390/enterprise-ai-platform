@@ -61,6 +61,7 @@ export type AgentStreamEvent =
         citations: ChatCitation[];
         sources: ChatSource[];
         status: string;
+        debug_trace?: Record<string, unknown> | null;
       };
     }
   | {
