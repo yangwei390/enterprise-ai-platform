@@ -177,6 +177,7 @@ def test_search_products_maps_args_to_product_query_without_mixing_preferences()
 
     result = tool.run(
         {
+            "product_code": "P001",
             "category": "豆浆机",
             "price_min": "200",
             "price_max": "300",
@@ -197,6 +198,7 @@ def test_search_products_maps_args_to_product_query_without_mixing_preferences()
 
     assert result.success is True
     query = service.list_queries[0]
+    assert query.product_code == "P001"
     assert query.required_features == ["必须易清洗"]
     assert query.preferred_features == ["低噪音"]
     assert query.required_use_cases == ["宿舍硬条件"]

@@ -13,6 +13,7 @@ from sqlalchemy.sql import Select as SqlSelect
 
 @dataclass(slots=True)
 class ProductListFilters:
+    product_code: str | None = None
     keyword: str | None = None
     brand: str | None = None
     category: str | None = None
@@ -273,6 +274,8 @@ class ProductRepository(BaseRepository):
             statement = statement.where(Product.deleted_at.is_(None))
         if filters.is_active is not None:
             statement = statement.where(Product.is_active.is_(filters.is_active))
+        if filters.product_code:
+            statement = statement.where(Product.product_code == filters.product_code)
         if filters.keyword:
             keyword = f"%{filters.keyword}%"
             statement = statement.where(

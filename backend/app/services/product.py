@@ -361,6 +361,7 @@ class ProductService(BaseService[ProductRepository]):
 
     def _build_filters(self, query: ProductQuery) -> ProductListFilters:
         return ProductListFilters(
+            product_code=self._clean_text(query.product_code),
             keyword=self._clean_text(query.keyword),
             brand=self._clean_text(query.brand),
             category=self._clean_text(query.category),

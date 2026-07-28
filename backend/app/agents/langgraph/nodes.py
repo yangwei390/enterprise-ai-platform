@@ -504,7 +504,7 @@ class FinalNode:
 
     async def _stream_answer(self, state: AgentState) -> str:
         queue = state.get("metadata", {}).get("_agent_stream_event_queue")
-        if _requires_evidence(state):
+        if _requires_evidence(state) or state.get("metadata", {}).get("strict_final_answer"):
             grounded_answer = str(
                 state.get("final_answer") or self._build_answer(state)
             )

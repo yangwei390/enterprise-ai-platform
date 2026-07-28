@@ -56,6 +56,7 @@ COMPARE_FIELD_DEFAULTS: list[CompareField] = [
 class ProductToolQueryArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    product_code: str | None = Field(default=None, min_length=1, max_length=64)
     keyword: str | None = Field(default=None, max_length=128)
     brand: str | None = Field(default=None, max_length=128)
     category: str | None = Field(default=None, max_length=128)

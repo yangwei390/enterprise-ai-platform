@@ -153,6 +153,7 @@ class ProductUpdate(BaseModel):
 
 
 class ProductQuery(BaseModel):
+    product_code: str | None = None
     keyword: str | None = None
     brand: str | None = None
     category: str | None = None

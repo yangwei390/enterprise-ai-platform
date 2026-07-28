@@ -406,6 +406,31 @@ def test_final_node_does_not_rewrite_evidence_grounded_answer(monkeypatch) -> No
     }
 
 
+def test_final_node_does_not_rewrite_strict_business_answer(monkeypatch) -> None:
+    async def fail_collect(*args, **kwargs):
+        raise AssertionError("strict business answer must not be rewritten by another LLM")
+
+    monkeypatch.setattr(
+        "backend.app.agents.langgraph.nodes.collect_streaming_answer",
+        fail_collect,
+    )
+    state = _state("第二个鼠标多少钱")
+    queue = asyncio.Queue()
+    state["metadata"].update(
+        {
+            "_agent_stream_answer_enabled": True,
+            "_agent_stream_event_queue": queue,
+            "strict_final_answer": True,
+        }
+    )
+    state["final_answer"] = "MX Master 4（商品编码：MX4）\n- 价格：800.00"
+    state["observations"] = [{"raw_result": {"product_code": "MX4"}}]
+
+    result = asyncio.run(FinalNode().acall(state))
+
+    assert result["final_answer"] == "MX Master 4（商品编码：MX4）\n- 价格：800.00"
+
+
 def test_final_node_preserves_evidence_rejection_over_raw_knowledge() -> None:
     state = _state("第一款有几个按键")
     state["metadata"].update(

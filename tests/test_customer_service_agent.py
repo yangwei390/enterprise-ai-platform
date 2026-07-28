@@ -1360,6 +1360,56 @@ def test_contextualized_request_migrates_legacy_product_shape() -> None:
     assert request.payload.constraints.category == "鼠标"
 
 
+def test_focused_product_lookup_rejects_mismatched_tool_product() -> None:
+    state = _state(
+        query="第二个鼠标多少钱",
+        customer_service={
+            "recommendation_list": [
+                {"product_code": "G304", "name": "罗技 G304"},
+                {"product_code": "MX4", "name": "Logitech MX Master 4"},
+            ],
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304", "name": "罗技 G304"},
+                    {"product_code": "MX4", "name": "Logitech MX Master 4"},
+                ],
+                "focused_product_code": None,
+            },
+        },
+    )
+    lookup = asyncio.run(_decide(state))
+
+    assert lookup.tool_calls[0].arguments["product_code"] == "MX4"
+    state["tool_calls"] = [
+        {
+            "tool_name": "search_products",
+            "arguments": lookup.tool_calls[0].arguments,
+        }
+    ]
+    state["observations"] = [
+        {
+            "tool_name": "search_products",
+            "success": True,
+            "raw_result": {
+                "items": [
+                    {
+                        "product_code": "G304",
+                        "name": "罗技 G304",
+                        "price": "300.00",
+                    }
+                ]
+            },
+        }
+    ]
+
+    rejected = asyncio.run(_decide(state))
+
+    assert rejected.action == "final"
+    assert "MX4" in str(rejected.content)
+    assert "拒绝使用其他商品回答" in str(rejected.content)
+    assert state["metadata"]["strict_final_answer"] is True
+
+
 def test_contextualized_request_rejects_untrusted_product_reference(
     monkeypatch,
 ) -> None:
@@ -2102,6 +2152,7 @@ def test_customer_product_capability_routes_through_primary_manual_with_evidence
     lookup_decision = asyncio.run(_decide(lookup))
 
     assert lookup_decision.tool_calls[0].tool_name == "search_products"
+    assert lookup_decision.tool_calls[0].arguments["product_code"] == "MX4"
     assert lookup_decision.tool_calls[0].arguments["keyword"] == "MX4"
     route = lookup["metadata"]["customer_service"]["route"]
     assert route["intent"] == "product_document_fact"

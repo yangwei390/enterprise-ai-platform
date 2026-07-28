@@ -271,6 +271,7 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
     async def adecide(self, state: Any) -> AgentDecision:
         query = str(state.get("query") or "").strip()
         metadata = state.setdefault("metadata", {})
+        metadata["strict_final_answer"] = False
         runtime_turn_id = current_runtime_turn_id(state)
         metadata["runtime_turn_id"] = runtime_turn_id
         intent, source = _current_customer_service_route(
@@ -389,6 +390,15 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             "query_logistics",
             "create_human_handoff",
         }:
+            if _last_tool_name(observations) == "search_products":
+                strict_product_final = _strict_product_observation_final(
+                    state,
+                    contextualized_request,
+                    observations[-1],
+                )
+                if strict_product_final is not None:
+                    metadata["strict_final_answer"] = True
+                    return strict_product_final
             return _observation_final(observations[-1])
 
         fsm_guard = _fsm_guard_decision(
@@ -1118,6 +1128,61 @@ def _observation_final(observation: dict[str, Any]) -> AgentDecision:
     )
 
 
+def _strict_product_observation_final(
+    state: Any,
+    request: ContextualizedRequest | None,
+    observation: dict[str, Any],
+) -> AgentDecision | None:
+    target_codes = (
+        request.payload.target_product_codes
+        if request is not None and isinstance(request.payload, ProductPayload)
+        else []
+    )
+    if not target_codes:
+        tool_calls = state.get("tool_calls", [])
+        latest_call = tool_calls[-1] if isinstance(tool_calls, list) and tool_calls else {}
+        arguments = latest_call.get("arguments") if isinstance(latest_call, dict) else {}
+        product_code = arguments.get("product_code") if isinstance(arguments, dict) else None
+        if isinstance(product_code, str) and product_code:
+            target_codes = [product_code]
+    if len(target_codes) != 1:
+        return None
+    expected_code = target_codes[0]
+    if observation.get("success") is False:
+        return _final(str(observation.get("error") or "商品查询失败，不能猜测商品信息。"))
+    raw_result = observation.get("raw_result")
+    items = raw_result.get("items") if isinstance(raw_result, dict) else None
+    if not isinstance(items, list):
+        return _final("商品查询结果格式异常，已拒绝生成回答。")
+    exact_items = [
+        item
+        for item in items
+        if isinstance(item, dict) and str(item.get("product_code") or "") == expected_code
+    ]
+    if len(exact_items) != 1:
+        return _final(f"未查询到商品编码为 {expected_code} 的唯一商品，已拒绝使用其他商品回答。")
+    item = exact_items[0]
+    display_name = item.get("name") or item.get("model") or expected_code
+    lines = [f"{display_name}（商品编码：{expected_code}）"]
+    fields = (
+        ("品牌", "brand"),
+        ("型号", "model"),
+        ("分类", "category"),
+        ("价格", "price"),
+        ("币种", "currency"),
+        ("库存", "stock_quantity"),
+        ("特点", "features"),
+        ("适用场景", "use_cases"),
+    )
+    for label, key in fields:
+        value = item.get(key)
+        if value in (None, "", []):
+            continue
+        rendered = "、".join(str(part) for part in value) if isinstance(value, list) else str(value)
+        lines.append(f"- {label}：{rendered}")
+    return _final("\n".join(lines))
+
+
 def _recommendation_final(
     observation: dict[str, Any],
     *,
@@ -1311,6 +1376,7 @@ def _product_query_args(state: Any, query: str, *, page_size: int) -> dict[str, 
 
 def _focused_product_query_args(state: Any, product_code: str) -> dict[str, Any]:
     args: dict[str, Any] = {
+        "product_code": product_code,
         "keyword": product_code,
         "sale_status": None,
         "in_stock_only": False,
@@ -1327,15 +1393,17 @@ def _is_focused_product_lookup(
 ) -> bool:
     if arguments.get("page_size") != 1:
         return False
+    product_code = arguments.get("product_code")
     keyword = arguments.get("keyword")
-    if not isinstance(keyword, str) or not keyword:
+    reference = product_code if isinstance(product_code, str) and product_code else keyword
+    if not isinstance(reference, str) or not reference:
         return False
     domain = load_dst(metadata).domains.get(CustomerServiceDomain.PRODUCT)
     if domain is None:
         return False
-    if keyword == domain.active_ref:
+    if reference == domain.active_ref:
         return True
-    return keyword in {candidate.ref for candidate in domain.candidates}
+    return reference in {candidate.ref for candidate in domain.candidates}
 
 
 def _update_product_context(
