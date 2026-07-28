@@ -63,6 +63,10 @@ class DashScopeClient(BaseLLMClient):
         }
         if request.tool_choice is not None:
             create_kwargs["tool_choice"] = request.tool_choice
+        if request.enable_thinking is not None:
+            create_kwargs["extra_body"] = {
+                "enable_thinking": request.enable_thinking,
+            }
         if self.config.max_tokens is not None:
             create_kwargs["max_tokens"] = self.config.max_tokens
 

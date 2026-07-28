@@ -1,5 +1,5 @@
 from backend.app.llms.base import BaseLLM
-from backend.app.llms.config import get_llm_config
+from backend.app.llms.config import LLMConfig, get_llm_config
 from backend.app.llms.providers import DummyLLMProvider, OpenAIProvider
 from backend.app.llms.providers.dashscope_provider import DashScopeProvider
 from backend.app.logger import logger
@@ -7,8 +7,12 @@ from backend.app.logger import logger
 
 class LLMFactory:
     @staticmethod
-    def get_llm(provider: str | None = None) -> BaseLLM:
-        config = get_llm_config()
+    def get_llm(
+        provider: str | None = None,
+        *,
+        config: LLMConfig | None = None,
+    ) -> BaseLLM:
+        config = config or get_llm_config()
         selected_provider = provider or config.provider
 
         if selected_provider == "dummy":

@@ -19,6 +19,7 @@ class LLMRequest(BaseModel):
     tools: list[dict] = Field(default_factory=list)
     tool_choice: str | dict | None = None
     parallel_tool_calls: bool | None = None
+    enable_thinking: bool | None = None
     metadata: dict = Field(default_factory=dict)
 
 

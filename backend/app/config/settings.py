@@ -1,7 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -206,6 +207,26 @@ class Settings(BaseSettings):
     AGENT_OBSERVATION_MAX_CHARS: int = 6000
     AGENT_MEMORY_MAX_LOOP_MESSAGES: int = 20
     CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS: str = ""
+    CUSTOMER_SERVICE_INTENT_MODE: Literal[
+        "rule_only",
+        "llm_only",
+        "hybrid",
+    ] = "hybrid"
+    CUSTOMER_SERVICE_INTENT_LLM_MODEL: str = "qwen3.7-flash-2026-07-15"
+    CUSTOMER_SERVICE_INTENT_LLM_BASE_URL: str = (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    CUSTOMER_SERVICE_INTENT_LLM_API_KEY: str | None = None
+    CUSTOMER_SERVICE_INTENT_LLM_TIMEOUT_SECONDS: int = Field(
+        default=5,
+        ge=1,
+        le=30,
+    )
+    CUSTOMER_SERVICE_INTENT_LLM_MAX_RETRIES: int = Field(
+        default=1,
+        ge=0,
+        le=2,
+    )
 
     DYNAMIC_TOOL_REGISTRY_ENABLED: bool = True
     TOOL_REGISTRY_AUTO_REFRESH: bool = False
@@ -248,6 +269,7 @@ class Settings(BaseSettings):
     @field_validator(
         "LLM_BASE_URL",
         "LLM_API_KEY",
+        "CUSTOMER_SERVICE_INTENT_LLM_API_KEY",
         "EMBEDDING_API_KEY",
         "EMBEDDING_BASE_URL",
         "RERANK_API_KEY",

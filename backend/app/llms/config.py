@@ -25,3 +25,17 @@ def get_llm_config() -> LLMConfig:
         api_key=settings.LLM_API_KEY,
         stream=settings.LLM_STREAM,
     )
+
+
+def get_customer_service_intent_llm_config() -> LLMConfig:
+    return LLMConfig(
+        provider="dashscope",
+        model=settings.CUSTOMER_SERVICE_INTENT_LLM_MODEL,
+        temperature=0,
+        max_tokens=None,
+        timeout=settings.CUSTOMER_SERVICE_INTENT_LLM_TIMEOUT_SECONDS,
+        base_url=settings.CUSTOMER_SERVICE_INTENT_LLM_BASE_URL,
+        api_key=settings.CUSTOMER_SERVICE_INTENT_LLM_API_KEY,
+        stream=False,
+        metadata={"purpose": "customer_service_intent"},
+    )

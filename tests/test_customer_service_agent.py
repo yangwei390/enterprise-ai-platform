@@ -33,6 +33,8 @@ from backend.app.agents.langgraph.runtime import LangGraphAgentRuntime
 from backend.app.agents.langgraph.state import AgentState, create_initial_state
 from backend.app.agents.langgraph.tool_calling import AgentDecision, AgentToolCall
 from backend.app.agents.state import AgentRuntimeRequest
+from backend.app.config.settings import settings
+from backend.app.llms.config import LLMConfig
 from backend.app.memory.state import MemoryState
 from backend.app.tools import BaseTool, ToolExecutor, ToolResult
 from backend.app.tools.registry import ToolRegistry
@@ -836,7 +838,7 @@ def test_multi_turn_product_state_survives_choice_and_failed_manual_lookup(
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(
         query="推荐一个鼠标",
@@ -1257,7 +1259,7 @@ def test_customer_llm_classifies_open_product_document_questions(
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(
         query=query,
@@ -1312,7 +1314,7 @@ def test_contextualized_request_resolves_llm_reference_to_trusted_product(
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(
         query="第二个呢",
@@ -1388,7 +1390,7 @@ def test_contextualized_request_rejects_untrusted_product_reference(
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(
         query="它尺寸多少",
@@ -1435,7 +1437,7 @@ def test_contextualizer_receives_full_conversation_history(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(
         query="第二个呢",
@@ -1499,7 +1501,7 @@ def test_contextualizer_cannot_override_trusted_constraints(monkeypatch) -> None
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(
         query="继续推荐鼠标",
@@ -1539,7 +1541,7 @@ def test_customer_llm_intent_invalid_output_falls_back_safely(monkeypatch) -> No
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: InvalidIntentLLM(),
+        lambda **_kwargs: InvalidIntentLLM(),
     )
     state = _state(query="这个产品的外形数据呢")
 
@@ -1553,7 +1555,7 @@ def test_customer_llm_intent_invalid_output_falls_back_safely(monkeypatch) -> No
 
 
 def test_customer_llm_intent_model_failure_falls_back_safely(monkeypatch) -> None:
-    def fail_get_llm():
+    def fail_get_llm(**_kwargs):
         raise RuntimeError("model unavailable")
 
     monkeypatch.setattr(
@@ -1569,6 +1571,390 @@ def test_customer_llm_intent_model_failure_falls_back_safely(monkeypatch) -> Non
     assert route["source"] == "planner"
     assert route["classifier"] == "rules_fallback"
     assert route["fallback_reason"] == "classifier_error"
+
+
+def test_customer_rule_only_mode_never_calls_intent_llm(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "rule_only")
+
+    def fail_get_llm(**_kwargs):
+        raise AssertionError("rule_only must not call the intent classifier")
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        fail_get_llm,
+    )
+    state = _state(query="这个产品的外形数据呢")
+
+    asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+    assert route["classifier"] == "rules"
+    assert route["intent_mode"] == "rule_only"
+    assert request["intent_mode"] == "rule_only"
+    assert request["recognition_source"] == "rules"
+    assert request["action"] == "clarify"
+
+
+def test_customer_llm_only_mode_classifies_clear_rule_intent(monkeypatch) -> None:
+    calls = 0
+
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "order_query",
+                            "domain": "order",
+                            "action": "list",
+                            "confidence": 0.98,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    state = _state(query="我要查询订单")
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+    assert calls == 1
+    assert decision.tool_calls[0].tool_name == "query_order"
+    assert route["classifier"] == "llm"
+    assert route["intent_mode"] == "llm_only"
+    assert request["intent"] == "order_query"
+    assert request["intent_mode"] == "llm_only"
+    assert request["recognition_source"] == "llm"
+    assert request["action"] == "list"
+
+
+def test_customer_llm_only_failure_asks_for_clarification(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        settings,
+        "CUSTOMER_SERVICE_INTENT_LLM_MAX_RETRIES",
+        0,
+    )
+
+    def fail_get_llm(**_kwargs):
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        fail_get_llm,
+    )
+    state = _state(query="那个事情继续处理一下")
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+    assert decision.content == (
+        "我暂时无法准确理解您的需求，请补充要查询的商品、订单或具体问题。"
+    )
+    assert route["classifier"] == "llm_failed"
+    assert route["fallback_reason"] == "classifier_error"
+    assert request["clarification_required"] is True
+    assert request["recognition_source"] == "fallback"
+
+
+def test_customer_intent_llm_uses_dedicated_settings(monkeypatch) -> None:
+    captured_configs: list[LLMConfig] = []
+    captured_requests = []
+
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            captured_requests.append(request)
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "greeting",
+                            "domain": "general",
+                            "action": "greet",
+                            "confidence": 0.99,
+                        },
+                    )
+                ]
+            )
+
+    def get_llm(**kwargs):
+        captured_configs.append(kwargs["config"])
+        return IntentLLM()
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        settings,
+        "CUSTOMER_SERVICE_INTENT_LLM_MODEL",
+        "replaceable-intent-model",
+    )
+    monkeypatch.setattr(
+        settings,
+        "CUSTOMER_SERVICE_INTENT_LLM_BASE_URL",
+        "https://intent.example/v1",
+    )
+    monkeypatch.setattr(
+        settings,
+        "CUSTOMER_SERVICE_INTENT_LLM_API_KEY",
+        "intent-test-key",
+    )
+    monkeypatch.setattr(
+        settings,
+        "CUSTOMER_SERVICE_INTENT_LLM_TIMEOUT_SECONDS",
+        7,
+    )
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        get_llm,
+    )
+
+    asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(_state(query="你好"))
+    )
+
+    assert captured_configs[0].provider == "dashscope"
+    assert captured_configs[0].model == "replaceable-intent-model"
+    assert captured_configs[0].base_url == "https://intent.example/v1"
+    assert captured_configs[0].api_key == "intent-test-key"
+    assert captured_configs[0].timeout == 7
+    assert captured_requests[0].model == "replaceable-intent-model"
+    assert captured_requests[0].enable_thinking is False
+    assert captured_requests[0].temperature == 0
+
+
+def test_customer_intent_llm_retries_once_then_uses_valid_result(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("temporary failure")
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "domain": "product",
+                            "confidence": 0.96,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        settings,
+        "CUSTOMER_SERVICE_INTENT_LLM_MAX_RETRIES",
+        1,
+    )
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    state = _state(query="第二款外形数据呢")
+
+    asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    assert calls == 2
+    assert route["classifier"] == "llm"
+    assert route["intent"] == "product_document_fact"
+
+
+def test_customer_llm_only_low_confidence_does_not_route_tool(
+    monkeypatch,
+) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "order_query",
+                            "domain": "order",
+                            "action": "detail",
+                            "confidence": 0.4,
+                            "target_references": ["untrusted-order"],
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    state = _state(query="那个继续")
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+    assert decision.tool_calls == []
+    assert route["classifier"] == "llm_failed"
+    assert route["fallback_reason"] == "low_confidence"
+    assert request["intent"] == "other"
+    assert request["target_references"] == []
+    assert request["clarification_required"] is True
+
+
+def test_customer_llm_target_reference_resolves_only_trusted_order(
+    monkeypatch,
+) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "logistics_query",
+                            "domain": "logistics",
+                            "action": "logistics",
+                            "confidence": 0.97,
+                            "target_references": ["second"],
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    state = _state(
+        query="那个包裹后来怎么样了",
+        customer_service={
+            "order_candidates": [
+                {"order_no": "2026****0002", "status": "cancelled"},
+                {"order_no": "2026****0001", "status": "delivered"},
+            ],
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+    assert decision.tool_calls[0].tool_name == "query_logistics"
+    assert decision.tool_calls[0].arguments == {"order_ref": "2026****0001"}
+    assert request["payload"]["target_order_refs"] == ["2026****0001"]
+    assert request["payload"]["resolution_source"] == "ordinal"
+
+
+def test_customer_llm_untrusted_order_reference_requires_clarification(
+    monkeypatch,
+) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "logistics_query",
+                            "domain": "logistics",
+                            "action": "logistics",
+                            "confidence": 0.97,
+                            "target_references": ["invented-order"],
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    state = _state(
+        query="那个包裹呢",
+        customer_service={
+            "order_candidates": [
+                {"order_no": "2026****0002", "status": "cancelled"},
+                {"order_no": "2026****0001", "status": "delivered"},
+            ],
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    request = state["metadata"]["customer_service"]["contextualized_request"]
+    assert decision.tool_calls == []
+    assert decision.content == (
+        "没有在当前订单列表中找到您指的订单，请说明订单序号。"
+    )
+    assert request["payload"]["target_order_refs"] == []
+    assert request["clarification_required"] is True
+
+
+def test_customer_llm_inconsistent_action_is_rejected(monkeypatch) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "order_query",
+                            "domain": "order",
+                            "action": "logistics",
+                            "confidence": 0.99,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        settings,
+        "CUSTOMER_SERVICE_INTENT_LLM_MAX_RETRIES",
+        0,
+    )
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    state = _state(query="查看订单详情")
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    route = state["metadata"]["customer_service"]["route"]
+    assert decision.tool_calls == []
+    assert route["classifier"] == "llm_failed"
+    assert route["fallback_reason"] == "inconsistent_action"
 
 
 def test_customer_llm_intent_is_reused_across_tool_steps(monkeypatch) -> None:
@@ -1594,7 +1980,7 @@ def test_customer_llm_intent_is_reused_across_tool_steps(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(
         query="第二款尺寸多少",
@@ -1633,7 +2019,7 @@ def test_customer_llm_intent_is_reused_across_tool_steps(monkeypatch) -> None:
 
 
 def test_customer_high_risk_rules_do_not_call_llm_classifier(monkeypatch) -> None:
-    def fail_get_llm():
+    def fail_get_llm(**_kwargs):
         raise AssertionError("high-risk rules must not call the intent classifier")
 
     monkeypatch.setattr(
@@ -1672,7 +2058,7 @@ def test_customer_llm_logistics_intent_lists_demo_user_orders(
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service.LLMFactory.get_llm",
-        lambda: IntentLLM(),
+        lambda **_kwargs: IntentLLM(),
     )
     state = _state(query="我的包裹进度怎么样")
 
@@ -1984,6 +2370,8 @@ def test_order_payload_keeps_list_scope_separate_from_active_order() -> None:
         "scope": "all",
         "target_order_refs": ["2026****0002", "2026****0001"],
         "resolution_source": "all_candidates",
+        "clarification_required": False,
+        "clarification_question": None,
     }
     assert count_decision.action == "final"
     assert count_decision.content == "当前模拟账号下共有 2 笔订单。"
