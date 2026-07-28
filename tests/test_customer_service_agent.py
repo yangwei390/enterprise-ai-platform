@@ -564,6 +564,110 @@ def test_alternative_recommendation_excludes_previously_recommended_products() -
     assert prepared["excluded_product_codes"] == ["G304", "G502"]
 
 
+def test_alternative_recommendation_does_not_resolve_other_as_active_product() -> None:
+    turn_id = "alternative-recommendation-turn"
+    state = _state(
+        query="还有其他的么",
+        runtime_turn_id=turn_id,
+        customer_service={
+            "route": {
+                "turn_id": turn_id,
+                "intent": "product_recommendation",
+                "source": "product_catalog",
+                "classifier": "llm",
+                "target_references": [],
+                "attributes": [],
+            },
+            "recommended_product_codes": ["G304"],
+            "recommendation_list": [
+                {"product_code": "G304", "name": "罗技 G304"},
+            ],
+            "active_product_code": "G304",
+            "product_context": {
+                "candidates": [
+                    {"product_code": "G304", "name": "罗技 G304"},
+                ],
+                "focused_product_code": "G304",
+            },
+            "contextualized_request": {
+                "raw_query": "还有其他的么",
+                "rewritten_query": "推荐其他鼠标",
+                "domain": "product",
+                "intent": "product_recommendation",
+                "source": "product_catalog",
+                "target_references": [],
+                "payload": {
+                    "target_product_codes": [],
+                    "attributes": [],
+                    "recommendation_count": 1,
+                    "constraints": {"category": "鼠标"},
+                },
+                "confidence": 0.98,
+            },
+        },
+    )
+
+    decision = asyncio.run(_decide(state))
+    prepared = prepare_customer_service_tool_arguments(
+        state=state,
+        tool_name=decision.tool_calls[0].tool_name,
+        arguments=decision.tool_calls[0].arguments,
+    )
+
+    assert decision.tool_calls[0].tool_name == "recommend_products"
+    assert prepared["excluded_product_codes"] == ["G304"]
+
+
+def test_recommendation_result_is_grounded_and_empty_result_is_closed() -> None:
+    empty_state = _state(
+        query="还有其他的么",
+        observations=[
+            {
+                "tool_name": "recommend_products",
+                "success": True,
+                "raw_result": {
+                    "items": [],
+                    "total": 0,
+                    "no_result_reason": "no_candidates",
+                },
+            }
+        ],
+    )
+    empty_decision = asyncio.run(_decide(empty_state))
+    result_state = _state(
+        query="还有其他的么",
+        observations=[
+            {
+                "tool_name": "recommend_products",
+                "success": True,
+                "raw_result": {
+                    "items": [
+                        {
+                            "product": {
+                                "product_code": "MX4",
+                                "name": "Logitech MX Master 4",
+                                "brand": "罗技",
+                                "price": "800.00",
+                                "currency": "CNY",
+                                "features": ["蓝牙"],
+                            }
+                        }
+                    ],
+                    "total": 1,
+                },
+            }
+        ],
+    )
+    result_decision = asyncio.run(_decide(result_state))
+
+    assert empty_decision.content == "当前没有其他符合条件的可售商品。"
+    assert empty_state["metadata"]["retrieval_required"] is True
+    assert "Logitech MX Master 4" in str(result_decision.content)
+    assert "MX4" in str(result_decision.content)
+    assert "雷蛇" not in str(result_decision.content)
+    assert result_state["metadata"]["retrieval_required"] is True
+
+
 def test_single_recommendation_keeps_one_focused_product() -> None:
     state = _state(query="推荐一个办公鼠标", conversation_id=303)
     prepared = prepare_customer_service_tool_arguments(

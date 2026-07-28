@@ -425,6 +425,12 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             return _knowledge_final(state, observations[-1])
         if _last_tool_name(observations) == "create_after_sales_ticket":
             return _after_sales_final(metadata, observations[-1])
+        if _last_tool_name(observations) == "recommend_products":
+            metadata["retrieval_required"] = True
+            return _recommendation_final(
+                observations[-1],
+                alternative=_is_alternative_recommendation(query),
+            )
         if _last_tool_name(observations) == "query_order":
             raw_result = observations[-1].get("raw_result")
             if isinstance(raw_result, dict) and raw_result.get("mode") == "list":
@@ -516,14 +522,22 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             if isinstance(state.get("knowledge_base_id"), int):
                 args["knowledge_base_id"] = state["knowledge_base_id"]
             return _tool_decision("compare_products", args)
-        product_reference = _resolve_context_product(
-            metadata,
-            query,
-            allow_implicit=intent
-            in {
-                CustomerServiceIntent.PRODUCT_REALTIME_FACT,
-                CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
-            },
+        is_recommend_intent = (
+            _is_recommend(query)
+            or intent == CustomerServiceIntent.PRODUCT_RECOMMENDATION
+        )
+        product_reference = (
+            None
+            if is_recommend_intent
+            else _resolve_context_product(
+                metadata,
+                query,
+                allow_implicit=intent
+                in {
+                    CustomerServiceIntent.PRODUCT_REALTIME_FACT,
+                    CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
+                },
+            )
         )
         if product_reference == "ambiguous":
             return _final("当前有多个候选商品，请明确说商品名称、商品编码或第几个商品。")
@@ -553,10 +567,7 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
             if isinstance(state.get("knowledge_base_id"), int):
                 args["knowledge_base_id"] = state["knowledge_base_id"]
             return _tool_decision("compare_products", args)
-        if (
-            _is_recommend(query)
-            or intent == CustomerServiceIntent.PRODUCT_RECOMMENDATION
-        ):
+        if is_recommend_intent:
             requested_count = (
                 _route_recommendation_count(metadata)
                 or _requested_recommendation_count(query)
@@ -972,6 +983,55 @@ def _observation_final(observation: dict[str, Any]) -> AgentDecision:
     return _final(
         str(observation.get("content") or observation.get("raw_result") or "已完成查询。")
     )
+
+
+def _recommendation_final(
+    observation: dict[str, Any],
+    *,
+    alternative: bool,
+) -> AgentDecision:
+    if observation.get("success") is False:
+        return _final(str(observation.get("error") or "商品推荐失败，请稍后重试。"))
+    raw_result = observation.get("raw_result")
+    if not isinstance(raw_result, dict):
+        return _final("商品推荐工具没有返回有效结果。")
+    items = raw_result.get("items")
+    if not isinstance(items, list) or not items:
+        return _final("当前没有其他符合条件的可售商品。")
+    lines = ["除已推荐商品外，当前还有：" if alternative else "根据您的需求，推荐："]
+    rendered_count = 0
+    for item in items[:_PRODUCT_CONTEXT_MAX_CANDIDATES]:
+        if not isinstance(item, dict):
+            continue
+        product = item.get("product")
+        if not isinstance(product, dict):
+            continue
+        product_code = product.get("product_code")
+        name = product.get("name")
+        if not isinstance(product_code, str) or not isinstance(name, str):
+            continue
+        rendered_count += 1
+        lines.append(f"{rendered_count}. {name}（商品编码：{product_code}）")
+        for label, key in (
+            ("品牌", "brand"),
+            ("型号", "model"),
+            ("分类", "category"),
+            ("价格", "price"),
+            ("币种", "currency"),
+            ("库存", "stock_quantity"),
+        ):
+            value = product.get(key)
+            if value not in (None, "", [], {}):
+                lines.append(f"   - {label}：{value}")
+        features = product.get("features")
+        if isinstance(features, list) and features:
+            lines.append(f"   - 特点：{'、'.join(str(value) for value in features)}")
+        use_cases = product.get("use_cases")
+        if isinstance(use_cases, list) and use_cases:
+            lines.append(f"   - 适用场景：{'、'.join(str(value) for value in use_cases)}")
+    if rendered_count == 0:
+        return _final("商品推荐工具没有返回可展示的有效商品。")
+    return _final("\n".join(lines))
 
 
 def _order_list_final(
@@ -1722,8 +1782,6 @@ def _is_context_product_followup(query: str) -> bool:
         "这款",
         "该商品",
         "它",
-        "他",
-        "她",
         "刚才",
         "上面",
         "下面",
@@ -1762,7 +1820,13 @@ def _is_context_product_followup(query: str) -> bool:
         "驱动",
         "支持",
     ]
-    return any(word in query for word in reference_words + detail_words)
+    normalized = query.strip()
+    has_person_pronoun = normalized.startswith(
+        ("他有", "他是", "他的", "她有", "她是", "她的", "那他", "那她")
+    )
+    return has_person_pronoun or any(
+        word in query for word in reference_words + detail_words
+    )
 
 
 def _recommended_product_codes(metadata: dict[str, Any]) -> list[str]:
