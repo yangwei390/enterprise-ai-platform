@@ -341,17 +341,13 @@ def test_customer_planner_greeting_uses_no_tool() -> None:
 
 def test_customer_planner_product_search_recommend_and_compare_args() -> None:
     search = asyncio.run(_decide(_state(query="查一下在售的豆浆机")))
-    recommend = asyncio.run(
-        _decide(_state(query="我要一款300以内、适合宿舍、必须容易清洗的豆浆机"))
-    )
+    recommend = asyncio.run(_decide(_state(query="我要一款豆浆机")))
     compare = asyncio.run(_decide(_state(query="对比 P001 和 P002")))
 
     assert search.tool_calls[0].tool_name == "search_products"
-    assert search.tool_calls[0].arguments["category"] == "豆浆机"
+    assert search.tool_calls[0].arguments["keyword"] == "豆浆机"
     assert recommend.tool_calls[0].tool_name == "recommend_products"
-    assert recommend.tool_calls[0].arguments["price_max"] == 300
-    assert recommend.tool_calls[0].arguments["preferred_use_cases"] == ["宿舍"]
-    assert recommend.tool_calls[0].arguments["required_features"] == ["容易清洗"]
+    assert recommend.tool_calls[0].arguments["keyword"] == "豆浆机"
     assert compare.tool_calls[0].tool_name == "compare_products"
     assert compare.tool_calls[0].arguments["product_codes"] == ["P001", "P002"]
 
@@ -392,14 +388,13 @@ def test_customer_planner_inherits_product_filters_across_three_turns() -> None:
 
     assert first_decision.tool_calls[0].tool_name == "recommend_products"
     assert second_decision.tool_calls[0].tool_name == "search_products"
-    assert second_args["category"] == "豆浆机"
+    assert second_args["keyword"] == "豆浆机"
     assert second_args["price_min"] == 200
     assert second_args["price_max"] == 300
     assert third_decision.tool_calls[0].tool_name == "recommend_products"
-    assert third_args["category"] == "豆浆机"
+    assert third_args["keyword"] == "豆浆机"
     assert third_args["price_min"] == 200
     assert third_args["price_max"] == 300
-    assert third_args["preferred_features"] == ["容易清洗"]
 
 
 def test_customer_product_context_resolves_order_and_keeps_focus() -> None:
@@ -3238,6 +3233,247 @@ def test_prompt_injection_does_not_call_tool() -> None:
 
     assert decision.tool_calls == []
     assert "不能忽略" in str(decision.content)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_keyword"),
+    [
+        ("给我推荐一个键盘", "键盘"),
+        ("我要耳机", "耳机"),
+        ("找一款显示器", "显示器"),
+    ],
+)
+def test_product_query_term_is_forwarded_without_category_allowlist(
+    monkeypatch,
+    query: str,
+    expected_keyword: str,
+) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "rule_only")
+    state = _state(
+        query=query,
+        customer_service={
+            "product_filters": {
+                "category": "旧分类",
+                "price_max": 2000,
+            }
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+    arguments = decision.tool_calls[0].arguments
+
+    assert decision.tool_calls[0].tool_name in {
+        "recommend_products",
+        "search_products",
+    }
+    assert arguments["keyword"] == expected_keyword
+    assert "category" not in arguments
+    assert arguments["price_max"] == 2000
+
+
+def test_new_product_search_atomically_replaces_stale_product_context() -> None:
+    state = _state(
+        query="找一个新分类",
+        customer_service={
+            "product_filters": {"category": "旧分类"},
+            "recommendation_list": [
+                {
+                    "product_code": "OLD-1",
+                    "name": "旧商品",
+                    "category": "旧分类",
+                }
+            ],
+            "active_product_code": "OLD-1",
+            "product_context": {
+                "candidates": [
+                    {
+                        "product_code": "OLD-1",
+                        "name": "旧商品",
+                        "category": "旧分类",
+                    }
+                ],
+                "focused_product_code": "OLD-1",
+            },
+        },
+    )
+    arguments = {
+        "keyword": "新分类",
+        "sale_status": "on_sale",
+        "in_stock_only": True,
+        "page_size": 3,
+    }
+
+    update_customer_service_state_after_tool(
+        state=state,
+        tool_name="search_products",
+        arguments=arguments,
+        result=ToolResult(
+            name="search_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "id": 2,
+                        "product_code": "NEW-1",
+                        "name": "新商品",
+                        "model": "NEW",
+                        "category": "新分类",
+                    }
+                ]
+            },
+        ),
+    )
+
+    customer_service = state["metadata"]["customer_service"]
+    assert customer_service["active_product_code"] == "NEW-1"
+    assert [
+        item["product_code"]
+        for item in customer_service["recommendation_list"]
+    ] == ["NEW-1"]
+    assert [
+        item["product_code"]
+        for item in customer_service["product_context"]["candidates"]
+    ] == ["NEW-1"]
+    assert customer_service["product_context"]["focused_product_code"] == "NEW-1"
+    assert customer_service["product_filters"]["keyword"] == "新分类"
+    assert "category" not in customer_service["product_filters"]
+
+
+def test_empty_new_product_search_clears_stale_product_context() -> None:
+    state = _state(
+        query="找一个不存在的分类",
+        customer_service={
+            "recommendation_list": [{"product_code": "OLD-1"}],
+            "active_product_code": "OLD-1",
+            "product_context": {
+                "candidates": [{"product_code": "OLD-1"}],
+                "focused_product_code": "OLD-1",
+            },
+        },
+    )
+
+    update_customer_service_state_after_tool(
+        state=state,
+        tool_name="search_products",
+        arguments={"keyword": "不存在的分类", "page_size": 3},
+        result=ToolResult(
+            name="search_products",
+            success=True,
+            result={"items": [], "total": 0},
+        ),
+    )
+
+    customer_service = state["metadata"]["customer_service"]
+    assert customer_service["recommendation_list"] == []
+    assert customer_service["active_product_code"] is None
+    assert customer_service["product_context"] == {
+        "candidates": [],
+        "focused_product_code": None,
+    }
+
+
+def test_llm_product_switch_keeps_followup_on_latest_product(monkeypatch) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            latest_user = next(
+                message.content
+                for message in reversed(request.messages)
+                if message.role == "user"
+            )
+            if "推荐" in latest_user:
+                arguments = {
+                    "intent": "product_recommendation",
+                    "domain": "product",
+                    "action": "recommend_products",
+                    "confidence": 0.99,
+                    "target_references": [],
+                    "attributes": [],
+                    "recommendation_count": 1,
+                    "constraints": {"category": "新分类"},
+                }
+            else:
+                arguments = {
+                    "intent": "product_realtime_fact",
+                    "domain": "product",
+                    "action": "query_product_fact",
+                    "confidence": 0.99,
+                    "target_references": [],
+                    "attributes": ["features"],
+                    "constraints": {},
+                }
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments=arguments,
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    first = _state(
+        query="推荐一个新分类",
+        customer_service={
+            "product_filters": {"category": "旧分类"},
+            "recommendation_list": [{"product_code": "OLD-1"}],
+            "active_product_code": "OLD-1",
+            "product_context": {
+                "candidates": [{"product_code": "OLD-1"}],
+                "focused_product_code": "OLD-1",
+            },
+        },
+    )
+
+    first_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(first)
+    )
+    assert first_decision.tool_calls[0].arguments["category"] == "新分类"
+    update_customer_service_state_after_tool(
+        state=first,
+        tool_name="recommend_products",
+        arguments=first_decision.tool_calls[0].arguments,
+        result=ToolResult(
+            name="recommend_products",
+            success=True,
+            result={
+                "items": [
+                    {
+                        "product": {
+                            "id": 2,
+                            "product_code": "NEW-1",
+                            "name": "新商品",
+                            "category": "新分类",
+                        }
+                    }
+                ]
+            },
+        ),
+    )
+
+    second = _state(
+        query="它有什么特点",
+        customer_service=deepcopy(first["metadata"]["customer_service"]),
+    )
+    second_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(second)
+    )
+
+    assert second_decision.tool_calls[0].tool_name == "search_products"
+    assert second_decision.tool_calls[0].arguments["keyword"] == "NEW-1"
+    assert (
+        second["metadata"]["customer_service"]["active_product_code"]
+        == "NEW-1"
+    )
+    assert [
+        item["product_code"]
+        for item in second["metadata"]["customer_service"]["recommendation_list"]
+    ] == ["NEW-1"]
 
 
 def cast_executor(executor: Any):
