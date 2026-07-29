@@ -305,7 +305,8 @@ def _customer_service_debug_steps(
     payload = contextualized.get("payload")
     payload = payload if isinstance(payload, dict) else {}
     dst_before = turn_debug.get("dst_before")
-    dst_after = turn_debug.get("dst_after") or customer_service.get("dst")
+    dst_after_request = turn_debug.get("dst_after")
+    dst_after_tool = customer_service.get("dst")
     directive = turn_debug.get("fsm_directive") or customer_service.get("fsm_directive")
     evidence = runtime_trace.get("evidence")
     evidence = evidence if isinstance(evidence, dict) else {}
@@ -362,10 +363,14 @@ def _customer_service_debug_steps(
             "DST 与 FSM 状态更新",
             input_data={"dst_before": dst_before},
             output_data={
-                "dst_after": dst_after,
+                "dst_before": dst_before,
+                "dst_after_request": dst_after_request,
                 "fsm_directive": directive,
+                "dst_after_tool": dst_after_tool,
             },
-            executed=dst_after is not None or directive is not None,
+            executed=dst_after_request is not None
+            or directive is not None
+            or dst_after_tool is not None,
         ),
         _debug_step(
             6,

@@ -18,6 +18,7 @@ from backend.app.agents.definition import (
 from backend.app.agents.evidence import (
     NO_EVIDENCE_ANSWER,
     build_evidence_metadata,
+    collect_customer_service_business_evidence,
     requires_evidence,
 )
 from backend.app.agents.langgraph.graph import LangGraphUnavailable, build_agent_graph
@@ -765,6 +766,11 @@ class LangGraphAgentRuntime:
             knowledge=knowledge if isinstance(knowledge, dict) else {},
             knowledge_base_id=state.get("knowledge_base_id"),
             retrieval_required=bool(metadata.get("retrieval_required")),
+            business_tool_evidence=(
+                collect_customer_service_business_evidence(state.get("tool_results"))
+                if metadata.get("agent_id") == CUSTOMER_SERVICE_AGENT_ID
+                else None
+            ),
         )
         metadata.update(evidence_metadata)
         if metadata["no_evidence"]:

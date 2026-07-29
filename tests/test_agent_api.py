@@ -421,6 +421,10 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
                             "contextualized_request": {"raw_query": "查询订单 202607240001"},
                             "dst": {"status": "completed"},
                             "fsm_directive": {"action": "execute"},
+                            "turn_debug": {
+                                "dst_before": {"status": "idle"},
+                                "dst_after": {"status": "ready_to_execute"},
+                            },
                         },
                         "agent_trace": {"graph_nodes": [{"node": "planner"}]},
                     },
@@ -448,6 +452,10 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
 
     assert debug_trace["customer_service"]["route"]["intent"] == "order_query"
     assert debug_trace["customer_service"]["dst"]["status"] == "completed"
+    dst_step = next(step for step in debug_trace["steps"] if step["step"] == 5)
+    assert dst_step["output"]["dst_before"]["status"] == "idle"
+    assert dst_step["output"]["dst_after_request"]["status"] == "ready_to_execute"
+    assert dst_step["output"]["dst_after_tool"]["status"] == "completed"
     assert debug_trace["runtime_trace"]["graph_nodes"][0]["node"] == "planner"
     assert debug_trace["tool_calls"][0]["arguments"]["order_no"] == "[REDACTED]"
     assert [step["step"] for step in debug_trace["steps"]] == list(range(1, 10))

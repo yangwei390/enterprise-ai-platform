@@ -658,11 +658,11 @@ def test_recommendation_result_is_grounded_and_empty_result_is_closed() -> None:
     result_decision = asyncio.run(_decide(result_state))
 
     assert empty_decision.content == "当前没有其他符合条件的可售商品。"
-    assert empty_state["metadata"]["retrieval_required"] is True
+    assert empty_state["metadata"]["retrieval_required"] is False
     assert "Logitech MX Master 4" in str(result_decision.content)
     assert "MX4" in str(result_decision.content)
     assert "雷蛇" not in str(result_decision.content)
-    assert result_state["metadata"]["retrieval_required"] is True
+    assert result_state["metadata"]["retrieval_required"] is False
 
 
 def test_single_recommendation_keeps_one_focused_product() -> None:

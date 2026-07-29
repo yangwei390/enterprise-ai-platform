@@ -370,7 +370,7 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
         if _last_tool_name(observations) == "create_after_sales_ticket":
             return _after_sales_final(metadata, observations[-1])
         if _last_tool_name(observations) == "recommend_products":
-            metadata["retrieval_required"] = True
+            metadata["retrieval_required"] = False
             return _recommendation_final(
                 observations[-1],
                 alternative=_is_alternative_recommendation(query),
