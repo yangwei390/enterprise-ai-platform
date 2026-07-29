@@ -24,6 +24,13 @@ from backend.app.agents.customer_service_contract import (
     CUSTOMER_SERVICE_PENDING_STATUS,
     CUSTOMER_SERVICE_TOOL_ALLOWLIST,
 )
+from backend.app.agents.customer_service_core.schemas import (
+    CandidateHistoryEntry,
+    CandidateRef,
+    ConversationDST,
+    CustomerServiceDomain,
+    DomainState,
+)
 from backend.app.agents.definition import (
     AgentDefinitionConflictError,
     reset_agent_definition_registry,
@@ -1444,7 +1451,7 @@ def test_contextualized_request_rejects_untrusted_product_reference(
     assert "当前推荐列表" in str(decision.content)
 
 
-def test_contextualizer_receives_full_conversation_history(monkeypatch) -> None:
+def test_contextualizer_receives_bounded_conversation_history(monkeypatch) -> None:
     captured_requests = []
 
     class IntentLLM:
@@ -1503,9 +1510,14 @@ def test_contextualizer_receives_full_conversation_history(monkeypatch) -> None:
         for message in captured_requests[0].messages
         if message.role in {"user", "assistant"}
     ]
-    assert "history-0" in sent_contents
+    assert "history-0" not in sent_contents
+    assert "history-26" in sent_contents
     assert "history-29" in sent_contents
     assert sent_contents[-1] == "第二个呢"
+    assert any(
+        message.role == "system" and "较早对话摘要" in message.content
+        for message in captured_requests[0].messages
+    )
 
 
 def test_contextualizer_cannot_override_trusted_constraints(monkeypatch) -> None:
@@ -3184,13 +3196,151 @@ def test_runtime_keeps_full_customer_service_conversation_history() -> None:
     )
     runtime._inject_session_state(restored, saved)
 
-    assert len(saved.messages) == 31
+    assert len(saved.messages) == 30
     assert len(saved.tool_results) == 25
-    assert [message["content"] for message in restored["messages"][1:-1]] == [
+    assert restored["messages"][0]["role"] == "system"
+    assert any(
+        message["role"] == "system" and "较早对话摘要" in message["content"]
+        for message in restored["messages"][1:-1]
+    )
+    restored_history = [
+        message["content"]
+        for message in restored["messages"]
+        if message.get("content", "").startswith("message-")
+    ]
+    assert restored_history == [f"message-{index}" for index in range(24, 30)]
+    assert restored["messages"][-1]["content"] == "下一轮"
+
+    saved_again = runtime._build_session_state(
+        session_id="conversation:43",
+        state=cast(Any, restored),
+        revision=2,
+    )
+    assert [message["content"] for message in saved_again.messages[:30]] == [
         f"message-{index}" for index in range(30)
     ]
-    assert restored["messages"][0]["role"] == "system"
-    assert restored["messages"][-1]["content"] == "下一轮"
+    assert saved_again.messages[-1]["content"] == "下一轮"
+
+
+@pytest.mark.parametrize("intent_mode", ["rule_only", "hybrid", "llm_only"])
+def test_cross_batch_ordinal_is_resolved_from_structured_candidate_history(
+    monkeypatch,
+    intent_mode: str,
+) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", intent_mode)
+    captured_messages = []
+
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, request):
+            captured_messages.extend(request.messages)
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "domain": "product",
+                            "confidence": 0.99,
+                            "target_references": ["top"],
+                            "attributes": ["连接"],
+                            "rewritten_query": "查询第一款鼠标是否支持蓝牙连接",
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    dst = ConversationDST(
+        domains={
+            CustomerServiceDomain.PRODUCT: DomainState(
+                candidates=[
+                    CandidateRef(
+                        ref="3",
+                        display_name="G512 X 75",
+                        category="键盘",
+                        position=1,
+                    )
+                ],
+                active_ref="3",
+                candidate_history=[
+                    CandidateHistoryEntry(
+                        ref="1",
+                        display_name="G304",
+                        category="鼠标和指针设备",
+                        batch_id="turn-1",
+                        position=1,
+                    ),
+                    CandidateHistoryEntry(
+                        ref="2",
+                        display_name="MX Master 4",
+                        category="鼠标和指针设备",
+                        batch_id="turn-2",
+                        position=1,
+                    ),
+                    CandidateHistoryEntry(
+                        ref="3",
+                        display_name="G512 X 75",
+                        category="键盘",
+                        batch_id="turn-3",
+                        position=1,
+                    ),
+                ],
+            )
+        }
+    )
+    state = _state(
+        query="第一款鼠标，支持蓝牙连接吗",
+        customer_service={"dst": dst.model_dump(mode="json")},
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    assert decision.tool_calls[0].tool_name == "search_products"
+    assert decision.tool_calls[0].arguments["product_code"] == "1"
+    if intent_mode == "llm_only":
+        assert any("G304" in message.content for message in captured_messages)
+
+
+def test_unresolved_cross_batch_reference_stops_before_tool(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "rule_only")
+    dst = ConversationDST(
+        domains={
+            CustomerServiceDomain.PRODUCT: DomainState(
+                candidates=[
+                    CandidateRef(
+                        ref="3",
+                        display_name="G512 X 75",
+                        category="键盘",
+                        position=1,
+                    )
+                ],
+                active_ref="3",
+                candidate_history=[
+                    CandidateHistoryEntry(
+                        ref="3",
+                        display_name="G512 X 75",
+                        category="键盘",
+                        batch_id="turn-3",
+                        position=1,
+                    )
+                ],
+            )
+        }
+    )
+    state = _state(
+        query="第一款鼠标，支持蓝牙连接吗",
+        customer_service={"dst": dst.model_dump(mode="json")},
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    assert decision.tool_calls == []
+    assert "无法根据当前会话记录确定" in str(decision.content)
 
 
 @pytest.mark.parametrize("success_saved_first", [True, False])
@@ -3529,6 +3679,66 @@ def test_llm_product_switch_keeps_followup_on_latest_product(monkeypatch) -> Non
         item["product_code"]
         for item in second["metadata"]["customer_service"]["recommendation_list"]
     ] == ["NEW-1"]
+    product_history = second["metadata"]["customer_service"]["dst"]["domains"]["product"][
+        "candidate_history"
+    ]
+    assert [item["ref"] for item in product_history] == ["OLD-1", "NEW-1"]
+    assert product_history[-1] == {
+        "ref": "NEW-1",
+        "display_name": "新商品",
+        "category": "新分类",
+        "batch_id": first["metadata"]["runtime_turn_id"],
+        "position": 1,
+        "id": 2,
+        "product_code": "NEW-1",
+        "name": "新商品",
+    }
+
+
+def test_llm_clarification_blocks_tool_execution(monkeypatch) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, _request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_document_fact",
+                            "domain": "product",
+                            "action": "query_product_document",
+                            "confidence": 0.95,
+                            "target_references": [],
+                            "attributes": ["connectivity"],
+                            "constraints": {},
+                            "needs_clarification": True,
+                            "clarification_question": "请说明您要查询哪款商品。",
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    state = _state(
+        query="它支持蓝牙吗",
+        customer_service={
+            "product_context": {
+                "candidates": [],
+                "focused_product_code": None,
+            }
+        },
+    )
+
+    decision = asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
+
+    assert decision.action == "final"
+    assert decision.tool_calls == []
+    assert decision.content == "请说明您要查询哪款商品。"
 
 
 def test_llm_alternative_then_category_switch_updates_filters(monkeypatch) -> None:

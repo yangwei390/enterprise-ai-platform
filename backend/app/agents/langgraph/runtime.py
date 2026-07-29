@@ -28,6 +28,7 @@ from backend.app.agents.trace import AgentTraceStep
 from backend.app.agents.trace_builder import build_agent_trace_result, sanitize
 from backend.app.config.settings import settings
 from backend.app.logger import logger
+from backend.app.memory.context_builder import build_bounded_message_context
 from backend.app.memory.factory import MemoryFactory
 from backend.app.memory.state import MemoryState
 from backend.app.tools import get_tool_registry
@@ -560,11 +561,12 @@ class LangGraphAgentRuntime:
             return
         current_messages = state.get("messages", [])
         if state.get("metadata", {}).get("agent_id") == CUSTOMER_SERVICE_AGENT_ID:
-            restored_messages = [
+            persisted_messages = [
                 message
                 for message in session_state.messages
                 if message.get("role") != "system"
             ]
+            restored_messages = build_bounded_message_context(persisted_messages)
             current_system = [
                 message
                 for message in current_messages
@@ -575,11 +577,18 @@ class LangGraphAgentRuntime:
                 for message in current_messages
                 if message.get("role") != "system"
             ]
-            state["messages"] = [
+            context_prefix = [
                 *current_system[:1],
                 *restored_messages,
+            ]
+            state["messages"] = [
+                *context_prefix,
                 *current_non_system,
             ]
+            session_metadata = state["metadata"].setdefault("session", {})
+            session_metadata["_persisted_messages"] = persisted_messages
+            session_metadata["_persisted_tool_results"] = list(session_state.tool_results)
+            session_metadata["_context_prefix_length"] = len(context_prefix)
         else:
             restored_messages = session_state.messages[
                 -settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :
@@ -649,19 +658,71 @@ class LangGraphAgentRuntime:
         )
         messages = state.get("messages", [])
         observations = state.get("observations", [])
+        session_runtime = state.get("metadata", {}).get("session", {})
+        if is_customer_service:
+            persisted_messages = session_runtime.get("_persisted_messages", [])
+            context_prefix_length = session_runtime.get("_context_prefix_length", 0)
+            new_messages = (
+                messages[context_prefix_length:]
+                if isinstance(context_prefix_length, int)
+                else messages
+            )
+            runtime_turn_id = state.get("metadata", {}).get("runtime_turn_id")
+            persisted_message_list = (
+                persisted_messages
+                if isinstance(persisted_messages, list)
+                else []
+            )
+            tag_start_index = 0
+            if not persisted_message_list:
+                user_indices = [
+                    index
+                    for index, message in enumerate(new_messages)
+                    if isinstance(message, dict)
+                    and message.get("role") in {"user", "human"}
+                ]
+                if user_indices:
+                    tag_start_index = user_indices[-1]
+            stored_messages = [
+                *persisted_message_list,
+                *[
+                    {
+                        **message,
+                        **(
+                            {"turn_id": runtime_turn_id}
+                            if isinstance(runtime_turn_id, str)
+                            and runtime_turn_id
+                            and index >= tag_start_index
+                            and not message.get("turn_id")
+                            else {}
+                        ),
+                    }
+                    for index, message in enumerate(new_messages)
+                    if isinstance(message, dict) and message.get("role") != "system"
+                ],
+            ]
+            persisted_tool_results = session_runtime.get(
+                "_persisted_tool_results",
+                [],
+            )
+            stored_tool_results = [
+                *(
+                    persisted_tool_results
+                    if isinstance(persisted_tool_results, list)
+                    else []
+                ),
+                *observations,
+            ]
+        else:
+            stored_messages = messages[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
+            stored_tool_results = observations[
+                -settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :
+            ]
         return MemoryState(
             session_id=session_id,
             revision=revision,
-            messages=(
-                messages
-                if is_customer_service
-                else messages[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
-            ),
-            tool_results=(
-                observations
-                if is_customer_service
-                else observations[-settings.AGENT_MEMORY_MAX_LOOP_MESSAGES :]
-            ),
+            messages=stored_messages,
+            tool_results=stored_tool_results,
             current_plan=state.get("plan"),
             current_step=str(state.get("current_action") or "final"),
             planner_output=state.get("plan"),

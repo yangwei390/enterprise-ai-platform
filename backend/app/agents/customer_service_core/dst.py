@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from backend.app.agents.customer_service_core.schemas import (
+    CandidateHistoryEntry,
     CandidateRef,
     ConversationDST,
     CustomerServiceDomain,
@@ -93,6 +94,39 @@ def replace_domain_candidates(
         )
 
 
+def record_candidate_batch(
+    dst: ConversationDST,
+    *,
+    domain: CustomerServiceDomain,
+    candidates: list[dict[str, Any]],
+    batch_id: str,
+) -> None:
+    state = dst.domains.setdefault(domain, DomainState())
+    existing = {(item.batch_id, item.ref) for item in state.candidate_history}
+    additions = [
+        CandidateHistoryEntry(
+            ref=str(item["ref"]),
+            display_name=(
+                str(item["display_name"]) if item.get("display_name") is not None else None
+            ),
+            category=(
+                str(item["category"]) if item.get("category") is not None else None
+            ),
+            batch_id=batch_id,
+            position=index,
+            **{
+                key: value
+                for key, value in item.items()
+                if key not in {"ref", "display_name", "category", "batch_id", "position"}
+            },
+        )
+        for index, item in enumerate(candidates, start=1)
+        if item.get("ref") is not None
+        and (batch_id, str(item["ref"])) not in existing
+    ]
+    state.candidate_history = [*state.candidate_history, *additions][-500:]
+
+
 def set_status(dst: ConversationDST, status: DialogStatus) -> None:
     dst.status = status
 
@@ -157,6 +191,12 @@ def _migrate_legacy_state(customer_service: dict[str, Any]) -> ConversationDST:
     product_domain.seen_refs = [
         ref for ref in seen_product_refs or [] if isinstance(ref, str) and ref
     ][-100:]
+    record_candidate_batch(
+        dst,
+        domain=CustomerServiceDomain.PRODUCT,
+        candidates=product_refs,
+        batch_id="legacy_migration",
+    )
     order_candidates = customer_service.get("order_candidates")
     order_refs = [
         {
@@ -175,5 +215,11 @@ def _migrate_legacy_state(customer_service: dict[str, Any]) -> ConversationDST:
         domain=CustomerServiceDomain.ORDER,
         candidates=order_refs,
         active_ref=(active_order if active_order in {item["ref"] for item in order_refs} else None),
+    )
+    record_candidate_batch(
+        dst,
+        domain=CustomerServiceDomain.ORDER,
+        candidates=order_refs,
+        batch_id="legacy_migration",
     )
     return dst

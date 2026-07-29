@@ -234,9 +234,17 @@ class CustomerServiceIntentClassification(BaseModel):
     attributes: list[str] = Field(default_factory=list, max_length=5)
     recommendation_count: int | None = Field(default=None, ge=1, le=5)
     rewritten_query: str | None = None
+    needs_clarification: bool = False
+    clarification_question: str | None = Field(default=None, max_length=300)
     constraint_operations: ProductConstraintOperations = Field(
         default_factory=ProductConstraintOperations
     )
+
+    @model_validator(mode="after")
+    def validate_clarification(self) -> CustomerServiceIntentClassification:
+        if self.needs_clarification and not self.clarification_question:
+            raise ValueError("needs_clarification=true 时必须提供 clarification_question")
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -414,6 +422,16 @@ class CandidateRef(BaseModel):
     position: int = Field(ge=1)
 
 
+class CandidateHistoryEntry(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    ref: str
+    display_name: str | None = None
+    category: str | None = None
+    batch_id: str
+    position: int = Field(ge=1)
+
+
 class DomainState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -421,6 +439,10 @@ class DomainState(BaseModel):
     active_ref: str | None = None
     filters: dict[str, Any] = Field(default_factory=dict)
     seen_refs: list[str] = Field(default_factory=list, max_length=100)
+    candidate_history: list[CandidateHistoryEntry] = Field(
+        default_factory=list,
+        max_length=500,
+    )
 
 
 class TaskFrame(BaseModel):

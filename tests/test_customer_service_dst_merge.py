@@ -4,6 +4,10 @@ from backend.app.agents.customer_service_core.compatibility import (
     CompatibilityResult,
     CompatibilityStatus,
 )
+from backend.app.agents.customer_service_core.dst import (
+    record_candidate_batch,
+    replace_domain_candidates,
+)
 from backend.app.agents.customer_service_core.fsm import (
     apply_request,
     product_constraints_from_dst,
@@ -91,6 +95,38 @@ def test_unknown_compatibility_preserves_state_but_excludes_tool_constraint() ->
         and change["action"] == "suppress"
         for change in dst.slot_change_log
     )
+
+
+def test_candidate_history_survives_current_candidate_replacement() -> None:
+    dst = ConversationDST()
+    record_candidate_batch(
+        dst,
+        domain=CustomerServiceDomain.PRODUCT,
+        candidates=[
+            {
+                "ref": "1",
+                "display_name": "Mouse A",
+                "category": "鼠标和指针设备",
+            }
+        ],
+        batch_id="turn-1",
+    )
+    replace_domain_candidates(
+        dst,
+        domain=CustomerServiceDomain.PRODUCT,
+        candidates=[
+            {
+                "ref": "3",
+                "display_name": "Keyboard A",
+                "category": "键盘",
+            }
+        ],
+        active_ref="3",
+    )
+
+    domain = dst.domains[CustomerServiceDomain.PRODUCT]
+    assert [item.ref for item in domain.candidates] == ["3"]
+    assert [item.ref for item in domain.candidate_history] == ["1"]
 
 
 class _IncompatibleProvider:
