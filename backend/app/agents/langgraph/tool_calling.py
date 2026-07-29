@@ -195,16 +195,27 @@ class JsonPlanStrategy(BaseAgentPlannerStrategy):
         )
 
 
+_CS_STRATEGY_NAMES = frozenset({"customer_service_hybrid", "customer_service_rules"})
+
+
 def get_planner_strategy(state: Any | None = None) -> BaseAgentPlannerStrategy:
-    if _planner_strategy_name(state) == "customer_service_hybrid":
+    name = _planner_strategy_name(state)
+
+    # V2 feature flag: 客服策略 + CUSTOMER_SERVICE_VERSION=v2 → 走新架构
+    if name in _CS_STRATEGY_NAMES and settings.CUSTOMER_SERVICE_VERSION == "v2":
+        from backend.app.agents.customer_service_v2.planner import CustomerServiceV2Strategy
+
+        return CustomerServiceV2Strategy()
+
+    if name == "customer_service_hybrid":
         from backend.app.agents.customer_service import CustomerServiceHybridPlannerStrategy
 
         return CustomerServiceHybridPlannerStrategy()
-    if _planner_strategy_name(state) == "customer_service_rules":
+    if name == "customer_service_rules":
         from backend.app.agents.customer_service import CustomerServicePlannerStrategy
 
         return CustomerServicePlannerStrategy()
-    if _planner_strategy_name(state) == "json_plan":
+    if name == "json_plan":
         return JsonPlanStrategy()
     return NativeToolCallingStrategy()
 

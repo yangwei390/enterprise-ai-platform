@@ -228,6 +228,7 @@ class Settings(BaseSettings):
         le=2,
     )
     CUSTOMER_SERVICE_TURN_DEBUG_ENABLED: bool = False
+    CUSTOMER_SERVICE_VERSION: Literal["v1", "v2"] = "v1"
 
     DYNAMIC_TOOL_REGISTRY_ENABLED: bool = True
     TOOL_REGISTRY_AUTO_REFRESH: bool = False
