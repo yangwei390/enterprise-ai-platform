@@ -89,7 +89,10 @@ def collect_customer_service_business_evidence(tool_results: Any) -> list[dict[s
         tool_name = item.get("tool_name")
         if tool_name not in trusted_tools:
             continue
-        if not _has_meaningful_business_result(item.get("result")):
+        result = item.get("result")
+        if result is None:
+            result = item.get("raw_result")
+        if not _has_meaningful_business_result(result):
             continue
         evidence.append({"tool_name": tool_name})
     return evidence

@@ -10,6 +10,8 @@ from backend.app.agents.customer_service_core.schemas import (
     DialogStatus,
     DialogTarget,
     DomainState,
+    ProductRequestConstraints,
+    SlotValue,
 )
 from pydantic import ValidationError
 
@@ -141,6 +143,16 @@ def _migrate_legacy_state(customer_service: dict[str, Any]) -> ConversationDST:
         ),
     )
     product_domain = dst.domains[CustomerServiceDomain.PRODUCT]
+    for name, value in product_domain.filters.items():
+        if (
+            name in ProductRequestConstraints.model_fields
+            and value not in (None, "", [])
+        ):
+            dst.slots[name] = SlotValue(
+                value=value,
+                source="legacy_migration",
+                validated=True,
+            )
     seen_product_refs = customer_service.get("recommended_product_codes")
     product_domain.seen_refs = [
         ref for ref in seen_product_refs or [] if isinstance(ref, str) and ref

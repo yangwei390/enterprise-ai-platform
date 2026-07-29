@@ -767,7 +767,7 @@ class LangGraphAgentRuntime:
             knowledge_base_id=state.get("knowledge_base_id"),
             retrieval_required=bool(metadata.get("retrieval_required")),
             business_tool_evidence=(
-                collect_customer_service_business_evidence(state.get("tool_results"))
+                collect_customer_service_business_evidence(state.get("observations"))
                 if metadata.get("agent_id") == CUSTOMER_SERVICE_AGENT_ID
                 else None
             ),

@@ -50,3 +50,17 @@ def test_empty_customer_service_tool_result_is_not_evidence() -> None:
     assert metadata["evidence_type"] == "none"
     assert metadata["evidence_count"] == 0
     assert metadata["grounded_answer"] is False
+
+
+def test_customer_service_observation_raw_result_is_business_evidence() -> None:
+    business_evidence = collect_customer_service_business_evidence(
+        [
+            {
+                "tool_name": "recommend_products",
+                "success": True,
+                "raw_result": {"items": [{"product": {"product_code": "3"}}]},
+            }
+        ]
+    )
+
+    assert business_evidence == [{"tool_name": "recommend_products"}]

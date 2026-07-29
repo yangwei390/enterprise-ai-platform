@@ -15,6 +15,7 @@ from backend.app.agents.customer_service_core.schemas import (
     HandoffPayload,
     KnowledgePayload,
     OrderPayload,
+    ProductConstraintOperations,
     ProductPayload,
     ProductRequestConstraints,
     TargetResolutionSource,
@@ -242,6 +243,7 @@ def build_contextualized_request(
     recommendation_count: int | None,
     product_resolution_source: TargetResolutionSource,
     constraints: ProductRequestConstraints,
+    constraint_operations: ProductConstraintOperations,
     order_payload: OrderPayload | None,
     identity_fields: Mapping[str, object],
     pending_after_sales: Mapping[str, object],
@@ -255,6 +257,7 @@ def build_contextualized_request(
             recommendation_count=recommendation_count,
             resolution_source=product_resolution_source,
             constraints=constraints,
+            constraint_operations=constraint_operations,
         )
         if intent
         in {

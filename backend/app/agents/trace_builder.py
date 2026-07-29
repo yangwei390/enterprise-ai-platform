@@ -306,6 +306,9 @@ def _evidence_trace(*, metadata: dict, sources: list[dict], citations: list[dict
     return sanitize(
         {
             "evidence_count": metadata.get("evidence_count", 0),
+            "evidence_type": metadata.get("evidence_type", "none"),
+            "evidence_sources": metadata.get("evidence_sources", []),
+            "business_evidence_count": metadata.get("business_evidence_count", 0),
             "source_count": metadata.get("source_count", len(sources)),
             "citation_count": metadata.get("citation_count", len(citations)),
             "no_evidence": metadata.get("no_evidence", False),

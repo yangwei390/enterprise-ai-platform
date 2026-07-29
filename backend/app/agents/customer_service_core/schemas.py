@@ -78,6 +78,42 @@ class ProductRequestConstraints(BaseModel):
     preferred_use_cases: list[str] = Field(default_factory=list, max_length=10)
 
 
+class SlotOperation(StrEnum):
+    SET = "SET"
+    KEEP = "KEEP"
+    REMOVE = "REMOVE"
+
+
+class SlotUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op: SlotOperation = SlotOperation.KEEP
+    value: Any = None
+
+    @model_validator(mode="after")
+    def validate_operation(self) -> SlotUpdate:
+        if self.op == SlotOperation.SET and self.value in (None, "", []):
+            raise ValueError("SET 必须携带非空 value")
+        if self.op != SlotOperation.SET and self.value is not None:
+            raise ValueError("KEEP/REMOVE 不允许携带 value")
+        return self
+
+
+class ProductConstraintOperations(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    keyword: SlotUpdate = Field(default_factory=SlotUpdate)
+    brand: SlotUpdate = Field(default_factory=SlotUpdate)
+    category: SlotUpdate = Field(default_factory=SlotUpdate)
+    model: SlotUpdate = Field(default_factory=SlotUpdate)
+    price_min: SlotUpdate = Field(default_factory=SlotUpdate)
+    price_max: SlotUpdate = Field(default_factory=SlotUpdate)
+    required_features: SlotUpdate = Field(default_factory=SlotUpdate)
+    preferred_features: SlotUpdate = Field(default_factory=SlotUpdate)
+    required_use_cases: SlotUpdate = Field(default_factory=SlotUpdate)
+    preferred_use_cases: SlotUpdate = Field(default_factory=SlotUpdate)
+
+
 class TargetCardinality(StrEnum):
     SINGLE = "single"
     MULTIPLE = "multiple"
@@ -116,9 +152,12 @@ class ProductPayload(BaseModel):
 
     target_product_codes: list[str] = Field(default_factory=list, max_length=5)
     attributes: list[str] = Field(default_factory=list, max_length=5)
-    recommendation_count: int | None = Field(default=None, ge=1, le=5)
+    recommendation_count: int | None = Field(default=None, ge=1, le=100)
     resolution_source: TargetResolutionSource = TargetResolutionSource.UNRESOLVED
     constraints: ProductRequestConstraints = Field(default_factory=ProductRequestConstraints)
+    constraint_operations: ProductConstraintOperations = Field(
+        default_factory=ProductConstraintOperations
+    )
 
 
 class OrderAction(StrEnum):
@@ -195,7 +234,24 @@ class CustomerServiceIntentClassification(BaseModel):
     attributes: list[str] = Field(default_factory=list, max_length=5)
     recommendation_count: int | None = Field(default=None, ge=1, le=5)
     rewritten_query: str | None = None
-    constraints: ProductRequestConstraints = Field(default_factory=ProductRequestConstraints)
+    constraint_operations: ProductConstraintOperations = Field(
+        default_factory=ProductConstraintOperations
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_constraints(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "constraints" not in value:
+            return value
+        migrated = dict(value)
+        constraints = migrated.pop("constraints")
+        if "constraint_operations" not in migrated and isinstance(constraints, dict):
+            migrated["constraint_operations"] = {
+                key: {"op": "SET", "value": item}
+                for key, item in constraints.items()
+                if item not in (None, "", [])
+            }
+        return migrated
 
 
 _INTENT_DOMAIN = {
@@ -410,4 +466,6 @@ class ConversationDST(BaseModel):
     stack: list[TaskFrame] = Field(default_factory=list, max_length=10)
     pending_confirmation: PendingConfirmation | None = None
     last_tool: ToolSnapshot | None = None
+    suppressed_slots: dict[str, str] = Field(default_factory=dict)
+    slot_change_log: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
     error: str | None = None

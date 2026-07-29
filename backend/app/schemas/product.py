@@ -20,6 +20,15 @@ PRODUCT_CATEGORY_VALUES = (
     "游戏控制器",
 )
 PRODUCT_CATEGORY_ALIASES = {
+    "keyboard": "键盘",
+    "mouse": "鼠标和指针设备",
+    "pointing device": "鼠标和指针设备",
+    "headset": "耳机、麦克风和耳麦",
+    "headphone": "耳机、麦克风和耳麦",
+    "microphone": "耳机、麦克风和耳麦",
+    "speaker": "音箱和音响系统",
+    "webcam": "网络摄像头、灯光和摄像系统",
+    "game controller": "游戏控制器",
     "耳机": "耳机、麦克风和耳麦",
     "耳机麦克风和耳机": "耳机、麦克风和耳麦",
     "麦克风": "耳机、麦克风和耳麦",
@@ -34,7 +43,16 @@ def normalize_product_category(value: str) -> str | None:
     cleaned = value.strip()
     if cleaned in PRODUCT_CATEGORY_VALUES:
         return cleaned
-    return PRODUCT_CATEGORY_ALIASES.get(cleaned)
+    return PRODUCT_CATEGORY_ALIASES.get(cleaned.casefold())
+
+
+def extract_product_category(text: str) -> str | None:
+    normalized_text = text.casefold()
+    candidates = (*PRODUCT_CATEGORY_VALUES, *PRODUCT_CATEGORY_ALIASES)
+    for candidate in sorted(candidates, key=len, reverse=True):
+        if candidate.casefold() in normalized_text:
+            return normalize_product_category(candidate)
+    return None
 
 
 def product_category_storage_values(value: str) -> tuple[str, ...]:
@@ -42,7 +60,9 @@ def product_category_storage_values(value: str) -> tuple[str, ...]:
     if canonical is None:
         return (value.strip(),)
     aliases = [
-        alias for alias, target in PRODUCT_CATEGORY_ALIASES.items() if target == canonical
+        alias
+        for alias, target in PRODUCT_CATEGORY_ALIASES.items()
+        if target == canonical and any("\u4e00" <= character <= "\u9fff" for character in alias)
     ]
     return canonical, *aliases
 

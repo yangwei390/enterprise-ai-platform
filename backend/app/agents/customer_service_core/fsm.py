@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from backend.app.agents.customer_service_core.compatibility import (
+    DEFAULT_COMPATIBILITY_PROVIDER,
+    CompatibilityProvider,
+    CompatibilityStatus,
+)
 from backend.app.agents.customer_service_core.schemas import (
     AfterSalesPayload,
     ContextualizedRequest,
@@ -13,6 +18,8 @@ from backend.app.agents.customer_service_core.schemas import (
     KnowledgePayload,
     OrderPayload,
     ProductPayload,
+    ProductRequestConstraints,
+    SlotOperation,
     SlotValue,
     TaskFrame,
 )
@@ -73,7 +80,12 @@ _INTENT_SPECS = {
 }
 
 
-def apply_request(dst: ConversationDST, request: ContextualizedRequest) -> None:
+def apply_request(
+    dst: ConversationDST,
+    request: ContextualizedRequest,
+    *,
+    compatibility_provider: CompatibilityProvider = DEFAULT_COMPATIBILITY_PROVIDER,
+) -> None:
     if (
         dst.active_domain != CustomerServiceDomain.GENERAL
         and request.domain != dst.active_domain
@@ -98,7 +110,16 @@ def apply_request(dst: ConversationDST, request: ContextualizedRequest) -> None:
     dst.raw_query = request.raw_query
     dst.rewritten_query = request.rewritten_query
     dst.error = None
-    dst.slots = _slots_from_request(request)
+    request_slots = _slots_from_request(request)
+    if isinstance(request.payload, ProductPayload):
+        _apply_product_slot_operations(
+            dst,
+            request,
+            request_slots,
+            compatibility_provider=compatibility_provider,
+        )
+    else:
+        dst.slots = request_slots
     spec = _INTENT_SPECS[request.intent]
     dst.required_slots = list(spec.required_slots)
     dst.missing_slots = [
@@ -164,15 +185,6 @@ def _slots_from_request(
         if payload.attributes:
             slots["attributes"] = SlotValue(
                 value=list(payload.attributes),
-                source=request.recognition_source,
-                confidence=request.confidence,
-                validated=True,
-            )
-        for key, value in payload.constraints.model_dump(exclude_none=True).items():
-            if value in ([], ""):
-                continue
-            slots[key] = SlotValue(
-                value=value,
                 source=request.recognition_source,
                 confidence=request.confidence,
                 validated=True,
@@ -245,3 +257,110 @@ def _slots_from_request(
                 validated=True,
             )
     return slots
+
+
+def _apply_product_slot_operations(
+    dst: ConversationDST,
+    request: ContextualizedRequest,
+    request_slots: dict[str, SlotValue],
+    *,
+    compatibility_provider: CompatibilityProvider,
+) -> None:
+    payload = request.payload
+    if not isinstance(payload, ProductPayload):
+        return
+    constraint_names = set(ProductRequestConstraints.model_fields)
+    preserved = {
+        name: value
+        for name, value in dst.slots.items()
+        if name in constraint_names
+    }
+    dst.slots = {**preserved, **request_slots}
+    operations = payload.constraint_operations
+    explicit_set: set[str] = set()
+    previous_category = (
+        dst.slots["category"].value if "category" in dst.slots else None
+    )
+    for name in constraint_names:
+        update = getattr(operations, name)
+        if update.op == SlotOperation.KEEP:
+            continue
+        if update.op == SlotOperation.REMOVE:
+            dst.slots.pop(name, None)
+            dst.suppressed_slots.pop(name, None)
+            _record_slot_change(dst, name, "clear", "user_explicit_remove")
+            continue
+        dst.slots[name] = SlotValue(
+            value=update.value,
+            source=request.recognition_source,
+            confidence=request.confidence,
+            validated=True,
+        )
+        dst.suppressed_slots.pop(name, None)
+        explicit_set.add(name)
+        _record_slot_change(dst, name, "set", "current_turn_explicit")
+
+    current_category = dst.slots.get("category")
+    if "keyword" in explicit_set:
+        for name in ("category", "model"):
+            if name in explicit_set or name not in dst.slots:
+                continue
+            reason = "selector_replaced_by_keyword"
+            dst.suppressed_slots[name] = reason
+            _record_slot_change(dst, name, "suppress", reason)
+    category_changed = (
+        "category" in explicit_set
+        and current_category is not None
+        and current_category.value != previous_category
+    )
+    if not category_changed:
+        return
+    for name in constraint_names - {"category"} - explicit_set:
+        slot = dst.slots.get(name)
+        if slot is None:
+            continue
+        result = compatibility_provider.evaluate(
+            dst=dst,
+            category=str(current_category.value),
+            slot=name,
+            value=slot.value,
+        )
+        if result.status == CompatibilityStatus.COMPATIBLE:
+            dst.suppressed_slots.pop(name, None)
+            continue
+        if result.status == CompatibilityStatus.INCOMPATIBLE:
+            dst.slots.pop(name, None)
+            dst.suppressed_slots.pop(name, None)
+            _record_slot_change(dst, name, "clear", result.reason)
+            continue
+        dst.suppressed_slots[name] = result.reason
+        _record_slot_change(dst, name, "suppress", result.reason)
+
+
+def product_constraints_from_dst(dst: ConversationDST) -> ProductRequestConstraints:
+    values = {
+        name: slot.value
+        for name, slot in dst.slots.items()
+        if name in ProductRequestConstraints.model_fields
+        and name not in dst.suppressed_slots
+        and slot.validated
+        and slot.value not in (None, "", [])
+    }
+    return ProductRequestConstraints.model_validate(values)
+
+
+def _record_slot_change(
+    dst: ConversationDST,
+    slot: str,
+    action: str,
+    reason: str,
+) -> None:
+    dst.slot_change_log.append(
+        {
+            "slot": slot,
+            "action": action,
+            "reason": reason,
+            "revision": dst.revision + 1,
+        }
+    )
+    dst.slot_change_log = dst.slot_change_log[-100:]
