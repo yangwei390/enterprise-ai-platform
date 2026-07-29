@@ -39,6 +39,10 @@ class CustomerServiceV2Strategy(BaseAgentPlannerStrategy):
     name = "customer_service_v2"
 
     async def adecide(self, state: Any) -> AgentDecision:
+        # Tool 已执行过（observations 非空）→ 交给 FinalNode 生成回答
+        if state.get("observations"):
+            return AgentDecision(action="final", content=None)
+
         query = str(state.get("query") or "").strip()
         metadata = state.setdefault("metadata", {})
         session = load_session(metadata)
