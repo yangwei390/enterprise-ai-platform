@@ -2773,7 +2773,9 @@ def _trusted_request_constraints(
     if intent in {
         CustomerServiceIntent.PRODUCT_RECOMMENDATION,
         CustomerServiceIntent.PRODUCT_SEARCH,
-    } and not any(current_values.get(key) for key in ("keyword", "brand", "category", "model")):
+    } and not any(
+        current_values.get(key) for key in ("keyword", "brand", "category", "model")
+    ) and not _is_alternative_recommendation(query):
         query_term = _extract_product_query_term(query)
         if query_term is not None:
             current_values["keyword"] = query_term

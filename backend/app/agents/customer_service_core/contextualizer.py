@@ -196,6 +196,7 @@ def extract_product_query_term(query: str) -> str | None:
         "",
         value,
     ).strip()
+    value = re.sub(r"^(?:那么|那就|那(?:个|款|件|种)?)\s*", "", value).strip()
     if not value or value == query.strip():
         return None
     if value in {"一个", "一款", "商品", "产品", "其他", "别的"}:

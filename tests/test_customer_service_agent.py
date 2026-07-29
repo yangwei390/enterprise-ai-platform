@@ -3542,5 +3542,68 @@ def test_llm_product_switch_keeps_followup_on_latest_product(monkeypatch) -> Non
     ] == ["NEW-1"]
 
 
+def test_llm_alternative_then_category_switch_updates_filters(monkeypatch) -> None:
+    class IntentLLM:
+        supports_tool_calling = True
+
+        def chat(self, _request):
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="classify_customer_service_intent",
+                        arguments={
+                            "intent": "product_recommendation",
+                            "domain": "product",
+                            "action": "recommend_products",
+                            "confidence": 0.99,
+                            "target_references": [],
+                            "attributes": [],
+                            "recommendation_count": 1,
+                            "constraints": {},
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service.LLMFactory.get_llm",
+        lambda **_kwargs: IntentLLM(),
+    )
+    alternative = _state(
+        query="这个不喜欢，还有别的么",
+        customer_service={
+            "product_filters": {"keyword": "鼠标"},
+            "recommendation_list": [{"product_code": "MOUSE-1"}],
+            "recommended_product_codes": ["MOUSE-1"],
+            "active_product_code": "MOUSE-1",
+        },
+    )
+
+    alternative_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(alternative)
+    )
+    alternative_arguments = prepare_customer_service_tool_arguments(
+        state=alternative,
+        tool_name=alternative_decision.tool_calls[0].tool_name,
+        arguments=alternative_decision.tool_calls[0].arguments,
+    )
+
+    assert alternative_arguments["keyword"] == "鼠标"
+    assert alternative_arguments["excluded_product_codes"] == ["MOUSE-1"]
+
+    switched = _state(
+        query="那键盘呢",
+        customer_service=deepcopy(alternative["metadata"]["customer_service"]),
+    )
+    switched_decision = asyncio.run(
+        CustomerServiceHybridPlannerStrategy().adecide(switched)
+    )
+
+    assert switched_decision.tool_calls[0].tool_name == "recommend_products"
+    assert switched_decision.tool_calls[0].arguments["keyword"] == "键盘"
+    assert "excluded_product_codes" not in switched_decision.tool_calls[0].arguments
+
+
 def cast_executor(executor: Any):
     return cast(Any, executor)
