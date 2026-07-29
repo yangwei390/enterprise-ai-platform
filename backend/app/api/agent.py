@@ -260,14 +260,23 @@ def _customer_service_turn_debug(
         return None
     customer_service = result.metadata.get("customer_service")
     trace = result.metadata.get("agent_trace")
+    customer_service_data = customer_service if isinstance(customer_service, dict) else {}
+    runtime_trace = trace if isinstance(trace, dict) else {}
     payload = {
         "input": {
             "query": request.query,
             "conversation_id": request.conversation_id,
             "knowledge_base_id": request.knowledge_base_id,
         },
-        "customer_service": (customer_service if isinstance(customer_service, dict) else {}),
-        "runtime_trace": trace if isinstance(trace, dict) else {},
+        "steps": _customer_service_debug_steps(
+            request=request,
+            result=result,
+            answer=answer,
+            customer_service=customer_service_data,
+            runtime_trace=runtime_trace,
+        ),
+        "customer_service": customer_service_data,
+        "runtime_trace": runtime_trace,
         "tool_calls": result.tool_calls,
         "observations": result.observations,
         "output": {
@@ -277,6 +286,154 @@ def _customer_service_turn_debug(
     }
     sanitized = sanitize(payload)
     return sanitized if isinstance(sanitized, dict) else {}
+
+
+def _customer_service_debug_steps(
+    *,
+    request: AgentStreamRequest,
+    result: AgentChatResponseData,
+    answer: str,
+    customer_service: dict,
+    runtime_trace: dict,
+) -> list[dict]:
+    turn_debug = customer_service.get("turn_debug")
+    turn_debug = turn_debug if isinstance(turn_debug, dict) else {}
+    route = customer_service.get("route")
+    route = route if isinstance(route, dict) else {}
+    contextualized = customer_service.get("contextualized_request")
+    contextualized = contextualized if isinstance(contextualized, dict) else {}
+    payload = contextualized.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    dst_before = turn_debug.get("dst_before")
+    dst_after = turn_debug.get("dst_after") or customer_service.get("dst")
+    directive = turn_debug.get("fsm_directive") or customer_service.get("fsm_directive")
+    evidence = runtime_trace.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+
+    return [
+        _debug_step(
+            1,
+            "输入预处理与前置路由",
+            input_data={"query": request.query},
+            output_data=turn_debug.get("pre_route"),
+            executed=bool(turn_debug.get("pre_route")),
+        ),
+        _debug_step(
+            2,
+            "意图识别",
+            input_data={"query": request.query, "pre_route": turn_debug.get("pre_route")},
+            output_data={
+                "route": route,
+                "llm_classification": turn_debug.get("llm_classification"),
+                "classification_failure_reason": turn_debug.get(
+                    "classification_failure_reason"
+                ),
+            },
+            executed=bool(route),
+        ),
+        _debug_step(
+            3,
+            "上下文化理解",
+            input_data={
+                "raw_query": request.query,
+                "dst_before": dst_before,
+            },
+            output_data={
+                "rewritten_query": contextualized.get("rewritten_query"),
+                "domain": contextualized.get("domain"),
+                "intent": contextualized.get("intent"),
+                "target_references": route.get("target_references"),
+                "target_product_codes": payload.get("target_product_codes"),
+                "constraints": payload.get("constraints"),
+                "order_action": payload.get("action"),
+                "target_order_refs": payload.get("target_order_refs"),
+            },
+            executed=bool(contextualized),
+        ),
+        _debug_step(
+            4,
+            "生成 ContextualizedRequest",
+            input_data={"route": route},
+            output_data=contextualized,
+            executed=bool(contextualized),
+        ),
+        _debug_step(
+            5,
+            "DST 与 FSM 状态更新",
+            input_data={"dst_before": dst_before},
+            output_data={
+                "dst_after": dst_after,
+                "fsm_directive": directive,
+            },
+            executed=dst_after is not None or directive is not None,
+        ),
+        _debug_step(
+            6,
+            "Tool 路由与参数组装",
+            input_data={
+                "intent": contextualized.get("intent") or route.get("intent"),
+                "fsm_directive": directive,
+            },
+            output_data={"tool_calls": result.tool_calls},
+            executed=bool(result.tool_calls),
+            skipped_reason="本轮直接回答，没有选择 Tool",
+        ),
+        _debug_step(
+            7,
+            "业务 Tool 执行",
+            input_data={"tool_calls": result.tool_calls},
+            output_data={"observations": result.observations},
+            executed=bool(result.observations),
+            skipped_reason="本轮没有执行 Tool",
+        ),
+        _debug_step(
+            8,
+            "证据校验",
+            input_data={
+                "observations": result.observations,
+                "retrieval": runtime_trace.get("retrieval"),
+            },
+            output_data={
+                "evidence": evidence,
+                "grounded_answer": result.metadata.get("grounded_answer"),
+                "no_evidence": result.metadata.get("no_evidence"),
+                "source_count": result.metadata.get("source_count"),
+            },
+            executed=bool(evidence)
+            or result.metadata.get("grounded_answer") is not None
+            or result.metadata.get("no_evidence") is not None,
+            skipped_reason="本轮没有需要校验的外部证据",
+        ),
+        _debug_step(
+            9,
+            "最终回答",
+            input_data={
+                "action": result.action,
+                "termination_reason": runtime_trace.get("final_answer"),
+            },
+            output_data={"answer": answer},
+            executed=True,
+        ),
+    ]
+
+
+def _debug_step(
+    number: int,
+    name: str,
+    *,
+    input_data: object,
+    output_data: object,
+    executed: bool,
+    skipped_reason: str | None = None,
+) -> dict:
+    return {
+        "step": number,
+        "name": name,
+        "status": "completed" if executed else "skipped",
+        "input": input_data,
+        "output": output_data,
+        "reason": None if executed else skipped_reason or "本轮没有采集到该步骤结果",
+    }
 
 
 def _sse(event: str, data: dict) -> str:

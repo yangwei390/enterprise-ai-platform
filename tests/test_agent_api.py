@@ -450,6 +450,20 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
     assert debug_trace["customer_service"]["dst"]["status"] == "completed"
     assert debug_trace["runtime_trace"]["graph_nodes"][0]["node"] == "planner"
     assert debug_trace["tool_calls"][0]["arguments"]["order_no"] == "[REDACTED]"
+    assert [step["step"] for step in debug_trace["steps"]] == list(range(1, 10))
+    assert [step["name"] for step in debug_trace["steps"]] == [
+        "输入预处理与前置路由",
+        "意图识别",
+        "上下文化理解",
+        "生成 ContextualizedRequest",
+        "DST 与 FSM 状态更新",
+        "Tool 路由与参数组装",
+        "业务 Tool 执行",
+        "证据校验",
+        "最终回答",
+    ]
+    assert debug_trace["steps"][5]["status"] == "completed"
+    assert debug_trace["steps"][8]["output"]["answer"] == "订单已送达"
     assert "202607240001" not in json.dumps(debug_trace, ensure_ascii=False)
 
 

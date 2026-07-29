@@ -15,6 +15,34 @@ import type { CitationView } from "../types/citation";
 import type { UiChatMessage } from "../types/chat";
 import { buildCitationView } from "../utils/citations";
 
+type CustomerServiceDebugStep = {
+  step: number;
+  name: string;
+  status: string;
+  input: unknown;
+  output: unknown;
+  reason?: string | null;
+};
+
+function customerServiceDebugSteps(
+  trace: Record<string, unknown>
+): CustomerServiceDebugStep[] {
+  if (!Array.isArray(trace.steps)) {
+    return [];
+  }
+  return trace.steps.filter(
+    (step): step is CustomerServiceDebugStep =>
+      typeof step === "object"
+      && step !== null
+      && typeof (step as CustomerServiceDebugStep).step === "number"
+      && typeof (step as CustomerServiceDebugStep).name === "string"
+  );
+}
+
+function debugJson(value: unknown): string {
+  return JSON.stringify(value ?? null, null, 2);
+}
+
 export default function AgentChatPage() {
   const { showToast } = useToast();
   const { agentId } = useParams();
@@ -447,9 +475,35 @@ export default function AgentChatPage() {
                     Close
                   </button>
                 </div>
-                <pre className="debug-trace">
-                  {JSON.stringify(selectedDebugTrace, null, 2)}
-                </pre>
+                {customerServiceDebugSteps(selectedDebugTrace).length > 0 ? (
+                  <div className="debug-step-list">
+                    {customerServiceDebugSteps(selectedDebugTrace).map((step) => (
+                      <section className="debug-step" key={step.step}>
+                        <div className="debug-step-header">
+                          <h3>步骤 {step.step} · {step.name}</h3>
+                          <span className={`debug-step-status ${step.status}`}>
+                            {step.status}
+                          </span>
+                        </div>
+                        {step.reason && <p className="debug-step-reason">{step.reason}</p>}
+                        <strong>输入</strong>
+                        <pre className="debug-trace">{debugJson(step.input)}</pre>
+                        <strong>输出</strong>
+                        <pre className="debug-trace">{debugJson(step.output)}</pre>
+                      </section>
+                    ))}
+                    <details className="debug-raw-details">
+                      <summary>查看完整原始 JSON</summary>
+                      <pre className="debug-trace">
+                        {JSON.stringify(selectedDebugTrace, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                ) : (
+                  <pre className="debug-trace">
+                    {JSON.stringify(selectedDebugTrace, null, 2)}
+                  </pre>
+                )}
               </aside>
             </>
           )}
