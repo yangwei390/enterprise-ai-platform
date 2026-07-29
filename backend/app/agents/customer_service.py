@@ -98,6 +98,9 @@ from backend.app.agents.customer_service_core.resolver import (
     normalized_target_position as _normalized_target_position,
 )
 from backend.app.agents.customer_service_core.resolver import (
+    resolve_target,
+)
+from backend.app.agents.customer_service_core.resolver import (
     resolve_targets as _resolve_targets,
 )
 from backend.app.agents.customer_service_core.router import (
@@ -151,6 +154,21 @@ from backend.app.agents.customer_service_core.schemas import (
 )
 from backend.app.agents.customer_service_core.schemas import (
     source_for_intent as _source_for_customer_service_intent,
+)
+from backend.app.agents.customer_service_core.semantic_rewrite import (
+    from_classification as semantic_from_classification,
+)
+from backend.app.agents.customer_service_core.semantic_rewrite import (
+    merge as merge_semantics,
+)
+from backend.app.agents.customer_service_core.semantic_rewrite import (
+    parse as parse_semantics,
+)
+from backend.app.agents.customer_service_core.semantic_schemas import (
+    OrderSemanticPayload,
+    ProductSemanticPayload,
+    SemanticParseResult,
+    TargetSemantics,
 )
 from backend.app.agents.langgraph.tool_calling import (
     AgentDecision,
@@ -288,6 +306,8 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
         metadata["strict_final_answer"] = False
         runtime_turn_id = current_runtime_turn_id(state)
         metadata["runtime_turn_id"] = runtime_turn_id
+        if _is_prompt_injection(query):
+            return _final("我不能忽略系统规则或绕过工具确认流程。")
         intent, source = _current_customer_service_route(
             metadata,
             query=query,
@@ -307,6 +327,21 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                 intent = CustomerServiceIntent.PRODUCT_SEARCH
                 source = CustomerServiceSource.PRODUCT_CATALOG
         if _current_contextualized_request(metadata, runtime_turn_id) is None:
+            semantics = parse_semantics(
+                query,
+                load_dst(metadata),
+                state.get("messages", []),
+            )
+            semantic_product_payload = (
+                semantics.payload_proposal
+                if isinstance(semantics.payload_proposal, ProductSemanticPayload)
+                else None
+            )
+            semantic_order_payload = (
+                semantics.payload_proposal
+                if isinstance(semantics.payload_proposal, OrderSemanticPayload)
+                else None
+            )
             _store_customer_service_route(
                 metadata,
                 raw_query=query,
@@ -318,8 +353,27 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                     settings.CUSTOMER_SERVICE_INTENT_MODE
                 ),
                 target_references=_extract_target_references(query),
-                attributes=_extract_product_attributes(query),
-                recommendation_count=_requested_recommendation_count(query),
+                target_semantics=semantics.target_semantics,
+                attributes=(
+                    semantic_product_payload.attributes
+                    if semantic_product_payload is not None
+                    else []
+                ),
+                recommendation_count=(
+                    semantic_product_payload.recommendation_count
+                    if semantic_product_payload is not None
+                    else None
+                ),
+                proposed_constraint_operations=(
+                    semantic_product_payload.constraint_ops
+                    if semantic_product_payload is not None
+                    else None
+                ),
+                proposed_action=(
+                    semantic_order_payload.action
+                    if semantic_order_payload is not None
+                    else None
+                ),
             )
         contextualized_request = _current_contextualized_request(
             metadata,
@@ -440,8 +494,6 @@ class CustomerServicePlannerStrategy(BaseAgentPlannerStrategy):
                     return strict_product_final
             return _observation_final(observations[-1])
 
-        if _is_prompt_injection(query):
-            return _final("我不能忽略系统规则或绕过工具确认流程。")
         fsm_guard = _fsm_guard_decision(
             contextualized_request,
             dispatch_plan,
@@ -641,6 +693,8 @@ class CustomerServiceHybridPlannerStrategy(BaseAgentPlannerStrategy):
 
     async def adecide(self, state: Any) -> AgentDecision:
         query = str(state.get("query") or "").strip()
+        if _is_prompt_injection(query):
+            return await CustomerServicePlannerStrategy().adecide(state)
         await _ensure_customer_service_route(state, query)
         rules_decision = await CustomerServicePlannerStrategy().adecide(state)
         if _requires_deterministic_customer_service(state, query):
@@ -2184,6 +2238,7 @@ def _build_order_payload(
     *,
     proposed_action: str | None = None,
     proposed_target_references: list[str] | None = None,
+    target_resolution: Any | None = None,
 ) -> OrderPayload:
     candidates = _order_candidates(metadata)
     candidate_refs = [
@@ -2234,7 +2289,7 @@ def _build_order_payload(
         if action in {OrderAction.LIST, OrderAction.COUNT, OrderAction.COMPARE}
         else TargetCardinality.SINGLE
     )
-    resolution = _resolve_targets(
+    resolution = target_resolution or _resolve_targets(
         candidate_ids=candidate_refs,
         explicit_ids=([explicit_ref] if explicit_ref else proposed_explicit_refs or None),
         ordinal_indices=(
@@ -2248,7 +2303,9 @@ def _build_order_payload(
         ),
     )
     clarification_required = cardinality == TargetCardinality.SINGLE and (
-        has_untrusted_proposed_reference or resolution.out_of_range
+        has_untrusted_proposed_reference
+        or resolution.out_of_range
+        or resolution.clarification_required
     )
     clarification_question = None
     if clarification_required:
@@ -2397,62 +2454,56 @@ async def _ensure_customer_service_route(state: Any, query: str) -> None:
         return
 
     intent_mode = CustomerServiceIntentMode(settings.CUSTOMER_SERVICE_INTENT_MODE)
-    rule_intent, rule_source = _customer_service_route(query)
+    rule_semantics = parse_semantics(
+        query,
+        load_dst(metadata),
+        state.get("messages", []),
+    )
     if settings.CUSTOMER_SERVICE_TURN_DEBUG_ENABLED:
         metadata.setdefault("customer_service", {})["turn_debug"] = {
             "input": {"query": query, "runtime_turn_id": runtime_turn_id},
             "pre_route": {
                 "intent_mode": intent_mode,
-                "rule_intent": rule_intent,
-                "rule_source": rule_source,
+                "rule_intent": rule_semantics.intent or CustomerServiceIntent.OTHER,
+                "rule_source": _source_for_customer_service_intent(
+                    rule_semantics.intent or CustomerServiceIntent.OTHER
+                ),
+                "rule_semantics": rule_semantics.model_dump(mode="json"),
             },
         }
     if _pending_after_sales(metadata) is not None:
-        rule_intent = CustomerServiceIntent.AFTER_SALES
-        rule_source = CustomerServiceSource.AFTER_SALES_WORKFLOW
-    if rule_intent == CustomerServiceIntent.OTHER:
-        if _is_compare(query):
-            rule_intent = CustomerServiceIntent.PRODUCT_COMPARISON
-            rule_source = CustomerServiceSource.PRODUCT_CATALOG
-        elif _is_recommend(query):
-            rule_intent = CustomerServiceIntent.PRODUCT_RECOMMENDATION
-            rule_source = CustomerServiceSource.PRODUCT_CATALOG
-        elif _is_product_search(query):
-            rule_intent = CustomerServiceIntent.PRODUCT_SEARCH
-            rule_source = CustomerServiceSource.PRODUCT_CATALOG
-    if rule_intent == CustomerServiceIntent.OTHER and _is_order_context_followup(metadata, query):
-        rule_intent = CustomerServiceIntent.ORDER_QUERY
-        rule_source = CustomerServiceSource.ORDER_SERVICE
-    inherited_intent = _inherited_product_fact_intent(metadata, query)
-    if rule_intent == CustomerServiceIntent.OTHER and inherited_intent is not None:
-        rule_intent = inherited_intent
-        rule_source = _source_for_customer_service_intent(inherited_intent)
-    if (
-        intent_mode == CustomerServiceIntentMode.RULE_ONLY
+        rule_semantics = semantic_from_classification(
+            CustomerServiceIntentClassification(
+                intent=CustomerServiceIntent.AFTER_SALES,
+                domain=CustomerServiceDomain.AFTER_SALES,
+                confidence=1,
+            ),
+            query,
+        )
+
+    should_call_llm = (
+        intent_mode == CustomerServiceIntentMode.LLM_ONLY
         or (
             intent_mode == CustomerServiceIntentMode.HYBRID
-            and rule_intent != CustomerServiceIntent.OTHER
+            and rule_semantics.needs_llm
         )
-        or _must_use_deterministic_intent_route(state, query)
-    ):
-        _store_customer_service_route(
-            metadata,
-            raw_query=query,
-            intent=rule_intent,
-            source=rule_source,
-            runtime_turn_id=runtime_turn_id,
-            classifier="rules",
-            intent_mode=intent_mode,
-            target_references=_extract_target_references(query),
-            attributes=_extract_product_attributes(query),
-            recommendation_count=_requested_recommendation_count(query),
+    ) and not _must_use_deterministic_intent_route(state, query)
+    classification: CustomerServiceIntentClassification | None = None
+    failure_reason: str | None = None
+    merged_semantics = rule_semantics
+    if should_call_llm:
+        classification, failure_reason = await _classify_customer_service_intent(
+            state,
+            query,
+            rule_semantics=rule_semantics,
         )
-        return
-
-    classification, failure_reason = await _classify_customer_service_intent(
-        state,
-        query,
-    )
+        if classification is not None and classification.confidence >= 0.6:
+            llm_semantics = semantic_from_classification(classification, query)
+            merged_semantics = (
+                llm_semantics
+                if intent_mode == CustomerServiceIntentMode.LLM_ONLY
+                else merge_semantics(rule_semantics, llm_semantics)
+            )
     if settings.CUSTOMER_SERVICE_TURN_DEBUG_ENABLED:
         turn_debug = metadata.setdefault("customer_service", {}).setdefault(
             "turn_debug",
@@ -2462,82 +2513,74 @@ async def _ensure_customer_service_route(state: Any, query: str) -> None:
             classification.model_dump(mode="json") if classification is not None else None
         )
         turn_debug["classification_failure_reason"] = failure_reason
-    if classification is None or classification.confidence < 0.6:
-        if intent_mode == CustomerServiceIntentMode.LLM_ONLY:
-            _store_customer_service_route(
-                metadata,
-                raw_query=query,
-                intent=CustomerServiceIntent.OTHER,
-                source=CustomerServiceSource.PLANNER,
-                runtime_turn_id=runtime_turn_id,
-                classifier="llm_failed",
-                intent_mode=intent_mode,
-                confidence=(classification.confidence if classification is not None else None),
-                fallback_reason=failure_reason or "low_confidence",
-                clarification_question=(
-                    "我暂时无法准确理解您的需求，请补充要查询的商品、订单或具体问题。"
-                ),
-            )
-            return
-        _store_customer_service_route(
-            metadata,
-            raw_query=query,
-            intent=rule_intent,
-            source=rule_source,
-            runtime_turn_id=runtime_turn_id,
-            classifier="rules_fallback",
-            intent_mode=intent_mode,
-            confidence=(classification.confidence if classification is not None else None),
-            fallback_reason=failure_reason or "low_confidence",
-            target_references=(
-                classification.target_references
-                if classification is not None
-                else _extract_target_references(query)
-            ),
-            attributes=(
-                classification.attributes
-                if classification is not None
-                else _extract_product_attributes(query)
-            ),
-            recommendation_count=(
-                classification.recommendation_count
-                if classification is not None
-                else _requested_recommendation_count(query)
-            ),
-            rewritten_query=(
-                classification.rewritten_query if classification is not None else None
-            ),
-            proposed_constraint_operations=(
-                classification.constraint_operations if classification is not None else None
-            ),
+        turn_debug["merged_semantics"] = merged_semantics.model_dump(mode="json")
+
+    intent = merged_semantics.intent or CustomerServiceIntent.OTHER
+    confidence = classification.confidence if classification is not None else None
+    llm_failed = should_call_llm and (
+        classification is None or classification.confidence < 0.6
+    )
+    unresolved = bool(merged_semantics.gaps or merged_semantics.conflicts)
+    if intent_mode == CustomerServiceIntentMode.LLM_ONLY and llm_failed:
+        intent = CustomerServiceIntent.OTHER
+        unresolved = True
+    payload = merged_semantics.payload_proposal
+    product_payload = payload if isinstance(payload, ProductSemanticPayload) else None
+    order_payload = payload if isinstance(payload, OrderSemanticPayload) else None
+    clarification_question = (
+        classification.clarification_question
+        if classification is not None
+        and classification.needs_clarification
+        and classification.clarification_question
+        else (
+            "我暂时无法准确理解您的需求，请补充要查询的商品、订单或具体问题。"
+            if unresolved
+            else None
         )
-        return
+    )
     _store_customer_service_route(
         metadata,
         raw_query=query,
-        intent=classification.intent,
-        source=_source_for_customer_service_intent(classification.intent),
+        intent=intent,
+        source=_source_for_customer_service_intent(intent),
         runtime_turn_id=runtime_turn_id,
-        classifier="llm",
+        classifier=(
+            "llm_failed"
+            if llm_failed and intent_mode == CustomerServiceIntentMode.LLM_ONLY
+            else "rules_fallback"
+            if llm_failed
+            else "llm"
+            if should_call_llm
+            else "rules"
+        ),
         intent_mode=intent_mode,
-        confidence=classification.confidence,
-        target_references=classification.target_references,
-        attributes=classification.attributes,
-        recommendation_count=classification.recommendation_count,
-        rewritten_query=classification.rewritten_query,
-        proposed_constraint_operations=classification.constraint_operations,
-        proposed_action=classification.action,
-        clarification_question=(
-            classification.clarification_question
-            if classification.needs_clarification
+        confidence=confidence,
+        fallback_reason=(failure_reason or "low_confidence") if llm_failed else None,
+        target_references=_extract_target_references(query),
+        target_semantics=merged_semantics.target_semantics,
+        attributes=product_payload.attributes if product_payload is not None else [],
+        recommendation_count=(
+            product_payload.recommendation_count
+            if product_payload is not None
             else None
         ),
+        proposed_constraint_operations=(
+            product_payload.constraint_ops
+            if product_payload is not None
+            else None
+        ),
+        proposed_action=(
+            order_payload.action if order_payload is not None else None
+        ),
+        clarification_question=clarification_question,
     )
 
 
 async def _classify_customer_service_intent(
     state: Any,
     query: str,
+    *,
+    rule_semantics: SemanticParseResult | None = None,
 ) -> tuple[CustomerServiceIntentClassification | None, str | None]:
     model = get_customer_service_intent_llm_config().model
     attempts = settings.CUSTOMER_SERVICE_INTENT_LLM_MAX_RETRIES + 1
@@ -2547,6 +2590,7 @@ async def _classify_customer_service_intent(
             state,
             query,
             model=model,
+            rule_semantics=rule_semantics,
         )
         if classification is not None:
             expected_domain = _domain_for_customer_service_intent(classification.intent)
@@ -2582,6 +2626,7 @@ async def _classify_customer_service_intent_once(
     query: str,
     *,
     model: str,
+    rule_semantics: SemanticParseResult | None = None,
 ) -> tuple[CustomerServiceIntentClassification | None, str]:
     tool_name = "classify_customer_service_intent"
     try:
@@ -2593,7 +2638,11 @@ async def _classify_customer_service_intent_once(
         response = await asyncio.to_thread(
             llm.chat,
             LLMRequest(
-                messages=_intent_classifier_messages(state, query),
+                messages=_intent_classifier_messages(
+                    state,
+                    query,
+                    rule_semantics=rule_semantics,
+                ),
                 model=model,
                 temperature=0,
                 tools=[
@@ -2635,7 +2684,12 @@ async def _classify_customer_service_intent_once(
         return None, "schema_validation_failed"
 
 
-def _intent_classifier_messages(state: Any, query: str) -> list[LLMMessage]:
+def _intent_classifier_messages(
+    state: Any,
+    query: str,
+    *,
+    rule_semantics: SemanticParseResult | None = None,
+) -> list[LLMMessage]:
     metadata = state.get("metadata", {})
     dst = load_dst(metadata)
     candidate_history = _product_candidate_history(metadata)
@@ -2719,6 +2773,17 @@ def _intent_classifier_messages(state: Any, query: str) -> list[LLMMessage]:
             ),
         ),
     ]
+    if rule_semantics is not None:
+        messages.append(
+            LLMMessage(
+                role="system",
+                content=(
+                    "本地规则仅提供候选语义，不能覆盖用户明确表达："
+                    f"{rule_semantics.model_dump(mode='json')!r}。"
+                    "请只补齐 gaps、消解歧义；若与明确字段冲突必须要求澄清。"
+                ),
+            )
+        )
     memory_messages = build_bounded_message_context(state.get("messages", []))
     for item in memory_messages:
         if not isinstance(item, dict):
@@ -2780,120 +2845,6 @@ def _current_contextualized_request(
         return ContextualizedRequest.model_validate(value)
     except ValidationError:
         return None
-
-
-def _validated_target_codes(
-    metadata: dict[str, Any],
-    target_references: list[str],
-    *,
-    raw_query: str,
-) -> tuple[list[str], str | None, TargetResolutionSource]:
-    current_candidates = _recommendation_candidates(metadata)
-    candidate_history = _unique_product_candidates(
-        _product_candidate_history(metadata)
-    )
-    explicit_category = extract_product_category(raw_query)
-    if explicit_category is not None:
-        candidates = [
-            candidate
-            for candidate in candidate_history
-            if candidate.get("category") is None
-            or normalize_product_category(str(candidate.get("category"))) == explicit_category
-        ]
-        if not candidates:
-            return (
-                [],
-                "我无法根据当前会话记录确定您指的是哪款商品，请说明商品名称或型号。",
-                TargetResolutionSource.UNRESOLVED,
-            )
-    else:
-        candidates = current_candidates
-    if not target_references:
-        return [], None, TargetResolutionSource.UNRESOLVED
-    candidate_ids = [str(candidate["product_code"]) for candidate in candidates]
-    positions = {
-        "first": 0,
-        "second": 1,
-        "third": 2,
-        "fourth": 3,
-        "fifth": 4,
-        "top": 0,
-        "former": 0,
-    }
-    explicit_ids: list[str] = []
-    ordinal_indices: list[int] = []
-    for reference in target_references:
-        normalized = reference.strip().casefold()
-        index = positions.get(normalized)
-        if normalized in {"bottom", "latter"} and candidates:
-            index = len(candidates) - 1
-        if index is not None:
-            ordinal_indices.append(index)
-            continue
-        explicit_candidate_pool = _unique_product_candidates(
-            [*current_candidates, *candidate_history]
-        )
-        matched = [
-            str(candidate["product_code"])
-            for candidate in explicit_candidate_pool
-            if normalized
-            in {
-                str(candidate.get(key) or "").strip().casefold()
-                for key in ("product_code", "name", "model")
-            }
-        ]
-        if len(matched) == 1 and matched[0] not in explicit_ids:
-            explicit_ids.append(matched[0])
-        elif explicit_codes := [
-            code for code in _extract_product_codes(raw_query) if code.casefold() == normalized
-        ]:
-            if explicit_codes[0] not in explicit_ids:
-                explicit_ids.append(explicit_codes[0])
-        elif normalized and normalized in raw_query.casefold():
-            if reference not in explicit_ids:
-                explicit_ids.append(reference)
-        elif candidates:
-            return (
-                [],
-                "没有在当前推荐列表中找到您指的商品，请说明商品名称或序号。",
-                TargetResolutionSource.UNRESOLVED,
-            )
-        else:
-            return (
-                [],
-                "当前没有可引用的商品，请说明商品名称或型号。",
-                TargetResolutionSource.UNRESOLVED,
-            )
-    resolution = _resolve_targets(
-        candidate_ids=candidate_ids,
-        explicit_ids=explicit_ids,
-        ordinal_indices=ordinal_indices,
-        policy=TargetResolutionPolicy(
-            cardinality=(
-                TargetCardinality.MULTIPLE
-                if len(target_references) > 1
-                else TargetCardinality.SINGLE
-            )
-        ),
-    )
-    if resolution.out_of_range:
-        return (
-            [],
-            f"当前只有 {len(candidates)} 个候选商品，请选择有效序号。",
-            resolution.source,
-        )
-    if explicit_category is not None:
-        by_code = {
-            str(candidate["product_code"]): candidate
-            for candidate in candidates
-        }
-        if any(code not in by_code for code in resolution.resolved_ids):
-            return (
-                [],
-                "我无法确认目标商品与您描述的类别一致，请说明商品名称或型号。",
-                TargetResolutionSource.UNRESOLVED,
-            )
-    return resolution.resolved_ids, None, resolution.source
 
 
 def _trusted_constraint_operations(
@@ -3034,9 +2985,9 @@ def _store_customer_service_route(
     confidence: float | None = None,
     fallback_reason: str | None = None,
     target_references: list[str] | None = None,
+    target_semantics: TargetSemantics | None = None,
     attributes: list[str] | None = None,
     recommendation_count: int | None = None,
-    rewritten_query: str | None = None,
     proposed_constraint_operations: ProductConstraintOperations | None = None,
     proposed_action: str | None = None,
     clarification_question: str | None = None,
@@ -3063,6 +3014,18 @@ def _store_customer_service_route(
         route["recommendation_count"] = recommendation_count
     customer_service = metadata.setdefault("customer_service", {})
     customer_service["route"] = route
+    try:
+        validated_action = (
+            OrderAction(proposed_action) if proposed_action is not None else None
+        )
+    except ValueError:
+        validated_action = None
+    target_resolution = resolve_target(
+        intent=intent,
+        semantics=target_semantics,
+        dst=load_dst(metadata),
+        action=validated_action,
+    )
     is_product_intent = intent in {
         CustomerServiceIntent.PRODUCT_RECOMMENDATION,
         CustomerServiceIntent.PRODUCT_SEARCH,
@@ -3075,18 +3038,33 @@ def _store_customer_service_route(
         CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
         CustomerServiceIntent.PRODUCT_COMPARISON,
     }
-    (
-        target_product_codes,
-        target_clarification_question,
-        product_resolution_source,
-    ) = (
-        _validated_target_codes(
-            metadata,
-            target_references or [],
-            raw_query=raw_query,
+    target_product_codes = (
+        target_resolution.resolved_ids if requires_product_target else []
+    )
+    target_clarification_question = (
+        (
+            "我无法根据当前会话记录确定您指的是哪款商品，请说明商品名称或型号。"
+            if target_semantics is not None
+            and target_semantics.category_hint is not None
+            and not target_resolution.out_of_range
+            else "没有在当前推荐列表中找到您指的商品，请说明商品名称或序号。"
+            if target_semantics is not None
+            and target_semantics.explicit_ref is not None
+            and target_semantics.explicit_ref_source is not None
+            and target_semantics.explicit_ref_source.value == "inferred"
+            else _target_clarification_question(
+                metadata,
+                domain=CustomerServiceDomain.PRODUCT,
+                out_of_range=target_resolution.out_of_range,
+            )
         )
+        if requires_product_target and target_resolution.clarification_required
+        else None
+    )
+    product_resolution_source = (
+        target_resolution.source
         if requires_product_target
-        else ([], None, TargetResolutionSource.UNRESOLVED)
+        else TargetResolutionSource.UNRESOLVED
     )
     constraint_operations = (
         _trusted_constraint_operations(
@@ -3116,7 +3094,7 @@ def _store_customer_service_route(
         order_payload=None,
         identity_fields={},
         pending_after_sales={},
-        rewritten_query=rewritten_query,
+        rewritten_query=raw_query,
         clarification_question=None,
     )
     apply_request(projected_dst, projected_request)
@@ -3128,6 +3106,7 @@ def _store_customer_service_route(
             intent,
             proposed_action=proposed_action,
             proposed_target_references=target_references,
+            target_resolution=target_resolution,
         )
         if intent
         in {
@@ -3164,7 +3143,11 @@ def _store_customer_service_route(
         order_payload=order_payload,
         identity_fields=identity_fields,
         pending_after_sales=pending_after_sales,
-        rewritten_query=rewritten_query,
+        rewritten_query=_canonical_rewritten_query(
+            raw_query,
+            intent=intent,
+            resolved_ids=target_resolution.resolved_ids,
+        ),
         clarification_question=effective_clarification,
     )
     customer_service[_CONTEXTUALIZED_REQUEST_KEY] = request.model_dump(mode="json")
@@ -3186,3 +3169,45 @@ def _store_customer_service_route(
         CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
     }:
         customer_service[_LAST_PRODUCT_FACT_INTENT_KEY] = intent
+
+
+def _target_clarification_question(
+    metadata: dict[str, Any],
+    *,
+    domain: CustomerServiceDomain,
+    out_of_range: bool,
+) -> str:
+    if domain == CustomerServiceDomain.PRODUCT:
+        product_domain = load_dst(metadata).domains.get(CustomerServiceDomain.PRODUCT)
+        count = len(product_domain.candidates) if product_domain is not None else 0
+        return (
+            f"当前只有 {count} 个候选商品，请选择有效序号。"
+            if out_of_range
+            else "当前有多个候选商品，或缺少可确认的候选记录；请说明商品名称或型号。"
+        )
+    return "我无法确定您指的是哪个订单，请说明订单序号。"
+
+
+def _canonical_rewritten_query(
+    raw_query: str,
+    *,
+    intent: CustomerServiceIntent,
+    resolved_ids: list[str],
+) -> str:
+    if not resolved_ids:
+        return raw_query
+    target = "、".join(resolved_ids)
+    if intent in {
+        CustomerServiceIntent.PRODUCT_REALTIME_FACT,
+        CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
+        CustomerServiceIntent.PRODUCT_COMPARISON,
+    }:
+        return f"针对商品编码 {target}：{raw_query}"
+    if intent in {
+        CustomerServiceIntent.ORDER_QUERY,
+        CustomerServiceIntent.LOGISTICS_QUERY,
+        CustomerServiceIntent.AFTER_SALES,
+        CustomerServiceIntent.HUMAN_HANDOFF,
+    }:
+        return f"针对订单 {target}：{raw_query}"
+    return raw_query

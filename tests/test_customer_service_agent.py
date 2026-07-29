@@ -1326,7 +1326,7 @@ def test_contextualized_request_resolves_llm_reference_to_trusted_product(
     request = state["metadata"]["customer_service"]["contextualized_request"]
 
     assert decision.tool_calls[0].arguments["keyword"] == "MX4"
-    assert request["rewritten_query"] == "查询 MX4 的按键数量"
+    assert request["rewritten_query"] == "针对商品编码 MX4：第二个呢"
     assert request["domain"] == "product"
     assert request["payload"]["target_product_codes"] == ["MX4"]
     assert request["source"] == "primary_manual"
@@ -1648,7 +1648,7 @@ def test_customer_turn_debug_records_route_request_and_dst_change(monkeypatch) -
     asyncio.run(CustomerServiceHybridPlannerStrategy().adecide(state))
 
     turn_debug = state["metadata"]["customer_service"]["turn_debug"]
-    assert turn_debug["pre_route"]["rule_intent"] == "other"
+    assert turn_debug["pre_route"]["rule_intent"] == "product_recommendation"
     assert turn_debug["contextualized_request"]["intent"] == "product_recommendation"
     assert turn_debug["dst_before"]["status"] == "idle"
     assert turn_debug["dst_after"]["status"] == "ready_to_execute"

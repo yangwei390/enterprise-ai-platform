@@ -8,6 +8,8 @@
 - `dst.py`：DST 的加载、迁移、校验与原子状态更新。
 - `router.py`：安全前置路由与确定性意图规则。
 - `contextualizer.py`：显式字段提取、请求重写与 LLM 输出规范化。
+- `semantic_schemas.py`：语义提取、字段来源与业务域候选载荷的数据契约。
+- `semantic_rewrite.py`：基于用户原话、受控记忆和 DST 生成候选语义，不解析真实目标。
 - `resolver.py`：基于可信 DST 的通用目标解析。
 - `fsm.py`：状态转移、槽位检查、打断和恢复。
 - `dispatcher.py`：把 FSM 指令转换为业务执行计划。
