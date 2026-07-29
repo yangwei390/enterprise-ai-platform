@@ -3695,7 +3695,9 @@ def test_llm_product_switch_keeps_followup_on_latest_product(monkeypatch) -> Non
     }
 
 
-def test_llm_clarification_blocks_tool_execution(monkeypatch) -> None:
+def test_empty_candidates_blocks_fact_query(monkeypatch) -> None:
+    """product_document_fact 无候选时，resolver 确定性追问，不依赖 LLM。"""
+
     class IntentLLM:
         supports_tool_calling = True
 
@@ -3712,8 +3714,6 @@ def test_llm_clarification_blocks_tool_execution(monkeypatch) -> None:
                             "target_references": [],
                             "attributes": ["connectivity"],
                             "constraints": {},
-                            "needs_clarification": True,
-                            "clarification_question": "请说明您要查询哪款商品。",
                         },
                     )
                 ]
@@ -3738,7 +3738,7 @@ def test_llm_clarification_blocks_tool_execution(monkeypatch) -> None:
 
     assert decision.action == "final"
     assert decision.tool_calls == []
-    assert decision.content == "请说明您要查询哪款商品。"
+    assert "商品" in decision.content
 
 
 def test_llm_alternative_then_category_switch_updates_filters(monkeypatch) -> None:

@@ -224,6 +224,13 @@ class GeneralPayload(BaseModel):
 
 
 class CustomerServiceIntentClassification(BaseModel):
+    """LLM 意图分类器输出。
+
+    注意：此 schema 同时作为 LLM tool_calling 的 parameters schema。
+    LLM 只负责语义理解（意图/实体/约束），不负责流程控制。
+    是否追问由后端代码根据 resolver 结果和置信度确定性判定。
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     intent: CustomerServiceIntent
@@ -234,25 +241,20 @@ class CustomerServiceIntentClassification(BaseModel):
     attributes: list[str] = Field(default_factory=list, max_length=5)
     recommendation_count: int | None = Field(default=None, ge=1, le=5)
     rewritten_query: str | None = None
-    needs_clarification: bool = False
-    clarification_question: str | None = Field(default=None, max_length=300)
     constraint_operations: ProductConstraintOperations = Field(
         default_factory=ProductConstraintOperations
     )
 
-    @model_validator(mode="after")
-    def validate_clarification(self) -> CustomerServiceIntentClassification:
-        if self.needs_clarification and not self.clarification_question:
-            raise ValueError("needs_clarification=true 时必须提供 clarification_question")
-        return self
-
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy_constraints(cls, value: Any) -> Any:
-        if not isinstance(value, dict) or "constraints" not in value:
+        if not isinstance(value, dict):
             return value
         migrated = dict(value)
-        constraints = migrated.pop("constraints")
+        # 剥离流程控制字段：LLM 不再有权决定是否追问
+        migrated.pop("needs_clarification", None)
+        migrated.pop("clarification_question", None)
+        constraints = migrated.pop("constraints", None)
         if "constraint_operations" not in migrated and isinstance(constraints, dict):
             migrated["constraint_operations"] = {
                 key: {"op": "SET", "value": item}
