@@ -308,12 +308,11 @@ def _apply_product_slot_operations(
             reason = "selector_replaced_by_keyword"
             dst.suppressed_slots[name] = reason
             _record_slot_change(dst, name, "suppress", reason)
-    category_changed = (
-        "category" in explicit_set
-        and current_category is not None
-        and current_category.value != previous_category
-    )
-    if not category_changed:
+    if (
+        "category" not in explicit_set
+        or current_category is None
+        or current_category.value == previous_category
+    ):
         return
     for name in constraint_names - {"category"} - explicit_set:
         slot = dst.slots.get(name)

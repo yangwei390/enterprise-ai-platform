@@ -1,4 +1,4 @@
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from backend.app.agents.langgraph.budget import AgentExecutionBudget
 
@@ -29,6 +29,7 @@ class AgentState(TypedDict):
     knowledge_base_id: NotRequired[int | None]
     allowed_knowledge_base_ids: NotRequired[list[int]]
     memory_context: NotRequired[str | None]
+    customer_service_execution: NotRequired[dict[str, Any]]
 
 
 def create_initial_state(
@@ -59,7 +60,7 @@ def create_initial_state(
         budget=AgentExecutionBudget.from_settings().model_dump(),
         metadata={
             **metadata,
-            "runtime": "langgraph_v2",
+            "runtime": "langgraph",
             "trace": [],
             "agent_loop": {
                 "enabled": True,

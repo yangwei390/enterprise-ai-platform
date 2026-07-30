@@ -7,9 +7,12 @@ from typing import cast
 
 from backend.app.agents.customer_service import (
     evaluate_customer_service_tool_policy,
-    prepare_customer_service_tool_arguments,
-    update_customer_service_state_after_tool,
 )
+from backend.app.agents.customer_service_core.hooks import (
+    commit_tool_result,
+    prepare_tool_arguments,
+)
+from backend.app.agents.customer_service_core.presenter import CustomerServicePresenter
 from backend.app.agents.evidence import (
     NO_EVIDENCE_ANSWER,
     build_evidence_metadata,
@@ -129,7 +132,7 @@ class ToolNode:
 
         executable_calls: list[AgentToolCall] = []
         for tool_call in pending:
-            prepared_arguments = prepare_customer_service_tool_arguments(
+            prepared_arguments = prepare_tool_arguments(
                 state=state,
                 tool_name=tool_call.tool_name,
                 arguments=tool_call.arguments,
@@ -347,7 +350,7 @@ class ToolNode:
         if tool_call.tool_name == "knowledge_search" and isinstance(public_result, dict):
             state["knowledge"] = public_result
             _update_knowledge_metadata(state, public_result)
-        update_customer_service_state_after_tool(
+        commit_tool_result(
             state=state,
             tool_name=tool_call.tool_name,
             arguments=tool_call.arguments,
@@ -386,8 +389,19 @@ class ObservationNode:
                 }
             )
         state["observations"].extend(observations)
-        should_reflect, reason = ReflectionGate().should_reflect(state)
-        state["current_action"] = "reflect" if should_reflect else "planner"
+        execution = state.get("customer_service_execution")
+        phase = execution.get("phase") if isinstance(execution, dict) else None
+        if phase in {"READY_FOR_FINAL", "READY_FOR_CLARIFICATION", "FAILED"}:
+            should_reflect, reason = False, None
+            state["current_action"] = "final"
+            if phase == "FAILED" and not state.get("final_answer"):
+                state["final_answer"] = "本次业务操作未成功，可信状态未发生变化。"
+        elif phase == "CONTINUE":
+            should_reflect, reason = False, None
+            state["current_action"] = "planner"
+        else:
+            should_reflect, reason = ReflectionGate().should_reflect(state)
+            state["current_action"] = "reflect" if should_reflect else "planner"
         if should_reflect:
             state["metadata"].setdefault("reflection", {})["triggered"] = True
             state["metadata"].setdefault("reflection", {})["last_reason"] = reason
@@ -554,6 +568,19 @@ class FinalNode:
         messages.append({"role": "assistant", "content": answer})
 
     def _build_answer(self, state: AgentState) -> str:
+        if isinstance(state.get("customer_service_execution"), dict):
+            answer = CustomerServicePresenter().present(state)
+            state.setdefault("metadata", {}).setdefault("customer_service", {}).setdefault(
+                "execution_details",
+                {},
+            ).update(
+                {
+                    "final_evidence": state.get("knowledge")
+                    or state.get("observations", []),
+                    "final_answer": answer,
+                }
+            )
+            return answer
         knowledge = state.get("knowledge")
         if _requires_evidence(state) and not has_evidence(
             knowledge if isinstance(knowledge, dict) else None

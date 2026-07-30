@@ -1,4 +1,4 @@
-# 通用记忆 + 语义改写 开发方案（v4 最终版）
+# 通用记忆 + 语义改写正式方案
 
 ## 现状：已有什么
 
@@ -478,12 +478,3 @@ customer_service.py 的 adecide() 只保留：安全前置路由 → 语义 Pipe
 1. 步骤 10 是大改——建议步骤 1-9 先做稳，每步验证，步骤 10 最后做。
 2. 步骤 4-5 迁移 _validated_target_codes 是高风险操作，必须先跑新旧对比。
 3. _filter_by_category_recent_first 按追加顺序倒序，不依赖 batch_id 格式。
-
-## 版本演进
-
-| 版本 | 变化 |
-|------|------|
-| v1 | 初版方案 |
-| v2 | 解析器不重复、explicit/inferred 分级、冲突进追问、全业务域、最近批次优先 |
-| v3 | llm_only 必调、hybrid 含 critical_inferred、evidence_text 验证、安全前置、按域分发、schemas 独立 |
-| v4 | TargetResolution 不加 question（Pipeline 生成追问）、FSM guard 后置、跨域订单解析、LLM 永远 inferred 无升级路径、FieldProposal 只覆盖冲突字段、每步验证 |
