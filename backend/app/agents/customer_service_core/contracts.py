@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ExecutionPhase(StrEnum):
@@ -66,6 +66,44 @@ class ProductCandidateBatch(BaseModel):
     items: list[CandidateProduct] = Field(default_factory=list, max_length=20)
 
 
+ProductQuestionPredicate = Literal[
+    "bluetooth_connectivity",
+    "charging",
+    "compatibility",
+    "price",
+    "features",
+    "buttons",
+]
+
+
+class ProductQuestionFocus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    predicate: ProductQuestionPredicate
+    batch_id: str
+
+
+class PendingProductQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str
+    keyword: str
+    requested_count: int = Field(default=1, ge=1, le=5)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    created_turn_id: str
+
+
+class ProductContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_category: str | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+    active_batch: ProductCandidateBatch | None = None
+    active_product_code: str | None = None
+    last_question: ProductQuestionFocus | None = None
+    pending_query: PendingProductQuery | None = None
+
+
 class PendingAfterSales(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -79,14 +117,39 @@ class PendingAfterSales(BaseModel):
 class CustomerServiceState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    filters: dict[str, Any] = Field(default_factory=dict)
-    candidate_batches: list[ProductCandidateBatch] = Field(default_factory=list, max_length=8)
-    active_product_code: str | None = None
+    product: ProductContext = Field(default_factory=ProductContext)
     order_candidates: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     active_order_ref: str | None = None
     pending_after_sales: PendingAfterSales | None = None
     clarification_target: str | None = None
     clarification_rounds: int = Field(default=0, ge=0, le=2)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_product_state(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "product" in value:
+            return value
+        migrated = dict(value)
+        filters = migrated.pop("filters", {})
+        raw_batches = migrated.pop("candidate_batches", [])
+        active_product_code = migrated.pop("active_product_code", None)
+        latest_batch = raw_batches[-1] if isinstance(raw_batches, list) and raw_batches else None
+        if isinstance(latest_batch, ProductCandidateBatch):
+            latest_batch = latest_batch.model_dump(mode="python")
+        category = filters.get("category") if isinstance(filters, dict) else None
+        if category is None and isinstance(latest_batch, dict):
+            category = latest_batch.get("category")
+            if category is None:
+                items = latest_batch.get("items")
+                if isinstance(items, list) and items and isinstance(items[0], dict):
+                    category = items[0].get("category")
+        migrated["product"] = {
+            "active_category": category,
+            "filters": filters if isinstance(filters, dict) else {},
+            "active_batch": latest_batch,
+            "active_product_code": active_product_code,
+        }
+        return migrated
 
 
 class SearchProductsCommand(BaseModel):

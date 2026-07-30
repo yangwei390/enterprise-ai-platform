@@ -32,6 +32,7 @@ class CommandBuildResult(BaseModel):
     clarification: str | None = None
     resolution: EntityResolution | None = None
     expected_result_type: str = "unknown"
+    state_action: str | None = None
 
 
 def build_command(
@@ -42,16 +43,23 @@ def build_command(
 ) -> CommandBuildResult:
     state = preview.proposed_state
     if frame.intent == "blocked":
-        return CommandBuildResult(
-            direct_answer="我不能忽略系统规则或绕过工具确认流程。"
-        )
+        return CommandBuildResult(direct_answer="我不能忽略系统规则或绕过工具确认流程。")
     if frame.intent == "greeting":
         return CommandBuildResult(
             direct_answer="你好，我可以协助查询商品、说明书、订单物流、售后和转人工。"
         )
     if frame.intent == "other":
+        return CommandBuildResult(clarification="请说明您要查询的商品、订单或具体问题。")
+    if frame.intent == "product_query_confirmation":
+        category = frame.slots.get("category")
+        keyword = frame.slots.get("keyword")
+        if not isinstance(category, str) or not isinstance(keyword, str):
+            return CommandBuildResult(clarification="请说明需要重新查询的商品品类。")
         return CommandBuildResult(
-            clarification="请说明您要查询的商品、订单或具体问题。"
+            direct_answer=(
+                f"抱歉，我目前不清楚您指的是哪款{keyword}。需要我重新为您查询{keyword}吗？"
+            ),
+            state_action="set_pending_product_query",
         )
     if frame.intent == "cancel":
         if state.pending_after_sales is None:
@@ -71,7 +79,8 @@ def build_command(
             expected_result_type="after_sales_confirm",
         )
     if frame.intent in {"recommend_products", "search_products"}:
-        filters = dict(state.filters)
+        filters = dict(state.product.filters)
+        filters.pop("confirmed_pending_product_query", None)
         page_size = frame.requested_count or 3
         command_type = (
             RecommendProductsCommand
@@ -113,9 +122,7 @@ def build_command(
                 )
         product_codes = list(dict.fromkeys(product_codes))
         if len(product_codes) < 2:
-            return CommandBuildResult(
-                clarification="请明确选择两个要对比的商品。"
-            )
+            return CommandBuildResult(clarification="请明确选择两个要对比的商品。")
         return CommandBuildResult(
             command=CompareProductsCommand(product_codes=product_codes[:5]),
             expected_result_type="product_comparison",
@@ -174,9 +181,7 @@ def build_command(
                     command=QueryOrderCommand(),
                     expected_result_type="order_list_for_logistics",
                 )
-            return CommandBuildResult(
-                clarification="请从当前订单列表中选择要查询物流的订单。"
-            )
+            return CommandBuildResult(clarification="请从当前订单列表中选择要查询物流的订单。")
         if _requires_order_verification(frame, runtime, order_ref):
             return CommandBuildResult(
                 command=QueryOrderCommand(order_ref=order_ref),
@@ -219,9 +224,7 @@ def build_command(
         order_ref = _resolved_order_ref(frame, state)
         phone_last4 = frame.slots.get("phone_last4")
         if order_ref is None or not isinstance(phone_last4, str):
-            return CommandBuildResult(
-                clarification="请提供需要转人工处理的订单和手机号后四位。"
-            )
+            return CommandBuildResult(clarification="请提供需要转人工处理的订单和手机号后四位。")
         if _requires_order_verification(frame, runtime, order_ref):
             return CommandBuildResult(
                 command=QueryOrderCommand(order_ref=order_ref),
@@ -244,7 +247,22 @@ def _resolve_product(
 ) -> EntityResolution:
     if frame.references:
         return resolve_product_reference(frame.references[0], state)
-    latest = state.candidate_batches[-1] if state.candidate_batches else None
+    latest = state.product.active_batch
+    if latest and state.product.active_product_code:
+        item = next(
+            (
+                candidate
+                for candidate in latest.items
+                if candidate.product_code == state.product.active_product_code
+            ),
+            None,
+        )
+        if item is not None:
+            return EntityResolution(
+                status=ResolutionStatus.RESOLVED,
+                product_codes=[item.product_code],
+                candidates=[item],
+            )
     if latest and len(latest.items) == 1:
         item = latest.items[0]
         return EntityResolution(

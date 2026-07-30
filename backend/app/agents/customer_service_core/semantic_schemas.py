@@ -40,9 +40,7 @@ class TargetSemantics(BaseModel):
 class ProductSemanticPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    constraint_ops: ProductConstraintOperations = Field(
-        default_factory=ProductConstraintOperations
-    )
+    constraint_ops: ProductConstraintOperations = Field(default_factory=ProductConstraintOperations)
     attributes: list[str] = Field(default_factory=list, max_length=5)
     recommendation_count: int | None = Field(default=None, ge=1, le=100)
 

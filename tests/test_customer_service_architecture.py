@@ -20,8 +20,11 @@ from backend.app.agents.customer_service_core.contracts import (
     ExecutionPhase,
     GoalSnapshot,
     KnowledgeSearchCommand,
+    PendingProductQuery,
     PendingTransaction,
     ProductCandidateBatch,
+    ProductContext,
+    ProductQuestionFocus,
     QueryLogisticsCommand,
     QueryOrderCommand,
     RecommendProductsCommand,
@@ -35,8 +38,9 @@ from backend.app.agents.customer_service_core.entity_resolver import (
 from backend.app.agents.customer_service_core.hooks import evaluate_tool_policy
 from backend.app.agents.customer_service_core.reducer import preview_product_filters
 from backend.app.agents.customer_service_core.strategy import CustomerServiceStrategy
+from backend.app.agents.customer_service_core.understanding import understand
 from backend.app.agents.langgraph.budget import AgentExecutionBudget
-from backend.app.agents.langgraph.nodes import FinalNode, ObservationNode, ToolNode
+from backend.app.agents.langgraph.nodes import FinalNode, ObservationNode, PlannerNode, ToolNode
 from backend.app.tools.base import ToolResult
 from backend.app.tools.builtin.customer_service import (
     CompareProductsTool,
@@ -107,7 +111,7 @@ def test_every_command_validates_against_real_tool_schema(command) -> None:
     tool.args_schema.model_validate(arguments)
 
 
-def test_category_switch_keeps_only_stable_slots_and_explicit_new_values() -> None:
+def test_category_switch_removes_all_old_filters() -> None:
     state = CustomerServiceState(
         filters={
             "category": "鼠标和指针设备",
@@ -122,18 +126,192 @@ def test_category_switch_keeps_only_stable_slots_and_explicit_new_values() -> No
         state,
         {"category": "键盘", "required_features": ["机械轴"], "keyword": "无线"},
     )
-    assert state.filters["category"] == "鼠标和指针设备"
-    assert preview.filters == {
-        "brand": "Logitech",
-        "price_max": 500,
+    assert state.product.filters["category"] == "鼠标和指针设备"
+    assert preview.product.filters == {
         "category": "键盘",
         "required_features": ["机械轴"],
         "keyword": "无线",
     }
-    assert patch == {"filters": preview.filters}
+    assert patch == {
+        "product_filters": preview.product.filters,
+        "invalidate_product_context": True,
+    }
 
 
-def test_ordinal_resolves_only_inside_recent_relevant_batch() -> None:
+def test_product_context_keeps_only_one_active_batch() -> None:
+    batch = ProductCandidateBatch(
+        batch_id="mouse-1",
+        query="推荐鼠标",
+        category="鼠标和指针设备",
+        items=[
+            CandidateProduct(
+                product_code="M-1",
+                name="Mouse One",
+                category="鼠标和指针设备",
+                batch_id="mouse-1",
+                position=0,
+            )
+        ],
+    )
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            active_batch=batch,
+            active_product_code="M-1",
+        )
+    )
+
+    assert state.product.active_batch == batch
+    assert not hasattr(state.product, "candidate_batches")
+
+
+def test_category_switch_preview_clears_old_product_context() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            filters={"category": "鼠标和指针设备", "price_max": 300},
+            active_batch=ProductCandidateBatch(
+                batch_id="mouse-1",
+                query="推荐鼠标",
+                category="鼠标和指针设备",
+                items=[
+                    CandidateProduct(
+                        product_code="M-1",
+                        name="Mouse One",
+                        category="鼠标和指针设备",
+                        batch_id="mouse-1",
+                        position=0,
+                    )
+                ],
+            ),
+            active_product_code="M-1",
+            last_question=ProductQuestionFocus(
+                predicate="bluetooth_connectivity",
+                batch_id="mouse-1",
+            ),
+        )
+    )
+
+    preview, patch = preview_product_filters(
+        state,
+        {"category": "键盘", "keyword": "键盘"},
+    )
+
+    assert preview.product.active_category == "键盘"
+    assert preview.product.active_batch is None
+    assert preview.product.active_product_code is None
+    assert preview.product.last_question is None
+    assert preview.product.filters == {"category": "键盘", "keyword": "键盘"}
+    assert patch["invalidate_product_context"] is True
+
+
+def test_same_category_recommendation_inherits_filters() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            filters={"category": "鼠标和指针设备", "price_max": 300},
+        )
+    )
+
+    preview, patch = preview_product_filters(state, {})
+
+    assert preview.product.filters == {
+        "category": "鼠标和指针设备",
+        "price_max": 300,
+    }
+    assert patch["invalidate_product_context"] is False
+
+
+def test_ordinal_cannot_resolve_a_different_category() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="键盘",
+            active_batch=ProductCandidateBatch(
+                batch_id="keyboard-1",
+                query="推荐键盘",
+                category="键盘",
+                items=[
+                    CandidateProduct(
+                        product_code="K-1",
+                        name="Keyboard One",
+                        category="键盘",
+                        batch_id="keyboard-1",
+                        position=0,
+                    )
+                ],
+            ),
+        )
+    )
+
+    resolution = resolve_product_reference(
+        ReferenceExpression(text="第一个鼠标", ordinal=0, category_hint="鼠标"),
+        state,
+    )
+
+    assert resolution.status == ResolutionStatus.NOT_FOUND
+
+
+def test_confirmation_uses_pending_product_query_without_llm() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            pending_query=PendingProductQuery(
+                category="鼠标和指针设备",
+                keyword="鼠标",
+                requested_count=1,
+                created_turn_id="turn-1",
+            )
+        )
+    )
+
+    result = asyncio.run(understand(query="对", state=state, messages=[]))
+
+    assert result.llm_used is False
+    assert result.frame.intent == "recommend_products"
+    assert result.frame.slots["category"] == "鼠标和指针设备"
+    assert result.frame.requested_count == 1
+
+
+def test_ordinal_only_followup_inherits_question_inside_current_batch() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            active_batch=ProductCandidateBatch(
+                batch_id="mouse-1",
+                query="推荐鼠标",
+                category="鼠标和指针设备",
+                items=[
+                    CandidateProduct(
+                        product_code="M-1",
+                        name="Mouse One",
+                        category="鼠标和指针设备",
+                        batch_id="mouse-1",
+                        position=0,
+                    ),
+                    CandidateProduct(
+                        product_code="M-2",
+                        name="Mouse Two",
+                        category="鼠标和指针设备",
+                        batch_id="mouse-1",
+                        position=1,
+                    ),
+                ],
+            ),
+            last_question=ProductQuestionFocus(
+                predicate="bluetooth_connectivity",
+                batch_id="mouse-1",
+            ),
+        )
+    )
+
+    result = asyncio.run(understand(query="第一个呢", state=state, messages=[]))
+
+    assert result.llm_used is False
+    assert result.frame.intent == "product_fact"
+    assert result.frame.question == "该商品支持蓝牙吗"
+    assert result.frame.references[0].ordinal == 0
+
+
+def test_ordinal_does_not_search_an_old_product_batch() -> None:
     state = CustomerServiceState(
         candidate_batches=[
             ProductCandidateBatch(
@@ -168,8 +346,7 @@ def test_ordinal_resolves_only_inside_recent_relevant_batch() -> None:
         ReferenceExpression(text="第一款鼠标", ordinal=0, category_hint="鼠标"),
         state,
     )
-    assert resolution.status == ResolutionStatus.RESOLVED
-    assert resolution.product_codes == ["M-1"]
+    assert resolution.status == ResolutionStatus.NOT_FOUND
 
 
 def test_explicit_entity_outside_pool_requires_tool_verification() -> None:
@@ -261,9 +438,7 @@ def test_result_contract_failure_never_pollutes_business_state() -> None:
 def test_verified_product_then_bound_manual_rag_end_to_end() -> None:
     command = SearchProductsCommand(product_code="P-1")
     state = _agent_state_for(command)
-    execution = CustomerServiceExecution.model_validate(
-        state["customer_service_execution"]
-    )
+    execution = CustomerServiceExecution.model_validate(state["customer_service_execution"])
     execution.phase = ExecutionPhase.WAITING_TOOL
     execution.goal = GoalSnapshot(raw_query="P-1 支持蓝牙吗")
     execution.pending_transaction.expected_result_type = "product_verification_for_manual"
@@ -303,9 +478,7 @@ def test_verified_product_then_bound_manual_rag_end_to_end() -> None:
     assert decision.tool_calls[0].arguments["document_id"] == 77
     assert decision.tool_calls[0].arguments["knowledge_base_id"] == 9
 
-    state["pending_tool_calls"] = [
-        item.model_dump(mode="json") for item in decision.tool_calls
-    ]
+    state["pending_tool_calls"] = [item.model_dump(mode="json") for item in decision.tool_calls]
     asyncio.run(ToolNode(_KnowledgeExecutor()).acall(state))
     asyncio.run(ObservationNode().acall(state))
     asyncio.run(FinalNode().acall(state))
@@ -323,10 +496,8 @@ def test_strategy_does_not_copy_stream_runtime_objects() -> None:
         "metadata": {
             "_agent_stream_event_queue": queue,
             "_agent_stream_future": future,
-            "customer_service": {
-                "state": CustomerServiceState().model_dump(mode="json")
-            },
-        }
+            "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+        },
     }
 
     decision = asyncio.run(CustomerServiceStrategy().adecide(state))
@@ -395,9 +566,187 @@ def test_product_multiturn_keeps_category_excludes_seen_and_resolves_latest() ->
     fourth = _plan_turn("第一个，能充电么？", metadata)
     fourth_args = fourth["decision"].tool_calls[0].arguments
     assert fourth_args["product_code"] == "2"
-    assert fourth["state"]["customer_service_execution"]["pending_transaction"][
-        "expected_result_type"
-    ] == "product_verification_for_manual"
+    assert (
+        fourth["state"]["customer_service_execution"]["pending_transaction"]["expected_result_type"]
+        == "product_verification_for_manual"
+    )
+
+
+def test_category_switch_failure_does_not_restore_old_product_context() -> None:
+    old_state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            filters={"category": "鼠标和指针设备"},
+            active_batch=ProductCandidateBatch(
+                batch_id="mouse-1",
+                query="推荐鼠标",
+                category="鼠标和指针设备",
+                items=[
+                    CandidateProduct(
+                        product_code="M-1",
+                        name="Mouse One",
+                        category="鼠标和指针设备",
+                        batch_id="mouse-1",
+                        position=0,
+                    )
+                ],
+            ),
+            active_product_code="M-1",
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": old_state.model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("给我推荐一个键盘", metadata)
+
+    invalidated = CustomerServiceState.model_validate(metadata["customer_service"]["state"])
+    assert invalidated.product == ProductContext()
+    tool_call = planned["decision"].tool_calls[0]
+    committed = CommitCoordinator().commit(
+        agent_state=planned["state"],
+        tool_name=tool_call.tool_name,
+        arguments=tool_call.arguments,
+        result=ToolResult(
+            name=tool_call.tool_name,
+            success=False,
+            error="database unavailable",
+        ),
+    )
+    assert committed is False
+    assert (
+        CustomerServiceState.model_validate(metadata["customer_service"]["state"]).product
+        == ProductContext()
+    )
+
+
+def test_single_product_result_is_automatically_selected() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+    planned = _plan_turn("给我推荐一个鼠标", metadata)
+
+    _commit_planned_products(
+        planned["state"],
+        planned["decision"],
+        [
+            {
+                "product_code": "M-1",
+                "name": "Mouse One",
+                "category": "鼠标和指针设备",
+            }
+        ],
+    )
+
+    product = CustomerServiceState.model_validate(metadata["customer_service"]["state"]).product
+    assert product.active_product_code == "M-1"
+    assert product.active_batch is not None
+    assert [item.product_code for item in product.active_batch.items] == ["M-1"]
+
+
+def test_old_category_question_then_confirmation_runs_new_query() -> None:
+    keyboard = CustomerServiceState(
+        product=ProductContext(
+            active_category="键盘",
+            filters={"category": "键盘"},
+            active_batch=ProductCandidateBatch(
+                batch_id="keyboard-1",
+                query="推荐键盘",
+                category="键盘",
+                items=[
+                    CandidateProduct(
+                        product_code="K-1",
+                        name="Keyboard One",
+                        category="键盘",
+                        batch_id="keyboard-1",
+                        position=0,
+                    )
+                ],
+            ),
+            active_product_code="K-1",
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": keyboard.model_dump(mode="json")},
+    }
+
+    clarification = _plan_turn("鼠标多少钱", metadata)
+
+    assert clarification["decision"].tool_calls == []
+    assert "重新为您查询鼠标吗" in str(clarification["decision"].content)
+    pending_state = CustomerServiceState.model_validate(metadata["customer_service"]["state"])
+    assert pending_state.product.active_batch is None
+    assert pending_state.product.pending_query is not None
+
+    confirmed = _plan_turn("对", metadata)
+
+    assert confirmed["decision"].tool_calls[0].tool_name == "recommend_products"
+    assert confirmed["decision"].tool_calls[0].arguments["category"] == "鼠标和指针设备"
+    assert confirmed["decision"].tool_calls[0].arguments["page_size"] == 1
+
+
+def test_streaming_customer_service_final_never_calls_final_llm(monkeypatch) -> None:
+    async def fail_collect(*args, **kwargs):
+        raise AssertionError("customer service final must not call an LLM")
+
+    monkeypatch.setattr(
+        "backend.app.agents.langgraph.nodes.collect_streaming_answer",
+        fail_collect,
+    )
+    queue = asyncio.Queue()
+    state = {
+        "query": "推荐鼠标",
+        "messages": [{"role": "user", "content": "推荐鼠标"}],
+        "observations": [
+            {
+                "tool_name": "recommend_products",
+                "success": True,
+                "raw_result": {
+                    "items": [
+                        {
+                            "product": {
+                                "product_code": "M-1",
+                                "name": "Mouse One",
+                            }
+                        }
+                    ]
+                },
+            }
+        ],
+        "metadata": {
+            "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+            "_agent_stream_answer_enabled": True,
+            "_agent_stream_event_queue": queue,
+        },
+    }
+
+    result = asyncio.run(FinalNode().acall(state))
+
+    assert result["final_answer"] == "1. Mouse One"
+    assert queue.get_nowait() == {
+        "event": "answer_delta",
+        "data": {"delta": "1. Mouse One"},
+    }
+
+
+def test_rule_only_customer_service_turn_does_not_increment_llm_count() -> None:
+    state = {
+        "query": "你好",
+        "messages": [{"role": "user", "content": "你好"}],
+        "metadata": {
+            "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+            "planner_strategy": "customer_service",
+            "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+        },
+    }
+
+    result = asyncio.run(PlannerNode().acall(state))
+
+    assert result["llm_call_count"] == 0
+    assert result["final_answer"]
 
 
 def test_order_list_then_ordinal_logistics_uses_trusted_candidate() -> None:
@@ -434,9 +783,12 @@ def test_explicit_order_is_verified_before_logistics() -> None:
     first_call = planned["decision"].tool_calls[0]
     assert first_call.tool_name == "query_order"
     assert first_call.arguments == {"order_ref": "202607240001"}
-    assert planned["state"]["customer_service_execution"]["pending_transaction"][
-        "expected_result_type"
-    ] == "order_verification_for_logistics"
+    assert (
+        planned["state"]["customer_service_execution"]["pending_transaction"][
+            "expected_result_type"
+        ]
+        == "order_verification_for_logistics"
+    )
 
     _commit_tool_result(
         planned["state"],
@@ -501,9 +853,12 @@ def test_explicit_order_is_verified_before_after_sales_draft() -> None:
     )
     first_call = planned["decision"].tool_calls[0]
     assert first_call.tool_name == "query_order"
-    assert planned["state"]["customer_service_execution"]["pending_transaction"][
-        "expected_result_type"
-    ] == "order_verification_for_after_sales"
+    assert (
+        planned["state"]["customer_service_execution"]["pending_transaction"][
+            "expected_result_type"
+        ]
+        == "order_verification_for_after_sales"
+    )
 
     _commit_tool_result(
         planned["state"],

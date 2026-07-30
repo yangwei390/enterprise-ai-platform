@@ -30,15 +30,10 @@ def resolve_product_reference(
     reference: ReferenceExpression,
     state: CustomerServiceState,
 ) -> EntityResolution:
-    all_items = [
-        item
-        for batch in state.candidate_batches
-        for item in batch.items
-    ]
+    batch = state.product.active_batch
+    all_items = batch.items if batch is not None else []
     if reference.explicit_code:
-        matched = [
-            item for item in all_items if item.product_code == reference.explicit_code
-        ]
+        matched = [item for item in all_items if item.product_code == reference.explicit_code]
         if matched:
             return EntityResolution(
                 status=ResolutionStatus.RESOLVED,
@@ -51,11 +46,7 @@ def resolve_product_reference(
         )
     if reference.explicit_name:
         normalized = reference.explicit_name.casefold()
-        matched = [
-            item
-            for item in all_items
-            if normalized in item.name.casefold()
-        ]
+        matched = [item for item in all_items if normalized in item.name.casefold()]
         if len(matched) == 1:
             return EntityResolution(
                 status=ResolutionStatus.RESOLVED,
@@ -72,10 +63,10 @@ def resolve_product_reference(
             verification_query={"keyword": reference.explicit_name},
         )
     if reference.ordinal is not None:
-        batch = _recent_relevant_batch(state, reference.category_hint)
-        if batch is None or reference.ordinal >= len(batch):
+        items = _active_batch_items(state, reference.category_hint)
+        if items is None or reference.ordinal >= len(items):
             return EntityResolution(status=ResolutionStatus.NOT_FOUND)
-        item = batch[reference.ordinal]
+        item = items[reference.ordinal]
         return EntityResolution(
             status=ResolutionStatus.RESOLVED,
             product_codes=[item.product_code],
@@ -84,25 +75,21 @@ def resolve_product_reference(
     return EntityResolution(status=ResolutionStatus.AMBIGUOUS)
 
 
-def _recent_relevant_batch(
+def _active_batch_items(
     state: CustomerServiceState,
     category_hint: str | None,
 ) -> list[CandidateProduct] | None:
-    for batch in reversed(state.candidate_batches):
-        items = batch.items
-        if category_hint is not None:
-            items = [
-                item
-                for item in items
-                if item.category is not None
-                and (
-                    category_hint in item.category
-                    or item.category in category_hint
-                )
-            ]
-        if items:
-            return sorted(items, key=lambda item: item.position)
-    return None
+    batch = state.product.active_batch
+    if batch is None:
+        return None
+    if (
+        category_hint is not None
+        and state.product.active_category is not None
+        and category_hint not in state.product.active_category
+        and state.product.active_category not in category_hint
+    ):
+        return None
+    return sorted(batch.items, key=lambda item: item.position)
 
 
 def explicit_order_requires_verification(

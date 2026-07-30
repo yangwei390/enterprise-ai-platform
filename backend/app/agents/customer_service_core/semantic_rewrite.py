@@ -99,11 +99,15 @@ def parse(
         gaps.append("intent_proposal")
     if domain_proposal is None:
         gaps.append("domain_proposal")
-    if intent in {
-        CustomerServiceIntent.PRODUCT_REALTIME_FACT,
-        CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
-        CustomerServiceIntent.PRODUCT_COMPARISON,
-    } and target_semantics is None:
+    if (
+        intent
+        in {
+            CustomerServiceIntent.PRODUCT_REALTIME_FACT,
+            CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,
+            CustomerServiceIntent.PRODUCT_COMPARISON,
+        }
+        and target_semantics is None
+    ):
         gaps.append("target_semantics")
     if (
         isinstance(payload, ProductSemanticPayload)
@@ -174,11 +178,7 @@ def merge(
         rule.payload_proposal,
         llm.payload_proposal,
     )
-    result.gaps = [
-        gap
-        for gap in result.gaps
-        if not _gap_is_filled(result, gap)
-    ]
+    result.gaps = [gap for gap in result.gaps if not _gap_is_filled(result, gap)]
     result.needs_llm = False
     return result
 
@@ -232,21 +232,18 @@ def _target_semantics_from_references(
             CustomerServiceIntent.AFTER_SALES,
             CustomerServiceIntent.HUMAN_HANDOFF,
         }
-        else product_codes[0] if product_codes else None
+        else product_codes[0]
+        if product_codes
+        else None
     )
     semantic_reference_ids = [
         item
         for item in references
-        if item not in _ORDINALS
-        and item not in {"bottom", "latter", "it", "this", "that"}
+        if item not in _ORDINALS and item not in {"bottom", "latter", "it", "this", "that"}
     ]
     explicit_refs = list(
         dict.fromkeys(
-            [
-                value
-                for value in [explicit_ref, *semantic_reference_ids]
-                if value is not None
-            ]
+            [value for value in [explicit_ref, *semantic_reference_ids] if value is not None]
         )
     )
     if explicit_ref is None and explicit_refs:
@@ -254,10 +251,7 @@ def _target_semantics_from_references(
     model = extract_model(raw_query)
     category = extract_product_category(raw_query)
     reference_text = next(iter(references), None)
-    if all(
-        item is None
-        for item in (ordinal, explicit_ref, model, category, reference_text)
-    ):
+    if all(item is None for item in (ordinal, explicit_ref, model, category, reference_text)):
         return None
     return TargetSemantics(
         ordinal=ordinal,
@@ -377,8 +371,7 @@ def _is_meaningful_keyword(value: str) -> bool:
     if any(character.isdigit() for character in value):
         return False
     return not any(
-        token in value
-        for token in ("容易", "适合", "预算", "区间", "个人用", "两个人用")
+        token in value for token in ("容易", "适合", "预算", "区间", "个人用", "两个人用")
     )
 
 
@@ -458,10 +451,7 @@ def _merge_payloads(rule, llm):
     for field_name in type(rule).model_fields:
         current = getattr(rule, field_name)
         proposed = getattr(llm, field_name)
-        if (
-            isinstance(rule, ProductSemanticPayload)
-            and field_name == "constraint_ops"
-        ):
+        if isinstance(rule, ProductSemanticPayload) and field_name == "constraint_ops":
             merged.constraint_ops = _merge_constraint_operations(current, proposed)
             continue
         if (
@@ -484,11 +474,7 @@ def _merge_constraint_operations(
     for field_name in ProductConstraintOperations.model_fields:
         rule_update = getattr(rule, field_name)
         llm_update = getattr(llm, field_name)
-        values[field_name] = (
-            rule_update
-            if rule_update.op != SlotOperation.KEEP
-            else llm_update
-        )
+        values[field_name] = rule_update if rule_update.op != SlotOperation.KEEP else llm_update
     return ProductConstraintOperations.model_validate(values)
 
 
@@ -503,11 +489,7 @@ def _has_explicit_intent_signal(
         CustomerServiceIntent.PRODUCT_SEARCH,
         CustomerServiceIntent.PRODUCT_COMPARISON,
     }:
-        return (
-            is_recommend(raw_query)
-            or is_product_search(raw_query)
-            or is_compare(raw_query)
-        )
+        return is_recommend(raw_query) or is_product_search(raw_query) or is_compare(raw_query)
     if intent in {
         CustomerServiceIntent.PRODUCT_REALTIME_FACT,
         CustomerServiceIntent.PRODUCT_DOCUMENT_FACT,

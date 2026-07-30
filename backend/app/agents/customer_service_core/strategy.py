@@ -15,7 +15,9 @@ from backend.app.agents.customer_service_core.contracts import (
     ExecutionPhase,
     GoalSnapshot,
     KnowledgeSearchCommand,
+    PendingProductQuery,
     PendingTransaction,
+    ProductContext,
     StatePreview,
     TransactionStatus,
 )
@@ -58,11 +60,7 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             semantic_frame=understanding.frame,
         )
         details["safety"] = {
-            "status": (
-                "blocked"
-                if understanding.frame.intent == "blocked"
-                else "passed"
-            )
+            "status": ("blocked" if understanding.frame.intent == "blocked" else "passed")
         }
         details["understanding"] = understanding.model_dump(mode="json")
         details["merge"] = understanding.merge
@@ -74,14 +72,34 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             preview=preview,
             runtime=self._runtime_scope(state),
         )
-        details["resolution"] = (
-            build.resolution.model_dump(mode="json") if build.resolution else {}
-        )
+        details["resolution"] = build.resolution.model_dump(mode="json") if build.resolution else {}
         execution.goal.resolved_entities = (
             build.resolution.product_codes if build.resolution else []
         )
         if build.direct_answer is not None:
-            if understanding.frame.intent == "cancel":
+            if build.state_action == "set_pending_product_query":
+                category = understanding.frame.slots.get("category")
+                keyword = understanding.frame.slots.get("keyword")
+                if not isinstance(category, str) or not isinstance(keyword, str):
+                    return self._fail(
+                        state,
+                        execution,
+                        "pending_product_query_contract_failed",
+                    )
+                preview.proposed_state.product = ProductContext(
+                    pending_query=PendingProductQuery(
+                        category=category,
+                        keyword=keyword,
+                        requested_count=understanding.frame.requested_count or 1,
+                        created_turn_id=execution.turn_id,
+                    )
+                )
+                CommitCoordinator().commit_preview(
+                    agent_state=state,
+                    state=preview.proposed_state,
+                )
+                details["state_commit"] = preview.proposed_state.model_dump(mode="json")
+            elif understanding.frame.intent == "cancel":
                 CommitCoordinator().commit_preview(
                     agent_state=state,
                     state=preview.proposed_state,
@@ -98,6 +116,14 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             return self._final(build.clarification)
         if build.command is None:
             return self._fail(state, execution, "command_missing")
+        if preview.proposed_patch.get("invalidate_product_context") is True:
+            invalidated = business_state.model_copy(deep=True)
+            invalidated.product = ProductContext()
+            CommitCoordinator().commit_preview(
+                agent_state=state,
+                state=invalidated,
+            )
+            details["state_invalidation"] = invalidated.model_dump(mode="json")
         return self._tool_decision(
             state=state,
             execution=execution,
@@ -237,9 +263,7 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
     @staticmethod
     def _business_state(state: dict[str, Any]) -> CustomerServiceState:
         return CustomerServiceState.model_validate(
-            state.get("metadata", {})
-            .get("customer_service", {})
-            .get("state", {})
+            state.get("metadata", {}).get("customer_service", {}).get("state", {})
         )
 
     @staticmethod
@@ -247,10 +271,7 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
         raw = state.get("customer_service_execution")
         if isinstance(raw, dict):
             return CustomerServiceExecution.model_validate(raw)
-        turn_id = str(
-            state.get("metadata", {}).get("runtime_turn_id")
-            or f"turn_{uuid4().hex}"
-        )
+        turn_id = str(state.get("metadata", {}).get("runtime_turn_id") or f"turn_{uuid4().hex}")
         execution = CustomerServiceExecution(turn_id=turn_id)
         state["customer_service_execution"] = execution.model_dump(mode="json")
         return execution
@@ -264,18 +285,14 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             "conversation_id": state.get("conversation_id"),
             "knowledge_base_id": state.get("knowledge_base_id"),
             "allowed_knowledge_base_ids": state.get("allowed_knowledge_base_ids", []),
-            "verified_order_ref": (
-                execution.verified_order_ref if execution is not None else None
-            ),
+            "verified_order_ref": (execution.verified_order_ref if execution is not None else None),
         }
 
     @staticmethod
     def _allowed_knowledge_base_id(state: dict[str, Any]) -> int | None:
         knowledge_base_id = state.get("knowledge_base_id")
         allowed = {
-            value
-            for value in state.get("allowed_knowledge_base_ids", [])
-            if isinstance(value, int)
+            value for value in state.get("allowed_knowledge_base_ids", []) if isinstance(value, int)
         }
         return (
             knowledge_base_id

@@ -73,9 +73,8 @@ def _resolve_product_target(
         explicit_refs = semantics.explicit_refs or [semantics.explicit_ref]
         trusted_refs = {item.ref for item in state.candidates}
         trusted_refs.update(item.ref for item in state.candidate_history)
-        if (
-            semantics.explicit_ref_source != FieldSource.EXPLICIT
-            and any(item not in trusted_refs for item in explicit_refs)
+        if semantics.explicit_ref_source != FieldSource.EXPLICIT and any(
+            item not in trusted_refs for item in explicit_refs
         ):
             return TargetResolution(clarification_required=True)
         return TargetResolution(
@@ -103,10 +102,7 @@ def _resolve_product_target(
         semantics.category_hint
         and not pool
         and state.candidates
-        and all(
-            (item.model_extra or {}).get("category") is None
-            for item in state.candidates
-        )
+        and all((item.model_extra or {}).get("category") is None for item in state.candidates)
     ):
         pool = [
             CandidateHistoryEntry(
@@ -137,9 +133,7 @@ def _resolve_product_target(
                 source=TargetResolutionSource.EXPLICIT,
             )
         return TargetResolution(clarification_required=True)
-    ordinals = semantics.ordinals or (
-        [semantics.ordinal] if semantics.ordinal is not None else []
-    )
+    ordinals = semantics.ordinals or ([semantics.ordinal] if semantics.ordinal is not None else [])
     if ordinals:
         indices = [len(pool) - 1 if item == -1 else item for item in ordinals]
         if any(index < 0 or index >= len(pool) for index in indices):
@@ -171,7 +165,8 @@ def _resolve_order_target(
     state = dst.domains.get(CustomerServiceDomain.ORDER)
     if state is None:
         return TargetResolution(
-            clarification_required=action not in {
+            clarification_required=action
+            not in {
                 OrderAction.LIST,
                 OrderAction.COUNT,
                 OrderAction.COMPARE,
@@ -186,23 +181,18 @@ def _resolve_order_target(
     if semantics is not None and semantics.explicit_ref:
         explicit_refs = semantics.explicit_refs or [semantics.explicit_ref]
         trusted_refs = {item.ref for item in state.candidates}
-        if (
-            semantics.explicit_ref_source != FieldSource.EXPLICIT
-            and any(item not in trusted_refs for item in explicit_refs)
+        if semantics.explicit_ref_source != FieldSource.EXPLICIT and any(
+            item not in trusted_refs for item in explicit_refs
         ):
             return TargetResolution(clarification_required=True)
         return TargetResolution(
             resolved_ids=explicit_refs,
             source=TargetResolutionSource.EXPLICIT,
         )
-    if (
-        intent
-        in {
-            CustomerServiceIntent.ORDER_QUERY,
-            CustomerServiceIntent.LOGISTICS_QUERY,
-        }
-        and action in {OrderAction.LIST, OrderAction.COUNT, OrderAction.COMPARE}
-    ):
+    if intent in {
+        CustomerServiceIntent.ORDER_QUERY,
+        CustomerServiceIntent.LOGISTICS_QUERY,
+    } and action in {OrderAction.LIST, OrderAction.COUNT, OrderAction.COMPARE}:
         return TargetResolution(
             resolved_ids=[item.ref for item in state.candidates[:5]],
             source=(
@@ -211,11 +201,7 @@ def _resolve_order_target(
                 else TargetResolutionSource.UNRESOLVED
             ),
         )
-    if (
-        intent == CustomerServiceIntent.ORDER_QUERY
-        and action is None
-        and semantics is None
-    ):
+    if intent == CustomerServiceIntent.ORDER_QUERY and action is None and semantics is None:
         return TargetResolution(
             resolved_ids=[item.ref for item in state.candidates[:5]],
             source=(
@@ -225,11 +211,7 @@ def _resolve_order_target(
             ),
         )
     if semantics is not None and semantics.ordinal is not None:
-        index = (
-            len(state.candidates) - 1
-            if semantics.ordinal == -1
-            else semantics.ordinal
-        )
+        index = len(state.candidates) - 1 if semantics.ordinal == -1 else semantics.ordinal
         if index < 0 or index >= len(state.candidates):
             return TargetResolution(
                 clarification_required=True,
@@ -239,11 +221,7 @@ def _resolve_order_target(
             resolved_ids=[state.candidates[index].ref],
             source=TargetResolutionSource.ORDINAL,
         )
-    if (
-        action == OrderAction.LOGISTICS
-        and semantics is None
-        and state.active_ref is None
-    ):
+    if action == OrderAction.LOGISTICS and semantics is None and state.active_ref is None:
         return TargetResolution()
     return resolve_targets(
         candidate_ids=[item.ref for item in state.candidates],
@@ -266,8 +244,7 @@ def _filter_by_category_history(
     matched = [
         item
         for item in history
-        if item.category is not None
-        and normalize_product_category(item.category) == normalized
+        if item.category is not None and normalize_product_category(item.category) == normalized
     ]
     if not matched:
         return []

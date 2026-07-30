@@ -67,12 +67,25 @@ class PlannerNode:
             )
             return state
 
-        state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
-        decision = await get_planner_strategy(state).adecide(state)
+        strategy = get_planner_strategy(state)
+        is_customer_service_strategy = (
+            getattr(strategy, "name", None) == "customer_service"
+        )
+        if not is_customer_service_strategy:
+            state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
+        decision = await strategy.adecide(state)
+        if (
+            is_customer_service_strategy
+            and state.get("metadata", {})
+            .get("customer_service", {})
+            .get("execution_details", {})
+            .get("understanding", {})
+            .get("llm_used")
+            is True
+        ):
+            state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
         state["current_action"] = decision.action
-        state["pending_tool_calls"] = [
-            tool_call.model_dump() for tool_call in decision.tool_calls
-        ]
+        state["pending_tool_calls"] = [tool_call.model_dump() for tool_call in decision.tool_calls]
         if decision.content and decision.action == "final":
             state["final_answer"] = decision.content
         if decision.tool_calls:
@@ -108,8 +121,7 @@ class ToolNode:
         _ensure_state_defaults(state)
         state["step_count"] = int(state.get("step_count", 0)) + 1
         pending = [
-            AgentToolCall.model_validate(item)
-            for item in state.get("pending_tool_calls", [])
+            AgentToolCall.model_validate(item) for item in state.get("pending_tool_calls", [])
         ]
         if not pending:
             return state
@@ -298,9 +310,7 @@ class ToolNode:
                 result_value = aexecute(executor_call)
                 result = cast(
                     ToolResult,
-                    await result_value
-                    if isawaitable(result_value)
-                    else result_value,
+                    await result_value if isawaitable(result_value) else result_value,
                 )
             else:
                 result = await asyncio.to_thread(self.tool_executor.execute, executor_call)
@@ -327,8 +337,7 @@ class ToolNode:
                 "arguments": public_arguments,
                 "index": tool_call.index,
                 "status": str(
-                    public_metadata.get("status")
-                    or ("success" if result.success else "failed")
+                    public_metadata.get("status") or ("success" if result.success else "failed")
                 ),
                 "duration_ms": public_metadata.get("duration_ms"),
             }
@@ -507,21 +516,24 @@ class FinalNode:
         ) in {"final", "fail"}:
             return False
         return bool(
-            state.get("observations")
-            or state.get("knowledge")
-            or not state.get("final_answer")
+            state.get("observations") or state.get("knowledge") or not state.get("final_answer")
         )
 
     async def _stream_answer(self, state: AgentState) -> str:
         queue = state.get("metadata", {}).get("_agent_stream_event_queue")
-        if _requires_evidence(state) or state.get("metadata", {}).get("strict_final_answer"):
-            grounded_answer = str(
-                state.get("final_answer") or self._build_answer(state)
-            )
+        business_answer = present_final_answer(state)
+        if business_answer is not None:
             if queue is not None:
-                await queue.put(
-                    {"event": "answer_delta", "data": {"delta": grounded_answer}}
-                )
+                await queue.put({"event": "answer_delta", "data": {"delta": business_answer}})
+            state["metadata"]["_agent_stream_answer_done"] = True
+            state["metadata"]["answer_stream_delta_count"] = (
+                state["metadata"].get("answer_stream_delta_count", 0) + 1
+            )
+            return business_answer
+        if _requires_evidence(state) or state.get("metadata", {}).get("strict_final_answer"):
+            grounded_answer = str(state.get("final_answer") or self._build_answer(state))
+            if queue is not None:
+                await queue.put({"event": "answer_delta", "data": {"delta": grounded_answer}})
             state["metadata"]["_agent_stream_answer_done"] = True
             state["metadata"]["answer_stream_delta_count"] = (
                 state["metadata"].get("answer_stream_delta_count", 0) + 1
@@ -545,8 +557,7 @@ class FinalNode:
         answer = await collect_streaming_answer(request, on_delta=on_delta)
         state["metadata"]["_agent_stream_answer_done"] = True
         state["metadata"]["answer_stream_delta_count"] = (
-            state["metadata"].get("answer_stream_delta_count", 0)
-            + delta_count
+            state["metadata"].get("answer_stream_delta_count", 0) + delta_count
         )
         return answer or self._build_answer(state)
 
@@ -572,8 +583,7 @@ class FinalNode:
                 {},
             ).update(
                 {
-                    "final_evidence": state.get("knowledge")
-                    or state.get("observations", []),
+                    "final_evidence": state.get("knowledge") or state.get("observations", []),
                     "final_answer": answer,
                 }
             )
@@ -593,9 +603,7 @@ class FinalNode:
             return f"Agent 执行预算已用尽：{state.get('termination_reason')}。"
         if observations:
             if (
-                state.get("metadata", {})
-                .get("agent_loop", {})
-                .get("planner_strategy")
+                state.get("metadata", {}).get("agent_loop", {}).get("planner_strategy")
                 == "json_plan"
                 and len(observations) == 1
             ):
@@ -615,12 +623,7 @@ def route_after_planner(state: AgentState) -> str:
 
 
 def route_after_observation(state: AgentState) -> str:
-    if (
-        state.get("metadata", {})
-        .get("agent_loop", {})
-        .get("planner_strategy")
-        == "json_plan"
-    ):
+    if state.get("metadata", {}).get("agent_loop", {}).get("planner_strategy") == "json_plan":
         return "final"
     if state.get("current_action") == "reflect":
         return "reflection"
@@ -678,9 +681,10 @@ def _tool_result_to_observation(result: dict) -> dict:
 
 def _update_repeat_guard(state: AgentState, tool_call: AgentToolCall) -> str | None:
     arguments_hash = _arguments_hash(tool_call.arguments)
-    if state.get("last_tool_name") == tool_call.tool_name and state.get(
-        "last_tool_arguments_hash"
-    ) == arguments_hash:
+    if (
+        state.get("last_tool_name") == tool_call.tool_name
+        and state.get("last_tool_arguments_hash") == arguments_hash
+    ):
         state["same_tool_repeat_count"] += 1
     else:
         state["same_tool_repeat_count"] = 1
@@ -688,9 +692,7 @@ def _update_repeat_guard(state: AgentState, tool_call: AgentToolCall) -> str | N
     state["last_tool_arguments_hash"] = arguments_hash
     if state["same_tool_repeat_count"] > settings.AGENT_MAX_SAME_TOOL_REPEATS:
         state["termination_reason"] = "same_tool_repeat_limit"
-        state["metadata"].setdefault("agent_loop", {})[
-            "same_tool_repeat_limit_triggered"
-        ] = True
+        state["metadata"].setdefault("agent_loop", {})["same_tool_repeat_limit_triggered"] = True
         return "same tool repeat limit reached"
     return None
 

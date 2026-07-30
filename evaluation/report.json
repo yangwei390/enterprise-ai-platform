@@ -1,12 +1,12 @@
 {
   "report_version": "2.0",
-  "run_id": "aec7cf54-e7b3-4e05-ba98-2fa0ef0b7caf",
+  "run_id": "8165c888-759b-4ed0-affa-8e80f1e538b4",
   "suite_id": "real_smoke",
   "suite_name": "real smoke",
   "suite_version": "1.0",
-  "started_at": "2026-07-29T11:15:55.298036+00:00",
-  "finished_at": "2026-07-29T11:15:55.299273+00:00",
-  "duration_ms": 1.24,
+  "started_at": "2026-07-30T08:41:42.559010+00:00",
+  "finished_at": "2026-07-30T08:41:42.560533+00:00",
+  "duration_ms": 1.52,
   "passed": true,
   "pass_rate": 1.0,
   "total_cases": 1,
@@ -42,7 +42,7 @@
       "target": "tool",
       "status": "passed",
       "passed": true,
-      "duration_ms": 1.08,
+      "duration_ms": 1.39,
       "metrics": [
         {
           "name": "tool_success",
@@ -73,14 +73,14 @@
         "tool_call_count": 0,
         "trace_count": 0,
         "usage": {},
-        "duration_ms": 1.08
+        "duration_ms": 1.39
       },
       "error": null,
       "metadata": {
         "target_metadata": {
-          "started_at": "2026-07-29T11:15:55.298091+00:00",
-          "finished_at": "2026-07-29T11:15:55.298772+00:00",
-          "duration_ms": 0.68,
+          "started_at": "2026-07-30T08:41:42.559051+00:00",
+          "finished_at": "2026-07-30T08:41:42.559821+00:00",
+          "duration_ms": 0.77,
           "async_execution": true,
           "sync_fallback": false,
           "attempt_count": 1,
@@ -95,7 +95,7 @@
           "dynamic_registration": true,
           "discovery_source": "test",
           "cache_hit": false,
-          "cache_error": "Error 61 connecting to localhost:6379. Connection refused."
+          "cache_error": "Error 1 connecting to localhost:6379. Operation not permitted."
         }
       }
     }

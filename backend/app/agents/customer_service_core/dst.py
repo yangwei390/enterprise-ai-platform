@@ -109,9 +109,7 @@ def record_candidate_batch(
             display_name=(
                 str(item["display_name"]) if item.get("display_name") is not None else None
             ),
-            category=(
-                str(item["category"]) if item.get("category") is not None else None
-            ),
+            category=(str(item["category"]) if item.get("category") is not None else None),
             batch_id=batch_id,
             position=index,
             **{
@@ -121,8 +119,7 @@ def record_candidate_batch(
             },
         )
         for index, item in enumerate(candidates, start=1)
-        if item.get("ref") is not None
-        and (batch_id, str(item["ref"])) not in existing
+        if item.get("ref") is not None and (batch_id, str(item["ref"])) not in existing
     ]
     state.candidate_history = [*state.candidate_history, *additions][-500:]
 
@@ -178,10 +175,7 @@ def _migrate_legacy_state(customer_service: dict[str, Any]) -> ConversationDST:
     )
     product_domain = dst.domains[CustomerServiceDomain.PRODUCT]
     for name, value in product_domain.filters.items():
-        if (
-            name in ProductRequestConstraints.model_fields
-            and value not in (None, "", [])
-        ):
+        if name in ProductRequestConstraints.model_fields and value not in (None, "", []):
             dst.slots[name] = SlotValue(
                 value=value,
                 source="legacy_migration",

@@ -10,6 +10,7 @@ from backend.app.agents.customer_service_core.contracts import (
     ExecutionPhase,
     PendingAfterSales,
     ProductCandidateBatch,
+    ProductQuestionFocus,
     TransactionStatus,
 )
 from backend.app.tools.base import ToolResult
@@ -93,9 +94,7 @@ class CommitCoordinator:
             "order_list_for_after_sales",
         } or transaction.expected_result_type.startswith("order_verification_for_")
         execution.phase = (
-            ExecutionPhase.CONTINUE
-            if requires_continuation
-            else ExecutionPhase.READY_FOR_FINAL
+            ExecutionPhase.CONTINUE if requires_continuation else ExecutionPhase.READY_FOR_FINAL
         )
         agent_state["customer_service_execution"] = execution.model_dump(mode="json")
         self._trace(agent_state, before, updated, result)
@@ -130,9 +129,7 @@ class CommitCoordinator:
                 item.get("product", item) if isinstance(item, dict) else {}
                 for item in payload.items
             ]
-            validated_items = [
-                ProductItemResult.model_validate(item) for item in raw_items
-            ]
+            validated_items = [ProductItemResult.model_validate(item) for item in raw_items]
             if execution.pending_transaction is None:
                 raise ValueError("pending transaction is required")
             batch_id = execution.pending_transaction.transaction_id
@@ -152,21 +149,30 @@ class CommitCoordinator:
             ):
                 execution.verified_products = items
                 return
-            state.candidate_batches = [
-                *state.candidate_batches[-7:],
-                ProductCandidateBatch(
-                    batch_id=batch_id,
-                    query=execution.goal.raw_query if execution.goal else "",
-                    category=arguments.get("category"),
-                    items=items,
-                ),
-            ]
+            category = arguments.get("category")
+            if not isinstance(category, str):
+                category = (
+                    items[0].category
+                    if items and all(item.category == items[0].category for item in items)
+                    else state.product.active_category
+                )
+            state.product.active_batch = ProductCandidateBatch(
+                batch_id=batch_id,
+                query=execution.goal.raw_query if execution.goal else "",
+                category=category,
+                items=items,
+            )
+            state.product.active_category = category
+            state.product.active_product_code = items[0].product_code if len(items) == 1 else None
+            state.product.last_question = None
+            state.product.pending_query = None
             if tool_name in {"search_products", "recommend_products"}:
                 proposed_filters = execution.pending_transaction.proposed_patch.get(
-                    "filters"
+                    "product_filters"
                 )
                 if isinstance(proposed_filters, dict):
-                    state.filters = proposed_filters
+                    state.product.filters = proposed_filters
+            self._commit_question_focus(state, execution)
             return
         if tool_name == "query_order":
             if not isinstance(result.result, dict):
@@ -203,6 +209,7 @@ class CommitCoordinator:
             actual_document_id = result.metadata.get("document_id")
             if actual_document_id != expected_document_id:
                 raise ValueError("knowledge document scope mismatch")
+            self._commit_question_focus(state, execution)
             return
         if tool_name == "create_after_sales_ticket":
             if not isinstance(result.result, dict):
@@ -220,15 +227,43 @@ class CommitCoordinator:
                     version=1,
                 )
                 state.pending_after_sales = pending
-                metadata.setdefault("customer_service", {})[
-                    CUSTOMER_SERVICE_PENDING_KEY
-                ] = pending.model_dump(mode="json")
+                metadata.setdefault("customer_service", {})[CUSTOMER_SERVICE_PENDING_KEY] = (
+                    pending.model_dump(mode="json")
+                )
             else:
                 state.pending_after_sales = None
                 metadata.setdefault("customer_service", {}).pop(
                     CUSTOMER_SERVICE_PENDING_KEY,
                     None,
                 )
+
+    @staticmethod
+    def _commit_question_focus(
+        state: CustomerServiceState,
+        execution: CustomerServiceExecution,
+    ) -> None:
+        frame = execution.goal.semantic_frame if execution.goal is not None else None
+        batch = state.product.active_batch
+        predicate = frame.slots.get("question_predicate") if frame is not None else None
+        if (
+            frame is None
+            or frame.intent != "product_fact"
+            or batch is None
+            or predicate
+            not in {
+                "bluetooth_connectivity",
+                "charging",
+                "compatibility",
+                "price",
+                "features",
+                "buttons",
+            }
+        ):
+            return
+        state.product.last_question = ProductQuestionFocus(
+            predicate=predicate,
+            batch_id=batch.batch_id,
+        )
 
     @staticmethod
     def _execution(agent_state: dict[str, Any]) -> CustomerServiceExecution:
@@ -243,10 +278,14 @@ class CommitCoordinator:
         after: CustomerServiceState,
         result: ToolResult,
     ) -> None:
-        details = agent_state.setdefault("metadata", {}).setdefault(
-            "customer_service",
-            {},
-        ).setdefault("execution_details", {})
+        details = (
+            agent_state.setdefault("metadata", {})
+            .setdefault(
+                "customer_service",
+                {},
+            )
+            .setdefault("execution_details", {})
+        )
         details["tool_result"] = result.model_dump(mode="json")
         details["state_before"] = before.model_dump(mode="json")
         details["state_commit"] = after.model_dump(mode="json")

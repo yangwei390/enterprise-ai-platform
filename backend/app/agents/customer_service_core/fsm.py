@@ -270,17 +270,11 @@ def _apply_product_slot_operations(
     if not isinstance(payload, ProductPayload):
         return
     constraint_names = set(ProductRequestConstraints.model_fields)
-    preserved = {
-        name: value
-        for name, value in dst.slots.items()
-        if name in constraint_names
-    }
+    preserved = {name: value for name, value in dst.slots.items() if name in constraint_names}
     dst.slots = {**preserved, **request_slots}
     operations = payload.constraint_operations
     explicit_set: set[str] = set()
-    previous_category = (
-        dst.slots["category"].value if "category" in dst.slots else None
-    )
+    previous_category = dst.slots["category"].value if "category" in dst.slots else None
     for name in constraint_names:
         update = getattr(operations, name)
         if update.op == SlotOperation.KEEP:

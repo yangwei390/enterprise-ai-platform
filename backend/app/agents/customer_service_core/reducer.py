@@ -8,23 +8,6 @@ from backend.app.agents.customer_service_core.contracts import (
     StatePreview,
 )
 
-_CATEGORY_STABLE_SLOTS = {
-    "brand",
-    "price_min",
-    "price_max",
-    "in_stock_only",
-    "sale_status",
-}
-_CATEGORY_RELATED_SLOTS = {
-    "model",
-    "features",
-    "required_features",
-    "preferred_features",
-    "use_cases",
-    "required_use_cases",
-    "preferred_use_cases",
-}
-
 
 def preview_product_filters(
     state: CustomerServiceState,
@@ -32,29 +15,29 @@ def preview_product_filters(
 ) -> tuple[CustomerServiceState, dict[str, Any]]:
     """生成状态预览；调用方不得把返回值当成已提交状态。"""
     preview = state.model_copy(deep=True)
-    filters = dict(state.filters)
-    old_category = filters.get("category")
+    filters = dict(state.product.filters)
+    old_category = state.product.active_category
     new_category = explicit_slots.get("category")
     category_changed = (
-        new_category is not None
-        and old_category is not None
-        and new_category != old_category
+        new_category is not None and old_category is not None and new_category != old_category
     )
     if category_changed:
-        filters = {
-            key: value
-            for key, value in filters.items()
-            if key in _CATEGORY_STABLE_SLOTS
-        }
-        filters.pop("keyword", None)
-        for key in _CATEGORY_RELATED_SLOTS:
-            filters.pop(key, None)
+        filters = {}
+        preview.product.active_batch = None
+        preview.product.active_product_code = None
+        preview.product.last_question = None
+        preview.product.pending_query = None
     for key, value in explicit_slots.items():
         if value is None:
             continue
         filters[key] = value
-    preview.filters = filters
-    return preview, {"filters": filters}
+    preview.product.filters = filters
+    if isinstance(new_category, str):
+        preview.product.active_category = new_category
+    return preview, {
+        "product_filters": filters,
+        "invalidate_product_context": category_changed,
+    }
 
 
 def reduce_state(
@@ -83,28 +66,28 @@ def reduce_state(
     changes: list[dict[str, Any]] = []
 
     for slot in frame.slots.get("remove_filters", []):
-        if slot in proposed.filters:
-            proposed.filters.pop(slot, None)
+        if slot in proposed.product.filters:
+            proposed.product.filters.pop(slot, None)
             changes.append({"slot": slot, "operation": "REMOVE"})
 
     if frame.continuation:
         seen_codes = _recent_relevant_product_codes(
             state,
-            category=proposed.filters.get("category"),
+            category=proposed.product.active_category,
         )
         existing = [
             str(value)
-            for value in proposed.filters.get("excluded_product_codes", [])
+            for value in proposed.product.filters.get("excluded_product_codes", [])
             if value
         ]
-        proposed.filters["excluded_product_codes"] = list(
+        proposed.product.filters["excluded_product_codes"] = list(
             dict.fromkeys([*existing, *seen_codes])
         )
         changes.append(
             {
                 "slot": "excluded_product_codes",
                 "operation": "SET",
-                "value": proposed.filters["excluded_product_codes"],
+                "value": proposed.product.filters["excluded_product_codes"],
             }
         )
 
@@ -117,7 +100,7 @@ def reduce_state(
             }
         )
 
-    patch: dict[str, Any] = {"filters": proposed.filters}
+    patch["product_filters"] = proposed.product.filters
     if frame.intent == "cancel":
         patch["pending_after_sales"] = None
     return StatePreview(
@@ -133,15 +116,14 @@ def _recent_relevant_product_codes(
     *,
     category: Any,
 ) -> list[str]:
-    for batch in reversed(state.candidate_batches):
-        matched = [
-            item.product_code
-            for item in batch.items
-            if category is None
-            or item.category is None
-            or str(category) in item.category
-            or item.category in str(category)
-        ]
-        if matched:
-            return matched
-    return []
+    batch = state.product.active_batch
+    if batch is None:
+        return []
+    return [
+        item.product_code
+        for item in batch.items
+        if category is None
+        or item.category is None
+        or str(category) in item.category
+        or item.category in str(category)
+    ]

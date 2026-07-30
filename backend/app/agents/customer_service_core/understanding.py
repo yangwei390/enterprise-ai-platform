@@ -89,6 +89,22 @@ def _rule_understand(query: str, state: CustomerServiceState) -> SemanticFrame:
         return SemanticFrame(intent="blocked")
     if normalized in {"你好", "您好", "嗨", "hello", "hi"}:
         return SemanticFrame(intent="greeting")
+    if (
+        normalized in {"确认", "是的", "对", "好的", "可以"}
+        and state.product.pending_query is not None
+        and state.pending_after_sales is None
+    ):
+        pending = state.product.pending_query
+        return SemanticFrame(
+            intent="recommend_products",
+            slots={
+                **pending.filters,
+                "category": pending.category,
+                "keyword": pending.keyword,
+                "confirmed_pending_product_query": True,
+            },
+            requested_count=pending.requested_count,
+        )
     if normalized in {"确认", "确认提交", "是的", "对", "好的"}:
         return SemanticFrame(intent="confirm")
     if normalized in {"取消", "算了", "不提交", "不要了"}:
@@ -135,18 +151,49 @@ def _rule_understand(query: str, state: CustomerServiceState) -> SemanticFrame:
     slots = _product_slots(normalized)
     continuation = any(term in normalized for term in _CONTINUATION_TERMS)
     manual = any(term in normalized for term in _MANUAL_TERMS)
-    if manual:
+    if (
+        references
+        and _is_ordinal_only_followup(normalized, references)
+        and state.product.last_question is not None
+        and state.product.active_batch is not None
+        and state.product.last_question.batch_id == state.product.active_batch.batch_id
+    ):
+        predicate = state.product.last_question.predicate
         return SemanticFrame(
             intent="product_fact",
-            slots=slots,
+            slots={"question_predicate": predicate},
+            references=references,
+            question=_question_for_predicate(predicate),
+            requires_manual_evidence=predicate != "price",
+        )
+    if manual:
+        if _is_different_product_category(slots, state):
+            return SemanticFrame(
+                intent="product_query_confirmation",
+                slots=slots,
+                question=normalized,
+            )
+        return SemanticFrame(
+            intent="product_fact",
+            slots={**slots, "question_predicate": _question_predicate(normalized)},
             references=references,
             question=normalized,
             requires_manual_evidence=True,
         )
     if any(term in normalized for term in _PRICE_TERMS):
+        if _is_different_product_category(slots, state):
+            return SemanticFrame(
+                intent="product_query_confirmation",
+                slots=slots,
+                question=normalized,
+            )
         return SemanticFrame(
             intent="product_fact",
-            slots={**slots, "fact_type": "catalog"},
+            slots={
+                **slots,
+                "fact_type": "catalog",
+                "question_predicate": "price",
+            },
             references=references,
             question=normalized,
         )
@@ -217,7 +264,8 @@ def _references(
         )
     if result:
         return result
-    for batch in reversed(state.candidate_batches):
+    batch = state.product.active_batch
+    if batch is not None:
         for item in batch.items:
             if item.product_code.casefold() in query.casefold():
                 result.append(
@@ -275,7 +323,7 @@ def _requested_count(query: str) -> int | None:
 
 
 def _has_product_context(state: CustomerServiceState) -> bool:
-    return bool(state.candidate_batches or state.filters)
+    return bool(state.product.active_batch or state.product.filters)
 
 
 async def _llm_understand(
@@ -298,7 +346,7 @@ async def _llm_understand(
                 content=json.dumps(
                     {
                         "query": query,
-                        "current_filters": state.filters,
+                        "current_filters": state.product.filters,
                         "recent_messages": messages[-6:],
                     },
                     ensure_ascii=False,
@@ -341,3 +389,44 @@ def _merge(rule: SemanticFrame, llm: SemanticFrame) -> SemanticFrame:
             "references": rule.references or llm.references,
         }
     )
+
+
+def _is_different_product_category(
+    slots: dict[str, Any],
+    state: CustomerServiceState,
+) -> bool:
+    category = slots.get("category")
+    active = state.product.active_category
+    return isinstance(category, str) and active is not None and category != active
+
+
+def _is_ordinal_only_followup(
+    query: str,
+    references: list[ReferenceExpression],
+) -> bool:
+    stripped = _ORDINAL_RE.sub("", query)
+    stripped = re.sub(r"[\s，,。.!！?？呢吗呀]+", "", stripped)
+    return bool(references) and not stripped
+
+
+def _question_predicate(query: str) -> str:
+    if "蓝牙" in query:
+        return "bluetooth_connectivity"
+    if "充电" in query:
+        return "charging"
+    if "兼容" in query:
+        return "compatibility"
+    if "按键" in query:
+        return "buttons"
+    return "features"
+
+
+def _question_for_predicate(predicate: str) -> str:
+    return {
+        "bluetooth_connectivity": "该商品支持蓝牙吗",
+        "charging": "该商品支持充电吗",
+        "compatibility": "该商品兼容吗",
+        "price": "该商品多少钱",
+        "features": "该商品有什么特点",
+        "buttons": "该商品有哪些按键",
+    }.get(predicate, "该商品有什么特点")
