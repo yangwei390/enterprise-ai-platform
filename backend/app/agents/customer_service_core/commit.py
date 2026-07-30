@@ -87,15 +87,32 @@ class CommitCoordinator:
         customer_service["state"] = updated.model_dump(mode="json")
         transaction.status = TransactionStatus.COMMITTED
         execution.tool_count += 1
+        requires_continuation = transaction.expected_result_type in {
+            "product_verification_for_manual",
+            "order_list_for_logistics",
+            "order_list_for_after_sales",
+        } or transaction.expected_result_type.startswith("order_verification_for_")
         execution.phase = (
             ExecutionPhase.CONTINUE
-            if tool_name == "search_products"
-            and transaction.expected_result_type == "product_verification"
+            if requires_continuation
             else ExecutionPhase.READY_FOR_FINAL
         )
         agent_state["customer_service_execution"] = execution.model_dump(mode="json")
         self._trace(agent_state, before, updated, result)
         return True
+
+    def commit_preview(
+        self,
+        *,
+        agent_state: dict[str, Any],
+        state: CustomerServiceState,
+    ) -> None:
+        customer_service = agent_state.setdefault("metadata", {}).setdefault(
+            "customer_service",
+            {},
+        )
+        customer_service["state"] = state.model_dump(mode="json")
+        customer_service.pop(CUSTOMER_SERVICE_PENDING_KEY, None)
 
     def _apply(
         self,
@@ -130,6 +147,11 @@ class CommitCoordinator:
                 )
                 for index, item in enumerate(validated_items)
             ]
+            if execution.pending_transaction.expected_result_type.startswith(
+                "product_verification"
+            ):
+                execution.verified_products = items
+                return
             state.candidate_batches = [
                 *state.candidate_batches[-7:],
                 ProductCandidateBatch(
@@ -140,12 +162,11 @@ class CommitCoordinator:
                 ),
             ]
             if tool_name in {"search_products", "recommend_products"}:
-                state.filters = {
-                    key: value
-                    for key, value in arguments.items()
-                    if key
-                    not in {"page", "page_size", "sort_by", "sort_order", "knowledge_base_id"}
-                }
+                proposed_filters = execution.pending_transaction.proposed_patch.get(
+                    "filters"
+                )
+                if isinstance(proposed_filters, dict):
+                    state.filters = proposed_filters
             return
         if tool_name == "query_order":
             if not isinstance(result.result, dict):
@@ -161,6 +182,13 @@ class CommitCoordinator:
                 if not isinstance(order_ref, str) or not order_ref:
                     raise ValueError("order detail requires verified order_ref")
                 state.active_order_ref = order_ref
+                if (
+                    execution.pending_transaction is not None
+                    and execution.pending_transaction.expected_result_type.startswith(
+                        "order_verification_for_"
+                    )
+                ):
+                    execution.verified_order_ref = order_ref
             return
         if tool_name == "query_logistics":
             if not isinstance(result.result, dict):

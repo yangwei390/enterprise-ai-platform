@@ -10,14 +10,15 @@ from backend.app.agents.customer_service_core.adapters import (
 )
 from backend.app.agents.customer_service_core.commit import CommitCoordinator
 from backend.app.agents.customer_service_core.contracts import (
-    AfterSalesCommand,
     CandidateProduct,
     CompareProductsCommand,
+    ConfirmAfterSalesCommand,
+    CreateAfterSalesDraftCommand,
+    CreateHumanHandoffCommand,
     CustomerServiceExecution,
     CustomerServiceState,
     ExecutionPhase,
     GoalSnapshot,
-    HumanHandoffCommand,
     KnowledgeSearchCommand,
     PendingTransaction,
     ProductCandidateBatch,
@@ -31,6 +32,7 @@ from backend.app.agents.customer_service_core.entity_resolver import (
     ResolutionStatus,
     resolve_product_reference,
 )
+from backend.app.agents.customer_service_core.hooks import evaluate_tool_policy
 from backend.app.agents.customer_service_core.reducer import preview_product_filters
 from backend.app.agents.customer_service_core.strategy import CustomerServiceStrategy
 from backend.app.agents.langgraph.budget import AgentExecutionBudget
@@ -78,22 +80,23 @@ def _registry() -> ToolRegistry:
         ),
         QueryOrderCommand(),
         QueryLogisticsCommand(order_ref="ORDER-001"),
-        AfterSalesCommand(
-            arguments={
-                "action": "draft",
-                "order_no": "ORDER-001",
-                "customer_phone_last4": "1234",
-                "issue_type": "return",
-                "issue_description": "商品无法正常使用",
-            }
+        CreateAfterSalesDraftCommand(
+            order_no="ORDER-001",
+            customer_phone_last4="1234",
+            issue_type="return",
+            issue_description="商品无法正常使用",
         ),
-        HumanHandoffCommand(
-            arguments={
-                "order_no": "ORDER-001",
-                "customer_phone_last4": "1234",
-                "reason": "customer_request",
-                "message": "需要人工协助",
-            }
+        ConfirmAfterSalesCommand(
+            order_no="ORDER-001",
+            customer_phone_last4="1234",
+            draft_id="mock-draft-0123456789abcdef01234567",
+            operation_id="mock-draft-0123456789abcdef01234567",
+        ),
+        CreateHumanHandoffCommand(
+            order_no="ORDER-001",
+            customer_phone_last4="1234",
+            reason="customer_request",
+            message="需要人工协助",
         ),
     ],
 )
@@ -178,6 +181,52 @@ def test_explicit_entity_outside_pool_requires_tool_verification() -> None:
     assert resolution.verification_query == {"product_code": "P-404"}
 
 
+def test_compare_explicit_codes_builds_typed_compare_command() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+    planned = _plan_turn("对比 P001 和 P002", metadata)
+    call = planned["decision"].tool_calls[0]
+    assert call.tool_name == "compare_products"
+    assert call.arguments["product_codes"] == ["P001", "P002"]
+
+
+def test_compare_two_ordinals_resolves_inside_same_candidate_batch() -> None:
+    state = CustomerServiceState(
+        candidate_batches=[
+            ProductCandidateBatch(
+                batch_id="mouse",
+                query="推荐鼠标",
+                items=[
+                    CandidateProduct(
+                        product_code="M-1",
+                        name="Mouse One",
+                        category="鼠标和指针设备",
+                        batch_id="mouse",
+                        position=0,
+                    ),
+                    CandidateProduct(
+                        product_code="M-2",
+                        name="Mouse Two",
+                        category="鼠标和指针设备",
+                        batch_id="mouse",
+                        position=1,
+                    ),
+                ],
+            )
+        ]
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": state.model_dump(mode="json")},
+    }
+    planned = _plan_turn("对比第一个和第二个", metadata)
+    call = planned["decision"].tool_calls[0]
+    assert call.tool_name == "compare_products"
+    assert call.arguments["product_codes"] == ["M-1", "M-2"]
+
+
 def test_failed_tool_never_pollutes_business_state() -> None:
     state = _agent_state_for(SearchProductsCommand(product_code="P-404"))
     before = deepcopy(state["metadata"]["customer_service"]["state"])
@@ -217,7 +266,7 @@ def test_verified_product_then_bound_manual_rag_end_to_end() -> None:
     )
     execution.phase = ExecutionPhase.WAITING_TOOL
     execution.goal = GoalSnapshot(raw_query="P-1 支持蓝牙吗")
-    execution.pending_transaction.expected_result_type = "product_verification"
+    execution.pending_transaction.expected_result_type = "product_verification_for_manual"
     state.update(
         {
             "messages": [{"role": "user", "content": "P-1 支持蓝牙吗"}],
@@ -265,10 +314,12 @@ def test_verified_product_then_bound_manual_rag_end_to_end() -> None:
     assert state["tool_call_count"] == 2
 
 
-def test_planning_state_does_not_copy_stream_runtime_objects() -> None:
+def test_strategy_does_not_copy_stream_runtime_objects() -> None:
     queue: asyncio.Queue = asyncio.Queue()
     future = asyncio.get_event_loop_policy().new_event_loop().create_future()
     state = {
+        "query": "你好",
+        "messages": [{"role": "user", "content": "你好"}],
         "metadata": {
             "_agent_stream_event_queue": queue,
             "_agent_stream_future": future,
@@ -278,14 +329,282 @@ def test_planning_state_does_not_copy_stream_runtime_objects() -> None:
         }
     }
 
-    planning_state = CustomerServiceStrategy._planning_state(state)
+    decision = asyncio.run(CustomerServiceStrategy().adecide(state))
 
-    assert planning_state["metadata"]["_agent_stream_event_queue"] is queue
-    assert planning_state["metadata"]["_agent_stream_future"] is future
-    assert planning_state["metadata"]["customer_service"] is not state["metadata"][
-        "customer_service"
-    ]
+    assert decision.content
+    assert state["metadata"]["_agent_stream_event_queue"] is queue
+    assert state["metadata"]["_agent_stream_future"] is future
     future.get_loop().close()
+
+
+def test_product_multiturn_keeps_category_excludes_seen_and_resolves_latest() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    first = _plan_turn("给我推荐一个鼠标", metadata)
+    assert first["decision"].tool_calls[0].arguments["category"] == "鼠标和指针设备"
+    _commit_planned_products(
+        first["state"],
+        first["decision"],
+        [
+            {
+                "product_code": "1",
+                "name": "罗技G304",
+                "category": "鼠标",
+                "primary_manual_document_id": 9,
+            }
+        ],
+    )
+
+    second = _plan_turn("还有其他的么", metadata)
+    second_args = second["decision"].tool_calls[0].arguments
+    assert second_args["category"] == "鼠标和指针设备"
+    assert second_args["excluded_product_codes"] == ["1"]
+    _commit_planned_products(
+        second["state"],
+        second["decision"],
+        [
+            {
+                "product_code": "2",
+                "name": "MX Master 4",
+                "category": "办公鼠标",
+                "primary_manual_document_id": 10,
+            }
+        ],
+    )
+
+    third = _plan_turn("不要键盘", metadata)
+    third_args = third["decision"].tool_calls[0].arguments
+    assert third_args["category"] == "鼠标和指针设备"
+    assert third_args.get("keyword") != "键盘"
+    _commit_planned_products(
+        third["state"],
+        third["decision"],
+        [
+            {
+                "product_code": "2",
+                "name": "MX Master 4",
+                "category": "办公鼠标",
+                "primary_manual_document_id": 10,
+            }
+        ],
+    )
+
+    fourth = _plan_turn("第一个，能充电么？", metadata)
+    fourth_args = fourth["decision"].tool_calls[0].arguments
+    assert fourth_args["product_code"] == "2"
+    assert fourth["state"]["customer_service_execution"]["pending_transaction"][
+        "expected_result_type"
+    ] == "product_verification_for_manual"
+
+
+def test_order_list_then_ordinal_logistics_uses_trusted_candidate() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+    first = _plan_turn("我的订单", metadata)
+    assert first["decision"].tool_calls[0].tool_name == "query_order"
+    _commit_tool_result(
+        first["state"],
+        first["decision"],
+        {
+            "mode": "list",
+            "items": [
+                {"order_no": "2026****0001", "status": "delivered"},
+                {"order_no": "2026****0002", "status": "cancelled"},
+            ],
+            "total": 2,
+        },
+    )
+
+    second = _plan_turn("第一个订单的物流", metadata)
+    assert second["decision"].tool_calls[0].tool_name == "query_logistics"
+    assert second["decision"].tool_calls[0].arguments["order_ref"] == "2026****0001"
+
+
+def test_explicit_order_is_verified_before_logistics() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+    planned = _plan_turn("查询订单202607240001的物流", metadata)
+    first_call = planned["decision"].tool_calls[0]
+    assert first_call.tool_name == "query_order"
+    assert first_call.arguments == {"order_ref": "202607240001"}
+    assert planned["state"]["customer_service_execution"]["pending_transaction"][
+        "expected_result_type"
+    ] == "order_verification_for_logistics"
+
+    _commit_tool_result(
+        planned["state"],
+        planned["decision"],
+        {
+            "mode": "detail",
+            "order_no": "2026****0001",
+            "status": "shipped",
+        },
+    )
+    continued = asyncio.run(CustomerServiceStrategy().adecide(planned["state"]))
+    second_call = continued.tool_calls[0]
+    assert second_call.tool_name == "query_logistics"
+    assert second_call.arguments == {"order_ref": "202607240001"}
+
+
+def test_after_sales_draft_then_confirm_uses_strong_commands() -> None:
+    state = CustomerServiceState(active_order_ref="202607240001")
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": state.model_dump(mode="json")},
+    }
+    draft = _plan_turn(
+        "我要退货，手机号后四位5678，商品无法正常使用",
+        metadata,
+    )
+    draft_args = draft["decision"].tool_calls[0].arguments
+    assert draft_args["action"] == "draft"
+    assert draft_args["order_no"] == "202607240001"
+    assert draft_args["customer_phone_last4"] == "5678"
+    _commit_tool_result(
+        draft["state"],
+        draft["decision"],
+        {
+            "status": "draft",
+            "draft_id": "mock-draft-0123456789abcdef01234567",
+            "operation_id": "mock-draft-0123456789abcdef01234567",
+            "summary": "订单退货",
+        },
+    )
+
+    confirm = _plan_turn("确认提交", metadata)
+    confirm_args = confirm["decision"].tool_calls[0].arguments
+    assert confirm_args == {
+        "action": "confirm",
+        "order_no": "202607240001",
+        "customer_phone_last4": "5678",
+        "draft_id": "mock-draft-0123456789abcdef01234567",
+        "operation_id": "mock-draft-0123456789abcdef01234567",
+        "confirmed": True,
+    }
+
+
+def test_explicit_order_is_verified_before_after_sales_draft() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+    planned = _plan_turn(
+        "订单202607240001要退货，手机号后四位5678，商品无法正常使用",
+        metadata,
+    )
+    first_call = planned["decision"].tool_calls[0]
+    assert first_call.tool_name == "query_order"
+    assert planned["state"]["customer_service_execution"]["pending_transaction"][
+        "expected_result_type"
+    ] == "order_verification_for_after_sales"
+
+    _commit_tool_result(
+        planned["state"],
+        planned["decision"],
+        {
+            "mode": "detail",
+            "order_no": "2026****0001",
+            "status": "delivered",
+        },
+    )
+    continued = asyncio.run(CustomerServiceStrategy().adecide(planned["state"]))
+    second_call = continued.tool_calls[0]
+    assert second_call.tool_name == "create_after_sales_ticket"
+    assert second_call.arguments["action"] == "draft"
+    assert second_call.arguments["order_no"] == "202607240001"
+
+
+def test_formal_after_sales_policy_rejects_tampered_confirmation() -> None:
+    pending = {
+        "draft_id": "mock-draft-0123456789abcdef01234567",
+        "operation_id": "mock-draft-0123456789abcdef01234567",
+        "order_no": "202607240001",
+        "customer_phone_last4": "5678",
+        "status": "PENDING_CONFIRMATION",
+        "created_turn_id": "turn-before",
+    }
+    state = CustomerServiceState(pending_after_sales=pending)
+    command = ConfirmAfterSalesCommand(
+        order_no="202607240001",
+        customer_phone_last4="5678",
+        draft_id=pending["draft_id"],
+        operation_id=pending["operation_id"],
+    )
+    agent_state = _agent_state_for_command(command, state)
+    agent_state["conversation_id"] = 52
+    result = evaluate_tool_policy(
+        state=agent_state,
+        tool_name="create_after_sales_ticket",
+        arguments={
+            "action": "confirm",
+            "order_no": "202607240001",
+            "customer_phone_last4": "0000",
+            "draft_id": pending["draft_id"],
+            "operation_id": pending["operation_id"],
+            "confirmed": True,
+        },
+    )
+    assert result is not None
+    assert result.success is False
+    assert result.metadata["reason"] == "after_sales_confirmation_mismatch"
+
+
+def _plan_turn(query: str, metadata: dict) -> dict:
+    state = {
+        "query": query,
+        "messages": [{"role": "user", "content": query}],
+        "metadata": metadata,
+        "conversation_id": 52,
+        "knowledge_base_id": 1,
+        "allowed_knowledge_base_ids": [1],
+    }
+    decision = asyncio.run(CustomerServiceStrategy().adecide(state))
+    return {"state": state, "decision": decision}
+
+
+def _commit_planned_products(
+    state: dict,
+    decision,
+    items: list[dict],
+) -> None:
+    tool_call = decision.tool_calls[0]
+    committed = CommitCoordinator().commit(
+        agent_state=state,
+        tool_name=tool_call.tool_name,
+        arguments=tool_call.arguments,
+        result=ToolResult(
+            name=tool_call.tool_name,
+            success=True,
+            result={"items": items, "total": len(items)},
+        ),
+    )
+    assert committed is True
+
+
+def _commit_tool_result(
+    state: dict,
+    decision,
+    result: dict,
+) -> None:
+    tool_call = decision.tool_calls[0]
+    committed = CommitCoordinator().commit(
+        agent_state=state,
+        tool_name=tool_call.tool_name,
+        arguments=tool_call.arguments,
+        result=ToolResult(
+            name=tool_call.tool_name,
+            success=True,
+            result=result,
+        ),
+    )
+    assert committed is True
 
 
 class _ProductVerificationExecutor:
@@ -322,13 +641,18 @@ class _KnowledgeExecutor:
 
 
 def _agent_state_for(command: SearchProductsCommand) -> dict:
+    return _agent_state_for_command(command, CustomerServiceState())
+
+
+def _agent_state_for_command(command, state: CustomerServiceState) -> dict:
+    tool_name, _ = CommandAdapter(_registry()).adapt(command)
     transaction = PendingTransaction(
         transaction_id="tx-1",
         turn_id="turn-1",
         sequence=1,
         command=command,
         tool_call_id="call-1",
-        tool_name=command.kind,
+        tool_name=tool_name,
         arguments_hash="hash",
         proposed_patch={},
         expected_result_type="products",
@@ -341,7 +665,7 @@ def _agent_state_for(command: SearchProductsCommand) -> dict:
         "query": "test",
         "metadata": {
             "agent_id": CUSTOMER_SERVICE_AGENT_ID,
-            "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+            "customer_service": {"state": state.model_dump(mode="json")},
         },
         "customer_service_execution": execution.model_dump(mode="json"),
     }

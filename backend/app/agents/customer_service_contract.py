@@ -1,5 +1,5 @@
 CUSTOMER_SERVICE_AGENT_ID = "customer_service_agent"
-CUSTOMER_SERVICE_PLANNER_STRATEGY = "customer_service_hybrid"
+CUSTOMER_SERVICE_PLANNER_STRATEGY = "customer_service"
 
 CUSTOMER_SERVICE_TOOL_ALLOWLIST = [
     "search_products",

@@ -200,7 +200,7 @@ def test_customer_service_agent_registered_with_exact_allowlist_and_not_default(
     catalog = AgentCatalog().list_assistants()
 
     assert customer.id == CUSTOMER_SERVICE_AGENT_ID
-    assert customer.planner_strategy == "customer_service_hybrid"
+    assert customer.planner_strategy == "customer_service"
     assert customer.tool_allowlist == CUSTOMER_SERVICE_TOOL_ALLOWLIST
     assert default.id == "general_agent"
     assert not next(item for item in catalog if item.id == CUSTOMER_SERVICE_AGENT_ID).recommended

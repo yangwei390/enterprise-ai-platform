@@ -195,13 +195,10 @@ class JsonPlanStrategy(BaseAgentPlannerStrategy):
         )
 
 
-_CS_STRATEGY_NAMES = frozenset({"customer_service_hybrid", "customer_service_rules"})
-
-
 def get_planner_strategy(state: Any | None = None) -> BaseAgentPlannerStrategy:
     name = _planner_strategy_name(state)
 
-    if name in _CS_STRATEGY_NAMES:
+    if name == "customer_service":
         from backend.app.agents.customer_service_core.strategy import CustomerServiceStrategy
 
         return CustomerServiceStrategy()

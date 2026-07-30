@@ -5,14 +5,13 @@ from inspect import isawaitable
 from time import perf_counter
 from typing import cast
 
-from backend.app.agents.customer_service import (
-    evaluate_customer_service_tool_policy,
-)
 from backend.app.agents.customer_service_core.hooks import (
+    after_observation,
     commit_tool_result,
+    evaluate_tool_policy,
     prepare_tool_arguments,
+    present_final_answer,
 )
-from backend.app.agents.customer_service_core.presenter import CustomerServicePresenter
 from backend.app.agents.evidence import (
     NO_EVIDENCE_ANSWER,
     build_evidence_metadata,
@@ -151,7 +150,7 @@ class ToolNode:
                 state["current_action"] = "reflect"
                 continue
 
-            policy_result = evaluate_customer_service_tool_policy(
+            policy_result = evaluate_tool_policy(
                 state=state,
                 tool_name=tool_call.tool_name,
                 arguments=tool_call.arguments,
@@ -389,14 +388,11 @@ class ObservationNode:
                 }
             )
         state["observations"].extend(observations)
-        execution = state.get("customer_service_execution")
-        phase = execution.get("phase") if isinstance(execution, dict) else None
-        if phase in {"READY_FOR_FINAL", "READY_FOR_CLARIFICATION", "FAILED"}:
+        business_action = after_observation(state)
+        if business_action == "final":
             should_reflect, reason = False, None
             state["current_action"] = "final"
-            if phase == "FAILED" and not state.get("final_answer"):
-                state["final_answer"] = "本次业务操作未成功，可信状态未发生变化。"
-        elif phase == "CONTINUE":
+        elif business_action == "planner":
             should_reflect, reason = False, None
             state["current_action"] = "planner"
         else:
@@ -568,8 +564,9 @@ class FinalNode:
         messages.append({"role": "assistant", "content": answer})
 
     def _build_answer(self, state: AgentState) -> str:
-        if isinstance(state.get("customer_service_execution"), dict):
-            answer = CustomerServicePresenter().present(state)
+        business_answer = present_final_answer(state)
+        if business_answer is not None:
+            answer = business_answer
             state.setdefault("metadata", {}).setdefault("customer_service", {}).setdefault(
                 "execution_details",
                 {},

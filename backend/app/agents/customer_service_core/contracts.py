@@ -41,6 +41,9 @@ class SemanticFrame(BaseModel):
     slots: dict[str, Any] = Field(default_factory=dict)
     references: list[ReferenceExpression] = Field(default_factory=list)
     question: str | None = None
+    continuation: bool = False
+    requested_count: int | None = Field(default=None, ge=1, le=5)
+    requires_manual_evidence: bool = False
 
 
 class CandidateProduct(BaseModel):
@@ -126,14 +129,33 @@ class QueryLogisticsCommand(BaseModel):
     order_ref: str
 
 
-class AfterSalesCommand(BaseModel):
-    kind: Literal["create_after_sales_ticket"] = "create_after_sales_ticket"
-    arguments: dict[str, Any]
+class CreateAfterSalesDraftCommand(BaseModel):
+    kind: Literal["after_sales_draft"] = "after_sales_draft"
+    action: Literal["draft"] = "draft"
+    order_no: str
+    customer_phone_last4: str
+    issue_type: Literal["quality", "repair", "return", "exchange", "other"]
+    issue_description: str = Field(min_length=5, max_length=1000)
 
 
-class HumanHandoffCommand(BaseModel):
-    kind: Literal["create_human_handoff"] = "create_human_handoff"
-    arguments: dict[str, Any]
+class ConfirmAfterSalesCommand(BaseModel):
+    kind: Literal["after_sales_confirm"] = "after_sales_confirm"
+    action: Literal["confirm"] = "confirm"
+    order_no: str
+    customer_phone_last4: str
+    draft_id: str
+    operation_id: str
+    confirmed: Literal[True] = True
+
+
+class CreateHumanHandoffCommand(BaseModel):
+    kind: Literal["human_handoff"] = "human_handoff"
+    order_no: str
+    customer_phone_last4: str
+    reason: Literal["customer_request", "complaint", "tool_unavailable", "other"] = (
+        "customer_request"
+    )
+    message: str = Field(min_length=2, max_length=1000)
 
 
 CustomerServiceCommand = Annotated[
@@ -143,10 +165,20 @@ CustomerServiceCommand = Annotated[
     | KnowledgeSearchCommand
     | QueryOrderCommand
     | QueryLogisticsCommand
-    | AfterSalesCommand
-    | HumanHandoffCommand,
+    | CreateAfterSalesDraftCommand
+    | ConfirmAfterSalesCommand
+    | CreateHumanHandoffCommand,
     Field(discriminator="kind"),
 ]
+
+
+class StatePreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state_before: CustomerServiceState
+    proposed_state: CustomerServiceState
+    proposed_patch: dict[str, Any] = Field(default_factory=dict)
+    change_log: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PendingTransaction(BaseModel):
@@ -180,5 +212,7 @@ class CustomerServiceExecution(BaseModel):
     turn_id: str
     goal: GoalSnapshot | None = None
     pending_transaction: PendingTransaction | None = None
+    verified_products: list[CandidateProduct] = Field(default_factory=list)
+    verified_order_ref: str | None = None
     tool_count: int = Field(default=0, ge=0, le=2)
     failure_reason: str | None = None

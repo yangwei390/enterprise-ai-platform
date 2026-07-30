@@ -22,6 +22,8 @@
 - `strategy.py`：唯一正式 Planner Strategy 与显式执行阶段控制。
 - `reducer.py`：业务状态预览；只生成 proposed patch，不直接提交可信状态。
 - `entity_resolver.py`：候选批次内引用解析与池外显式实体校验决策。
+- `understanding.py`：规则优先、LLM 补充的正式 SemanticFrame 理解入口。
+- `command_builder.py`：从 SemanticFrame、状态预览和解析结果生成强类型 Command。
 
 ## 约束
 

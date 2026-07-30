@@ -31,7 +31,10 @@ LLM 只输出 `SemanticFrame`，表达“用户说了什么”。真实实体、
 
 ## 目录职责
 
-- `backend/app/agents/customer_service.py`：复用的安全、语义理解和售后确认能力。
+- `backend/app/agents/customer_service_core/understanding.py`：规则优先、LLM
+  仅补充缺口的 `SemanticFrame` 理解入口。
+- `backend/app/agents/customer_service_core/command_builder.py`：Reducer 和 Resolver
+  之后的强类型 Command 构建入口。
 - `backend/app/agents/customer_service_core/contracts.py`：正式状态、阶段、事务和 Command。
 - `backend/app/agents/customer_service_core/reducer.py`：状态预览。
 - `backend/app/agents/customer_service_core/entity_resolver.py`：引用解析和池外校验决策。
