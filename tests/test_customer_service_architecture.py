@@ -265,6 +265,29 @@ def test_verified_product_then_bound_manual_rag_end_to_end() -> None:
     assert state["tool_call_count"] == 2
 
 
+def test_planning_state_does_not_copy_stream_runtime_objects() -> None:
+    queue: asyncio.Queue = asyncio.Queue()
+    future = asyncio.get_event_loop_policy().new_event_loop().create_future()
+    state = {
+        "metadata": {
+            "_agent_stream_event_queue": queue,
+            "_agent_stream_future": future,
+            "customer_service": {
+                "state": CustomerServiceState().model_dump(mode="json")
+            },
+        }
+    }
+
+    planning_state = CustomerServiceStrategy._planning_state(state)
+
+    assert planning_state["metadata"]["_agent_stream_event_queue"] is queue
+    assert planning_state["metadata"]["_agent_stream_future"] is future
+    assert planning_state["metadata"]["customer_service"] is not state["metadata"][
+        "customer_service"
+    ]
+    future.get_loop().close()
+
+
 class _ProductVerificationExecutor:
     def execute(self, _tool_call):
         return ToolResult(

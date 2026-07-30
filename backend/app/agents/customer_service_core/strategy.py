@@ -148,7 +148,12 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
     def _planning_state(state: dict[str, Any]) -> dict[str, Any]:
         """把唯一正式状态投影成只在 Planner 调用期间存在的兼容视图。"""
         planning_state = dict(state)
-        planning_state["metadata"] = deepcopy(state.get("metadata", {}))
+        source_metadata = state.get("metadata", {})
+        planning_metadata = dict(source_metadata)
+        planning_metadata["customer_service"] = deepcopy(
+            source_metadata.get("customer_service", {})
+        )
+        planning_state["metadata"] = planning_metadata
         customer_service = planning_state["metadata"].setdefault(
             "customer_service",
             {},
