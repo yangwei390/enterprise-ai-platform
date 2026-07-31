@@ -864,6 +864,10 @@ def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
     )
     messages = [
         {
+            "role": "user",
+            "content": "我想查询鼠标",
+        },
+        {
             "role": "assistant",
             "content": "需要我重新为您查询鼠标吗？",
         },
@@ -898,6 +902,44 @@ def test_simple_product_availability_question_never_calls_llm(monkeypatch) -> No
     assert result.rewritten_query is None
     assert result.frame.intent == "recommend_products"
     assert result.frame.slots["keyword"] == "鼠标"
+
+
+def test_llm_rewrite_context_keeps_complete_turns_and_excludes_raw_query(
+    monkeypatch,
+) -> None:
+    class RewriteLLM:
+        def chat(self, request):
+            return SimpleNamespace(
+                tool_calls=[SimpleNamespace(arguments={"rewritten_query": "再推荐一个鼠标"})]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda: RewriteLLM(),
+    )
+    messages = [
+        {"role": "user", "content": "有鼠标么"},
+        {"role": "assistant", "content": "1. 罗技G304"},
+        {"role": "user", "content": "我想买个鼠标，你给我推荐一个"},
+        {"role": "assistant", "content": "1. 罗技G304"},
+        {"role": "user", "content": "别的呢"},
+    ]
+
+    result = asyncio.run(
+        understand(
+            query="别的呢",
+            state=CustomerServiceState(),
+            messages=messages,
+        )
+    )
+
+    assert result.llm_context is not None
+    assert [(message.role, message.content) for message in result.llm_context.recent_dialogue] == [
+        ("user", "有鼠标么"),
+        ("assistant", "1. 罗技G304"),
+        ("user", "我想买个鼠标，你给我推荐一个"),
+        ("assistant", "1. 罗技G304"),
+    ]
 
 
 @pytest.mark.parametrize("query", ["需要", "要", "查吧", "帮我查一下"])

@@ -424,8 +424,8 @@ def _build_understanding_context(
     state: CustomerServiceState,
     messages: list[dict[str, Any]],
 ) -> UnderstandingContext:
-    recent_dialogue: list[DialogueContextMessage] = []
-    for raw in messages[-8:]:
+    normalized_messages: list[DialogueContextMessage] = []
+    for raw in messages:
         role = raw.get("role")
         content = raw.get("content")
         if role in {"user", "human"}:
@@ -436,13 +436,34 @@ def _build_understanding_context(
             continue
         if not isinstance(content, str) or not content.strip():
             continue
-        recent_dialogue.append(
+        normalized_messages.append(
             DialogueContextMessage(
                 role=normalized_role,
                 content=content.strip()[:2000],
             )
         )
-    recent_dialogue = recent_dialogue[-6:]
+    if (
+        normalized_messages
+        and normalized_messages[-1].role == "user"
+        and normalized_messages[-1].content == query.strip()
+    ):
+        normalized_messages.pop()
+
+    complete_turns: list[list[DialogueContextMessage]] = []
+    pending_user: DialogueContextMessage | None = None
+    pending_assistant: DialogueContextMessage | None = None
+    for message in normalized_messages:
+        if message.role == "user":
+            if pending_user is not None and pending_assistant is not None:
+                complete_turns.append([pending_user, pending_assistant])
+            pending_user = message
+            pending_assistant = None
+        elif pending_user is not None:
+            pending_assistant = message
+    if pending_user is not None and pending_assistant is not None:
+        complete_turns.append([pending_user, pending_assistant])
+
+    recent_dialogue = [message for turn in complete_turns[-3:] for message in turn]
     batch = state.product.active_batch
     return UnderstandingContext(
         raw_query=query,
