@@ -67,9 +67,7 @@ async def agent_chat(request: AgentChatRequest) -> ApiResponse:
         query=request.query,
         agent_id=request.agent_id,
         knowledge_base_id=request.knowledge_base_id,
-        allowed_knowledge_base_ids=_trusted_customer_service_knowledge_scope(
-            request.agent_id
-        ),
+        allowed_knowledge_base_ids=_trusted_customer_service_knowledge_scope(request.agent_id),
         conversation_id=request.conversation_id,
         memory_context=request.memory_context,
         metadata=request.metadata,
@@ -123,9 +121,7 @@ async def _stream_agent_events(
             query=request.query,
             agent_id=request.agent_id,
             knowledge_base_id=request.knowledge_base_id,
-            allowed_knowledge_base_ids=_trusted_customer_service_knowledge_scope(
-                request.agent_id
-            ),
+            allowed_knowledge_base_ids=_trusted_customer_service_knowledge_scope(request.agent_id),
             conversation_id=conversation_id,
             memory_context=request.memory_context,
             metadata=request.metadata,
@@ -146,9 +142,7 @@ async def _stream_agent_events(
                         answer_parts.append(delta)
                         yield _sse("answer_delta", {"delta": delta})
                 elif event == "result":
-                    final_result = AgentChatResponseData.model_validate(
-                        data["result"]
-                    )
+                    final_result = AgentChatResponseData.model_validate(data["result"])
         else:
             yield _sse(
                 "status",
@@ -310,6 +304,13 @@ def _customer_service_debug_steps(
     directive = turn_debug.get("fsm_directive") or customer_service.get("fsm_directive")
     evidence = runtime_trace.get("evidence")
     evidence = evidence if isinstance(evidence, dict) else {}
+    execution_details = customer_service.get("execution_details")
+    execution_details = execution_details if isinstance(execution_details, dict) else {}
+    understanding = execution_details.get("understanding")
+    understanding = understanding if isinstance(understanding, dict) else {}
+    llm_context = understanding.get("llm_context")
+    llm_context = llm_context if isinstance(llm_context, dict) else {}
+    llm_used = understanding.get("llm_used") is True
 
     return [
         _debug_step(
@@ -326,14 +327,35 @@ def _customer_service_debug_steps(
             output_data={
                 "route": route,
                 "llm_classification": turn_debug.get("llm_classification"),
-                "classification_failure_reason": turn_debug.get(
-                    "classification_failure_reason"
-                ),
+                "classification_failure_reason": turn_debug.get("classification_failure_reason"),
             },
             executed=bool(route),
         ),
         _debug_step(
             3,
+            "LLM语义补充",
+            input_data={
+                "triggered": llm_used,
+                "raw_query": llm_context.get("raw_query") or request.query,
+                "recent_dialogue": llm_context.get("recent_dialogue") or [],
+                "dialog_focus": {
+                    "pending_product_query": llm_context.get("pending_product_query"),
+                },
+                "business_state_summary": {
+                    "active_product_category": llm_context.get("active_product_category"),
+                    "active_product_codes": llm_context.get("active_product_codes") or [],
+                },
+            },
+            output_data={
+                "rewritten_query": understanding.get("rewritten_query"),
+                "rule_result_after_rewrite": understanding.get("rewritten_rule_frame"),
+                "failure_reason": understanding.get("llm_failure_reason"),
+            },
+            executed=llm_used,
+            skipped_reason="本地规则已识别当前问题，本轮未调用 LLM 进行语义补充",
+        ),
+        _debug_step(
+            4,
             "上下文化理解",
             input_data={
                 "raw_query": request.query,
@@ -352,14 +374,14 @@ def _customer_service_debug_steps(
             executed=bool(contextualized),
         ),
         _debug_step(
-            4,
+            5,
             "生成 ContextualizedRequest",
             input_data={"route": route},
             output_data=contextualized,
             executed=bool(contextualized),
         ),
         _debug_step(
-            5,
+            6,
             "DST 与 FSM 状态更新",
             input_data={"dst_before": dst_before},
             output_data={
@@ -373,7 +395,7 @@ def _customer_service_debug_steps(
             or dst_after_tool is not None,
         ),
         _debug_step(
-            6,
+            7,
             "Tool 路由与参数组装",
             input_data={
                 "intent": contextualized.get("intent") or route.get("intent"),
@@ -384,7 +406,7 @@ def _customer_service_debug_steps(
             skipped_reason="本轮直接回答，没有选择 Tool",
         ),
         _debug_step(
-            7,
+            8,
             "业务 Tool 执行",
             input_data={"tool_calls": result.tool_calls},
             output_data={"observations": result.observations},
@@ -392,7 +414,7 @@ def _customer_service_debug_steps(
             skipped_reason="本轮没有执行 Tool",
         ),
         _debug_step(
-            8,
+            9,
             "证据校验",
             input_data={
                 "observations": result.observations,
@@ -410,7 +432,7 @@ def _customer_service_debug_steps(
             skipped_reason="本轮没有需要校验的外部证据",
         ),
         _debug_step(
-            9,
+            10,
             "最终回答",
             input_data={
                 "action": result.action,

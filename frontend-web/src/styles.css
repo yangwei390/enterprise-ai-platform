@@ -1126,6 +1126,12 @@ textarea:disabled {
   background: #f8fafc;
 }
 
+.debug-step.llm-semantic-supplement {
+  border-color: #8b5cf6;
+  background: #f5f3ff;
+  box-shadow: 0 0 0 1px rgb(139 92 246 / 12%);
+}
+
 .debug-step-header {
   display: flex;
   align-items: center;

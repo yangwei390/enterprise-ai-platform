@@ -845,17 +845,7 @@ def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
             nonlocal captured_request
             captured_request = request
             return SimpleNamespace(
-                tool_calls=[
-                    SimpleNamespace(
-                        arguments={
-                            "intent": "confirm_pending_product_query",
-                            "slots": {"confirmation": True},
-                            "references": [],
-                            "continuation": False,
-                            "requires_manual_evidence": False,
-                        }
-                    )
-                ]
+                tool_calls=[SimpleNamespace(arguments={"rewritten_query": "请重新查询鼠标"})]
             )
 
     monkeypatch.setattr(
@@ -883,14 +873,31 @@ def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
     result = asyncio.run(understand(query="麻烦处理一下", state=state, messages=messages))
 
     assert result.llm_used is True
-    assert result.frame.intent == "confirm_pending_product_query"
+    assert result.rewritten_query == "请重新查询鼠标"
+    assert result.frame.intent == "recommend_products"
     assert captured_request is not None
+    rewrite_schema = captured_request.tools[0]["function"]["parameters"]
+    assert set(rewrite_schema["properties"]) == {"rewritten_query"}
     roles = [message.role for message in captured_request.messages]
     assert "assistant" in roles
     assert any(
         message.role == "assistant" and "重新为您查询鼠标" in message.content
         for message in captured_request.messages
     )
+
+
+def test_simple_product_availability_question_never_calls_llm(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda: (_ for _ in ()).throw(AssertionError("LLM must not be called")),
+    )
+
+    result = asyncio.run(understand(query="有鼠标么", state=CustomerServiceState(), messages=[]))
+
+    assert result.llm_used is False
+    assert result.rewritten_query is None
+    assert result.frame.intent == "recommend_products"
+    assert result.frame.slots["keyword"] == "鼠标"
 
 
 @pytest.mark.parametrize("query", ["需要", "要", "查吧", "帮我查一下"])

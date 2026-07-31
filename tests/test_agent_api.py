@@ -419,6 +419,30 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
                         "customer_service": {
                             "route": {"intent": "order_query"},
                             "contextualized_request": {"raw_query": "查询订单 202607240001"},
+                            "execution_details": {
+                                "understanding": {
+                                    "llm_used": True,
+                                    "rewritten_query": "查询我的订单",
+                                    "rewritten_rule_frame": {
+                                        "intent": "order",
+                                        "slots": {},
+                                    },
+                                    "llm_failure_reason": None,
+                                    "llm_context": {
+                                        "raw_query": "帮我看看",
+                                        "recent_dialogue": [
+                                            {
+                                                "role": "assistant",
+                                                "content": "需要查询订单吗？",
+                                            },
+                                            {"role": "user", "content": "帮我看看"},
+                                        ],
+                                        "active_product_category": None,
+                                        "active_product_codes": [],
+                                        "pending_product_query": None,
+                                    },
+                                }
+                            },
                             "dst": {"status": "completed"},
                             "fsm_directive": {"action": "execute"},
                             "turn_debug": {
@@ -452,16 +476,23 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
 
     assert debug_trace["customer_service"]["route"]["intent"] == "order_query"
     assert debug_trace["customer_service"]["dst"]["status"] == "completed"
-    dst_step = next(step for step in debug_trace["steps"] if step["step"] == 5)
+    llm_step = next(step for step in debug_trace["steps"] if step["name"] == "LLM语义补充")
+    assert llm_step["status"] == "completed"
+    assert llm_step["input"]["raw_query"] == "帮我看看"
+    assert llm_step["input"]["recent_dialogue"][0]["role"] == "assistant"
+    assert llm_step["output"]["rewritten_query"] == "查询我的订单"
+    assert llm_step["output"]["rule_result_after_rewrite"]["intent"] == "order"
+    dst_step = next(step for step in debug_trace["steps"] if step["step"] == 6)
     assert dst_step["output"]["dst_before"]["status"] == "idle"
     assert dst_step["output"]["dst_after_request"]["status"] == "ready_to_execute"
     assert dst_step["output"]["dst_after_tool"]["status"] == "completed"
     assert debug_trace["runtime_trace"]["graph_nodes"][0]["node"] == "planner"
     assert debug_trace["tool_calls"][0]["arguments"]["order_no"] == "[REDACTED]"
-    assert [step["step"] for step in debug_trace["steps"]] == list(range(1, 10))
+    assert [step["step"] for step in debug_trace["steps"]] == list(range(1, 11))
     assert [step["name"] for step in debug_trace["steps"]] == [
         "输入预处理与前置路由",
         "意图识别",
+        "LLM语义补充",
         "上下文化理解",
         "生成 ContextualizedRequest",
         "DST 与 FSM 状态更新",
@@ -470,8 +501,8 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
         "证据校验",
         "最终回答",
     ]
-    assert debug_trace["steps"][5]["status"] == "completed"
-    assert debug_trace["steps"][8]["output"]["answer"] == "订单已送达"
+    assert debug_trace["steps"][6]["status"] == "completed"
+    assert debug_trace["steps"][9]["output"]["answer"] == "订单已送达"
     assert "202607240001" not in json.dumps(debug_trace, ensure_ascii=False)
 
 
@@ -525,11 +556,7 @@ def test_agent_stream_api_no_evidence_completes_without_error(monkeypatch):
     events = _parse_sse_events(response.text)
 
     event_names = [event["event"] for event in events]
-    answer_deltas = [
-        event["data"]["delta"]
-        for event in events
-        if event["event"] == "answer_delta"
-    ]
+    answer_deltas = [event["data"]["delta"] for event in events if event["event"] == "answer_delta"]
     completed = next(event for event in events if event["event"] == "completed")
 
     assert response.status_code == 200

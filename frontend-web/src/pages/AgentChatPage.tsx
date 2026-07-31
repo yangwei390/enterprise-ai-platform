@@ -478,7 +478,10 @@ export default function AgentChatPage() {
                 {customerServiceDebugSteps(selectedDebugTrace).length > 0 ? (
                   <div className="debug-step-list">
                     {customerServiceDebugSteps(selectedDebugTrace).map((step) => (
-                      <section className="debug-step" key={step.step}>
+                      <section
+                        className={`debug-step${step.name === "LLM语义补充" ? " llm-semantic-supplement" : ""}`}
+                        key={step.step}
+                      >
                         <div className="debug-step-header">
                           <h3>步骤 {step.step} · {step.name}</h3>
                           <span className={`debug-step-status ${step.status}`}>
