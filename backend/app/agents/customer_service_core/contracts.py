@@ -179,18 +179,21 @@ class SearchProductsCommand(BaseModel):
     product_code: str | None = None
     filters: dict[str, Any] = Field(default_factory=dict)
     page_size: int = Field(default=20, ge=1, le=100)
+    knowledge_base_id: int | None = Field(default=None, ge=1)
 
 
 class RecommendProductsCommand(BaseModel):
     kind: Literal["recommend_products"] = "recommend_products"
     filters: dict[str, Any] = Field(default_factory=dict)
     page_size: int = Field(default=1, ge=1, le=5)
+    knowledge_base_id: int | None = Field(default=None, ge=1)
 
 
 class CompareProductsCommand(BaseModel):
     kind: Literal["compare_products"] = "compare_products"
     product_codes: list[str] = Field(min_length=2, max_length=5)
     fields: list[str] = Field(default_factory=list)
+    knowledge_base_id: int | None = Field(default=None, ge=1)
 
 
 class KnowledgeSearchCommand(BaseModel):

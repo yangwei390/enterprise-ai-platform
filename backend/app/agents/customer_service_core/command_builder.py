@@ -42,6 +42,7 @@ def build_command(
     runtime: dict[str, Any],
 ) -> CommandBuildResult:
     state = preview.proposed_state
+    knowledge_base_id = _trusted_knowledge_base_id(runtime)
     if frame.intent == "blocked":
         return CommandBuildResult(direct_answer="我不能忽略系统规则或绕过工具确认流程。")
     if frame.intent == "greeting":
@@ -71,6 +72,7 @@ def build_command(
             command=RecommendProductsCommand(
                 filters=filters,
                 page_size=pending.requested_count,
+                knowledge_base_id=knowledge_base_id,
             ),
             expected_result_type="products",
         )
@@ -105,6 +107,7 @@ def build_command(
                 command=RecommendProductsCommand(
                     filters=filters,
                     page_size=page_size,
+                    knowledge_base_id=knowledge_base_id,
                 ),
                 expected_result_type="products",
             )
@@ -114,6 +117,7 @@ def build_command(
                 category=filters.pop("category", None),
                 filters=filters,
                 page_size=20,
+                knowledge_base_id=knowledge_base_id,
             ),
             expected_result_type="products",
         )
@@ -137,7 +141,10 @@ def build_command(
         if len(product_codes) < 2:
             return CommandBuildResult(clarification="请明确选择两个要对比的商品。")
         return CommandBuildResult(
-            command=CompareProductsCommand(product_codes=product_codes[:5]),
+            command=CompareProductsCommand(
+                product_codes=product_codes[:5],
+                knowledge_base_id=knowledge_base_id,
+            ),
             expected_result_type="product_comparison",
         )
     if frame.intent == "product_fact":
@@ -159,6 +166,7 @@ def build_command(
                     product_code=query.get("product_code"),
                     keyword=query.get("keyword"),
                     page_size=5,
+                    knowledge_base_id=knowledge_base_id,
                 ),
                 resolution=resolution,
                 expected_result_type=(
@@ -172,6 +180,7 @@ def build_command(
             command=SearchProductsCommand(
                 product_code=product_code,
                 page_size=1,
+                knowledge_base_id=knowledge_base_id,
             ),
             resolution=resolution,
             expected_result_type=(
@@ -186,6 +195,7 @@ def build_command(
             command=RecommendProductsCommand(
                 filters=filters,
                 page_size=1,
+                knowledge_base_id=knowledge_base_id,
             ),
             expected_result_type=(
                 "product_selection_for_manual_fact"
@@ -265,6 +275,16 @@ def build_command(
             expected_result_type="handoff",
         )
     return CommandBuildResult(clarification="当前请求还需要更多信息。")
+
+
+def _trusted_knowledge_base_id(runtime: dict[str, Any]) -> int | None:
+    knowledge_base_id = runtime.get("knowledge_base_id")
+    allowed = {
+        value for value in runtime.get("allowed_knowledge_base_ids", []) if isinstance(value, int)
+    }
+    if isinstance(knowledge_base_id, int) and knowledge_base_id in allowed:
+        return knowledge_base_id
+    return None
 
 
 def _resolve_product(

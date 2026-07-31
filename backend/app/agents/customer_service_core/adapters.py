@@ -43,14 +43,21 @@ class CommandAdapter:
                 arguments["category"] = command.category
             if command.product_code is not None:
                 arguments["product_code"] = command.product_code
+            if command.knowledge_base_id is not None:
+                arguments["knowledge_base_id"] = command.knowledge_base_id
             arguments["page_size"] = command.page_size
             return command.kind, arguments
         if isinstance(command, RecommendProductsCommand):
-            return command.kind, {**command.filters, "page_size": command.page_size}
+            arguments = {**command.filters, "page_size": command.page_size}
+            if command.knowledge_base_id is not None:
+                arguments["knowledge_base_id"] = command.knowledge_base_id
+            return command.kind, arguments
         if isinstance(command, CompareProductsCommand):
             arguments: dict[str, Any] = {"product_codes": command.product_codes}
             if command.fields:
                 arguments["fields"] = command.fields
+            if command.knowledge_base_id is not None:
+                arguments["knowledge_base_id"] = command.knowledge_base_id
             return command.kind, arguments
         if isinstance(command, KnowledgeSearchCommand):
             return command.kind, command.model_dump(exclude={"kind"}, exclude_none=True)

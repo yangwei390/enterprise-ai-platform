@@ -37,6 +37,7 @@ from backend.app.agents.customer_service_core.entity_resolver import (
     resolve_product_reference,
 )
 from backend.app.agents.customer_service_core.hooks import evaluate_tool_policy
+from backend.app.agents.customer_service_core.presenter import CustomerServicePresenter
 from backend.app.agents.customer_service_core.reducer import (
     preview_product_filters,
     reduce_state,
@@ -755,8 +756,83 @@ def test_old_category_catalog_question_automatically_queries_one_new_product() -
     assert planned["decision"].tool_calls[0].tool_name == "recommend_products"
     assert planned["decision"].tool_calls[0].arguments["category"] == "鼠标和指针设备"
     assert planned["decision"].tool_calls[0].arguments["page_size"] == 1
+    assert planned["decision"].tool_calls[0].arguments["knowledge_base_id"] == 1
     invalidated = CustomerServiceState.model_validate(metadata["customer_service"]["state"])
     assert invalidated.product == ProductContext()
+
+
+def test_cross_category_manual_question_carries_scope_into_both_tools() -> None:
+    keyboard = CustomerServiceState(
+        product=ProductContext(
+            active_category="键盘",
+            filters={"category": "键盘"},
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": keyboard.model_dump(mode="json")},
+    }
+    planned = _plan_turn("第一个鼠标能连接蓝牙么", metadata)
+    first_call = planned["decision"].tool_calls[0]
+
+    assert first_call.tool_name == "recommend_products"
+    assert first_call.arguments["knowledge_base_id"] == 1
+
+    _commit_planned_products(
+        planned["state"],
+        planned["decision"],
+        [
+            {
+                "product_code": "M-1",
+                "name": "Mouse One",
+                "category": "鼠标和指针设备",
+                "primary_manual_document_id": 9,
+            }
+        ],
+    )
+    continued = asyncio.run(CustomerServiceStrategy().adecide(planned["state"]))
+    second_call = continued.tool_calls[0]
+
+    assert second_call.tool_name == "knowledge_search"
+    assert second_call.arguments["knowledge_base_id"] == 1
+    assert second_call.arguments["document_id"] == 9
+
+
+def test_cross_category_product_answer_explains_automatic_requery() -> None:
+    state = {
+        "customer_service_execution": {
+            "goal": {
+                "semantic_frame": {
+                    "intent": "product_fact_with_selection",
+                    "slots": {"keyword": "鼠标"},
+                }
+            }
+        },
+        "observations": [
+            {
+                "success": True,
+                "tool_name": "recommend_products",
+                "raw_result": {
+                    "items": [
+                        {
+                            "product": {
+                                "product_code": "M-1",
+                                "name": "Mouse One",
+                                "price": "100.00",
+                                "currency": "CNY",
+                            }
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+
+    answer = CustomerServicePresenter().present(state)
+
+    assert "不确定您询问的是哪款鼠标" in answer
+    assert "现在为您推荐以下鼠标" in answer
+    assert "Mouse One" in answer
 
 
 def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(

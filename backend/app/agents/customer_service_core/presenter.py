@@ -16,9 +16,13 @@ class CustomerServicePresenter:
         tool_name = str(observation.get("tool_name") or "")
         result = observation.get("raw_result")
         if tool_name == "knowledge_search":
-            return self._knowledge(result)
+            answer = self._knowledge(result)
+            notice = self._category_switch_notice(state, knowledge_answer=True)
+            return f"{notice}\n{answer}" if notice else answer
         if tool_name in {"search_products", "recommend_products", "compare_products"}:
-            return self._products(result)
+            answer = self._products(result)
+            notice = self._category_switch_notice(state, knowledge_answer=False)
+            return f"{notice}\n{answer}" if notice else answer
         if tool_name == "query_order":
             return self._order(result)
         if tool_name == "query_logistics":
@@ -58,6 +62,23 @@ class CustomerServicePresenter:
                 facts.append(f"库存 {item['stock_quantity']}")
             lines.append("；".join(facts))
         return "\n".join(lines)
+
+    @staticmethod
+    def _category_switch_notice(state: Any, *, knowledge_answer: bool) -> str | None:
+        execution = state.get("customer_service_execution")
+        goal = execution.get("goal") if isinstance(execution, dict) else None
+        frame = goal.get("semantic_frame") if isinstance(goal, dict) else None
+        if not isinstance(frame, dict) or frame.get("intent") != "product_fact_with_selection":
+            return None
+        slots = frame.get("slots")
+        keyword = slots.get("keyword") if isinstance(slots, dict) else None
+        product_type = keyword if isinstance(keyword, str) and keyword else "商品"
+        if knowledge_answer:
+            return (
+                f"抱歉，不确定您询问的是哪款{product_type}。"
+                f"我已重新查询一款{product_type}并核对说明书："
+            )
+        return f"抱歉，不确定您询问的是哪款{product_type}。现在为您推荐以下{product_type}："
 
     @staticmethod
     def _order(result: Any) -> str:
