@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 from backend.app.agents.customer_service_contract import CUSTOMER_SERVICE_AGENT_ID
@@ -321,9 +322,8 @@ def test_confirmation_uses_pending_product_query_without_llm() -> None:
     result = asyncio.run(understand(query="对", state=state, messages=[]))
 
     assert result.llm_used is False
-    assert result.frame.intent == "recommend_products"
-    assert result.frame.slots["category"] == "鼠标和指针设备"
-    assert result.frame.requested_count == 1
+    assert result.frame.intent == "confirm_pending_product_query"
+    assert result.frame.slots == {"confirmation": True}
 
 
 def test_ordinal_only_followup_inherits_question_inside_current_batch() -> None:
@@ -701,7 +701,29 @@ def test_single_product_result_is_automatically_selected() -> None:
     assert [item.product_code for item in product.active_batch.items] == ["M-1"]
 
 
-def test_old_category_question_then_confirmation_runs_new_query() -> None:
+def test_unspecified_recommendation_count_defaults_to_one() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("推荐个鼠标", metadata)
+
+    assert planned["decision"].tool_calls[0].arguments["page_size"] == 1
+
+
+def test_explicit_recommendation_count_is_preserved() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("推荐两个鼠标", metadata)
+
+    assert planned["decision"].tool_calls[0].arguments["page_size"] == 2
+
+
+def test_old_category_catalog_question_automatically_queries_one_new_product() -> None:
     keyboard = CustomerServiceState(
         product=ProductContext(
             active_category="键盘",
@@ -728,19 +750,114 @@ def test_old_category_question_then_confirmation_runs_new_query() -> None:
         "customer_service": {"state": keyboard.model_dump(mode="json")},
     }
 
-    clarification = _plan_turn("鼠标多少钱", metadata)
+    planned = _plan_turn("第一个鼠标多少钱", metadata)
 
-    assert clarification["decision"].tool_calls == []
-    assert "重新为您查询鼠标吗" in str(clarification["decision"].content)
-    pending_state = CustomerServiceState.model_validate(metadata["customer_service"]["state"])
-    assert pending_state.product.active_batch is None
-    assert pending_state.product.pending_query is not None
+    assert planned["decision"].tool_calls[0].tool_name == "recommend_products"
+    assert planned["decision"].tool_calls[0].arguments["category"] == "鼠标和指针设备"
+    assert planned["decision"].tool_calls[0].arguments["page_size"] == 1
+    invalidated = CustomerServiceState.model_validate(metadata["customer_service"]["state"])
+    assert invalidated.product == ProductContext()
 
-    confirmed = _plan_turn("对", metadata)
 
-    assert confirmed["decision"].tool_calls[0].tool_name == "recommend_products"
-    assert confirmed["decision"].tool_calls[0].arguments["category"] == "鼠标和指针设备"
-    assert confirmed["decision"].tool_calls[0].arguments["page_size"] == 1
+def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
+    monkeypatch,
+) -> None:
+    captured_request = None
+
+    class ConfirmationLLM:
+        def chat(self, request):
+            nonlocal captured_request
+            captured_request = request
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        arguments={
+                            "intent": "confirm_pending_product_query",
+                            "slots": {"confirmation": True},
+                            "references": [],
+                            "continuation": False,
+                            "requires_manual_evidence": False,
+                        }
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda: ConfirmationLLM(),
+    )
+    state = CustomerServiceState(
+        product=ProductContext(
+            pending_query=PendingProductQuery(
+                category="鼠标和指针设备",
+                keyword="鼠标",
+                requested_count=1,
+                created_turn_id="turn-1",
+            )
+        )
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "content": "需要我重新为您查询鼠标吗？",
+        },
+        {"role": "user", "content": "麻烦处理一下"},
+    ]
+
+    result = asyncio.run(understand(query="麻烦处理一下", state=state, messages=messages))
+
+    assert result.llm_used is True
+    assert result.frame.intent == "confirm_pending_product_query"
+    assert captured_request is not None
+    roles = [message.role for message in captured_request.messages]
+    assert "assistant" in roles
+    assert any(
+        message.role == "assistant" and "重新为您查询鼠标" in message.content
+        for message in captured_request.messages
+    )
+
+
+@pytest.mark.parametrize("query", ["需要", "要", "查吧", "帮我查一下"])
+def test_common_pending_query_confirmations_are_rule_understood(query: str) -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            pending_query=PendingProductQuery(
+                category="鼠标和指针设备",
+                keyword="鼠标",
+                requested_count=1,
+                created_turn_id="turn-1",
+            )
+        )
+    )
+
+    result = asyncio.run(understand(query=query, state=state, messages=[]))
+
+    assert result.llm_used is False
+    assert result.frame.intent == "confirm_pending_product_query"
+
+
+def test_pending_query_confirmation_builds_product_tool_call() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            pending_query=PendingProductQuery(
+                category="鼠标和指针设备",
+                keyword="鼠标",
+                requested_count=1,
+                created_turn_id="turn-1",
+            )
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": state.model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("需要", metadata)
+
+    tool_call = planned["decision"].tool_calls[0]
+    assert tool_call.tool_name == "recommend_products"
+    assert tool_call.arguments["category"] == "鼠标和指针设备"
+    assert tool_call.arguments["page_size"] == 1
 
 
 def test_streaming_customer_service_final_never_calls_final_llm(monkeypatch) -> None:

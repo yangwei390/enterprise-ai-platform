@@ -65,6 +65,15 @@ def reduce_state(
     proposed, patch = preview_product_filters(state, explicit_slots)
     changes: list[dict[str, Any]] = []
 
+    if frame.intent == "confirm_pending_product_query" and state.product.pending_query is not None:
+        pending = state.product.pending_query
+        proposed.product.active_category = pending.category
+        proposed.product.filters = {
+            "category": pending.category,
+            "keyword": pending.keyword,
+        }
+        patch["product_filters"] = proposed.product.filters
+
     for slot in frame.slots.get("remove_filters", []):
         if slot in proposed.product.filters:
             proposed.product.filters.pop(slot, None)

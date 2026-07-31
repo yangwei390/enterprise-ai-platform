@@ -104,6 +104,26 @@ class ProductContext(BaseModel):
     pending_query: PendingProductQuery | None = None
 
 
+class DialogueContextMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class UnderstandingContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    raw_query: str
+    recent_dialogue: list[DialogueContextMessage] = Field(
+        default_factory=list,
+        max_length=6,
+    )
+    active_product_category: str | None = None
+    active_product_codes: list[str] = Field(default_factory=list, max_length=20)
+    pending_product_query: PendingProductQuery | None = None
+
+
 class PendingAfterSales(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -164,7 +184,7 @@ class SearchProductsCommand(BaseModel):
 class RecommendProductsCommand(BaseModel):
     kind: Literal["recommend_products"] = "recommend_products"
     filters: dict[str, Any] = Field(default_factory=dict)
-    page_size: int = Field(default=3, ge=1, le=5)
+    page_size: int = Field(default=1, ge=1, le=5)
 
 
 class CompareProductsCommand(BaseModel):

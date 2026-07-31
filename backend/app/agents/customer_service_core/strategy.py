@@ -144,8 +144,19 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             return self._fail(state, execution, "pending_transaction_missing")
         expected = transaction.expected_result_type
         business_state = self._business_state(state)
-        if expected == "product_verification_for_manual":
-            verified = execution.verified_products
+        if expected in {
+            "product_verification_for_manual",
+            "product_selection_for_manual_fact",
+        }:
+            verified = (
+                execution.verified_products
+                if expected == "product_verification_for_manual"
+                else (
+                    business_state.product.active_batch.items
+                    if business_state.product.active_batch is not None
+                    else []
+                )
+            )
             if not verified:
                 execution.phase = ExecutionPhase.READY_FOR_FINAL
                 state["customer_service_execution"] = execution.model_dump(mode="json")

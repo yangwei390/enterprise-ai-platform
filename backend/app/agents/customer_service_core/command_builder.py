@@ -61,6 +61,19 @@ def build_command(
             ),
             state_action="set_pending_product_query",
         )
+    if frame.intent == "confirm_pending_product_query":
+        pending = state.product.pending_query
+        if pending is None or frame.slots.get("confirmation") is not True:
+            return CommandBuildResult(clarification="当前没有等待确认的商品查询。")
+        filters = dict(state.product.filters)
+        filters.update({"category": pending.category, "keyword": pending.keyword})
+        return CommandBuildResult(
+            command=RecommendProductsCommand(
+                filters=filters,
+                page_size=pending.requested_count,
+            ),
+            expected_result_type="products",
+        )
     if frame.intent == "cancel":
         if state.pending_after_sales is None:
             return CommandBuildResult(direct_answer="当前没有待确认的售后申请。")
@@ -81,7 +94,7 @@ def build_command(
     if frame.intent in {"recommend_products", "search_products"}:
         filters = dict(state.product.filters)
         filters.pop("confirmed_pending_product_query", None)
-        page_size = frame.requested_count or 3
+        page_size = frame.requested_count or 1
         command_type = (
             RecommendProductsCommand
             if frame.intent == "recommend_products"
@@ -165,6 +178,19 @@ def build_command(
                 "product_verification_for_manual"
                 if frame.requires_manual_evidence
                 else "product_catalog_fact"
+            ),
+        )
+    if frame.intent == "product_fact_with_selection":
+        filters = dict(state.product.filters)
+        return CommandBuildResult(
+            command=RecommendProductsCommand(
+                filters=filters,
+                page_size=1,
+            ),
+            expected_result_type=(
+                "product_selection_for_manual_fact"
+                if frame.requires_manual_evidence
+                else "product_selection_for_catalog_fact"
             ),
         )
     if frame.intent == "order":

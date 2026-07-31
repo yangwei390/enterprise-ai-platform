@@ -90,6 +90,7 @@ class CommitCoordinator:
         execution.tool_count += 1
         requires_continuation = transaction.expected_result_type in {
             "product_verification_for_manual",
+            "product_selection_for_manual_fact",
             "order_list_for_logistics",
             "order_list_for_after_sales",
         } or transaction.expected_result_type.startswith("order_verification_for_")
@@ -247,7 +248,7 @@ class CommitCoordinator:
         predicate = frame.slots.get("question_predicate") if frame is not None else None
         if (
             frame is None
-            or frame.intent != "product_fact"
+            or frame.intent not in {"product_fact", "product_fact_with_selection"}
             or batch is None
             or predicate
             not in {
