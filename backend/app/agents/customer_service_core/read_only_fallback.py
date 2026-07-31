@@ -140,7 +140,7 @@ def _build_request(
             "function": {"name": "recommend_read_only_capability"},
         },
         temperature=0,
-        enable_thinking=True,
+        enable_thinking=False,
         metadata={"purpose": "customer_service_read_only_tool_fallback"},
     )
 

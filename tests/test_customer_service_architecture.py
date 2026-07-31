@@ -842,6 +842,7 @@ def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
     monkeypatch,
 ) -> None:
     captured_request = None
+    captured_config = None
 
     class ConfirmationLLM:
         def chat(self, request):
@@ -851,9 +852,14 @@ def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
                 tool_calls=[SimpleNamespace(arguments={"rewritten_query": "请重新查询鼠标"})]
             )
 
+    def get_llm(*, config=None):
+        nonlocal captured_config
+        captured_config = config
+        return ConfirmationLLM()
+
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
-        lambda: ConfirmationLLM(),
+        get_llm,
     )
     state = CustomerServiceState(
         product=ProductContext(
@@ -883,6 +889,8 @@ def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
     assert result.rewritten_query == "请重新查询鼠标"
     assert result.frame.intent == "recommend_products"
     assert captured_request is not None
+    assert captured_config is not None
+    assert captured_config.model == "qwen3.7-flash-2026-07-15"
     rewrite_schema = captured_request.tools[0]["function"]["parameters"]
     assert set(rewrite_schema["properties"]) == {"rewritten_query"}
     roles = [message.role for message in captured_request.messages]
@@ -896,7 +904,7 @@ def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
 def test_simple_product_availability_question_never_calls_llm(monkeypatch) -> None:
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
-        lambda: (_ for _ in ()).throw(AssertionError("LLM must not be called")),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("LLM must not be called")),
     )
 
     result = asyncio.run(understand(query="有鼠标么", state=CustomerServiceState(), messages=[]))
@@ -916,24 +924,21 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
         def chat(self, request):
             nonlocal calls
             calls += 1
+            tool_name = request.tools[0]["function"]["name"]
             arguments = (
-                {"rewritten_query": "你家卖键帽吗"}
-                if calls == 1
-                else {
+                {
                     "capability": "recommend_products",
                     "slots": {"keyword": "键帽", "requested_count": 1},
                     "reason": "用户询问是否销售键帽",
                 }
+                if tool_name == "recommend_read_only_capability"
+                else {"rewritten_query": "你家卖键帽吗"}
             )
             return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
-        lambda: FallbackLLM(),
-    )
-    monkeypatch.setattr(
-        "backend.app.agents.customer_service_core.read_only_fallback.LLMFactory.get_llm",
-        lambda: FallbackLLM(),
+        lambda **_kwargs: FallbackLLM(),
     )
     metadata = {
         "agent_id": CUSTOMER_SERVICE_AGENT_ID,
@@ -961,24 +966,21 @@ def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
         def chat(self, request):
             nonlocal calls
             calls += 1
+            tool_name = request.tools[0]["function"]["name"]
             arguments = (
-                {"rewritten_query": "随便处理一下"}
-                if calls == 1
-                else {
+                {
                     "capability": "none",
                     "slots": {},
                     "reason": "没有安全的只读能力",
                 }
+                if tool_name == "recommend_read_only_capability"
+                else {"rewritten_query": "随便处理一下"}
             )
             return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
-        lambda: NoCapabilityLLM(),
-    )
-    monkeypatch.setattr(
-        "backend.app.agents.customer_service_core.read_only_fallback.LLMFactory.get_llm",
-        lambda: NoCapabilityLLM(),
+        lambda **_kwargs: NoCapabilityLLM(),
     )
     metadata = {
         "agent_id": CUSTOMER_SERVICE_AGENT_ID,
@@ -1039,7 +1041,7 @@ def test_llm_rewrite_context_keeps_complete_turns_and_excludes_raw_query(
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
-        lambda: RewriteLLM(),
+        lambda **_kwargs: RewriteLLM(),
     )
     messages = [
         {"role": "user", "content": "有鼠标么"},

@@ -13,6 +13,7 @@ from backend.app.agents.customer_service_core.contracts import (
     UnderstandingContext,
 )
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
+from backend.app.llms.config import get_customer_service_intent_llm_config
 from backend.app.schemas.product import normalize_product_category
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -436,7 +437,12 @@ async def _llm_rewrite(
         enable_thinking=False,
     )
     try:
-        response = await asyncio.to_thread(LLMFactory.get_llm().chat, request)
+        response = await asyncio.to_thread(
+            LLMFactory.get_llm(
+                config=get_customer_service_intent_llm_config(),
+            ).chat,
+            request,
+        )
         if response.tool_calls:
             output = QueryRewriteOutput.model_validate(response.tool_calls[0].arguments)
             return output.rewritten_query.strip(), None
