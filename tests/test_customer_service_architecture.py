@@ -36,7 +36,10 @@ from backend.app.agents.customer_service_core.entity_resolver import (
     resolve_product_reference,
 )
 from backend.app.agents.customer_service_core.hooks import evaluate_tool_policy
-from backend.app.agents.customer_service_core.reducer import preview_product_filters
+from backend.app.agents.customer_service_core.reducer import (
+    preview_product_filters,
+    reduce_state,
+)
 from backend.app.agents.customer_service_core.strategy import CustomerServiceStrategy
 from backend.app.agents.customer_service_core.understanding import understand
 from backend.app.agents.langgraph.budget import AgentExecutionBudget
@@ -220,6 +223,58 @@ def test_same_category_recommendation_inherits_filters() -> None:
         "price_max": 300,
     }
     assert patch["invalidate_product_context"] is False
+
+
+def test_continuation_excludes_active_batch_with_tool_subcategory() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            filters={
+                "category": "鼠标和指针设备",
+                "excluded_product_codes": ["1"],
+            },
+            active_batch=ProductCandidateBatch(
+                batch_id="mouse-2",
+                query="再推荐一个",
+                category="鼠标和指针设备",
+                items=[
+                    CandidateProduct(
+                        product_code="2",
+                        name="MX Master 4",
+                        category="办公鼠标",
+                        batch_id="mouse-2",
+                        position=0,
+                    )
+                ],
+            ),
+            active_product_code="2",
+        )
+    )
+
+    result = asyncio.run(understand(query="还有其他的么", state=state, messages=[]))
+    preview = reduce_state(state, result.frame)
+
+    assert result.frame.continuation is True
+    assert preview.proposed_state.product.filters["excluded_product_codes"] == [
+        "1",
+        "2",
+    ]
+
+
+@pytest.mark.parametrize("query", ["还有么", "其他的还有么", "别的还有吗"])
+def test_common_alternative_phrasings_are_rule_continuations(query: str) -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="键盘",
+            filters={"category": "键盘"},
+        )
+    )
+
+    result = asyncio.run(understand(query=query, state=state, messages=[]))
+
+    assert result.llm_used is False
+    assert result.frame.intent == "recommend_products"
+    assert result.frame.continuation is True
 
 
 def test_ordinal_cannot_resolve_a_different_category() -> None:

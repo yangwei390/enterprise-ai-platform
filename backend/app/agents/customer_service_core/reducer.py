@@ -119,11 +119,10 @@ def _recent_relevant_product_codes(
     batch = state.product.active_batch
     if batch is None:
         return []
-    return [
-        item.product_code
-        for item in batch.items
-        if category is None
-        or item.category is None
-        or str(category) in item.category
-        or item.category in str(category)
-    ]
+    if (
+        category is not None
+        and state.product.active_category is not None
+        and str(category) != state.product.active_category
+    ):
+        return []
+    return [item.product_code for item in batch.items]
