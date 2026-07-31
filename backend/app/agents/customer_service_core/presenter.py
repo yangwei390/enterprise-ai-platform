@@ -20,7 +20,9 @@ class CustomerServicePresenter:
             notice = self._category_switch_notice(state, knowledge_answer=True)
             return f"{notice}\n{answer}" if notice else answer
         if tool_name in {"search_products", "recommend_products", "compare_products"}:
-            answer = self._products(result)
+            answer = self._products(result, self._requested_product_type(state))
+            if not self._has_product_items(result):
+                return answer
             notice = self._category_switch_notice(state, knowledge_answer=False)
             return f"{notice}\n{answer}" if notice else answer
         if tool_name == "query_order":
@@ -45,12 +47,17 @@ class CustomerServicePresenter:
         return str(answer)
 
     @staticmethod
-    def _products(result: Any) -> str:
+    def _products(result: Any, product_type: str) -> str:
         if not isinstance(result, dict):
             return "商品工具未返回可展示的数据。"
         raw_items = result.get("items")
         if not isinstance(raw_items, list) or not raw_items:
-            return "没有找到符合条件的商品。"
+            return (
+                f"抱歉呢亲亲，小店目前还没有上架 【{product_type}】 这类宝贝呢 。\n\n"
+                "非常感谢您的咨询，我已经把您的需求记在小本本上反馈给采购部门啦！"
+                "要不您看看咱们店的主打宝贝？或者告诉我您的具体用途，"
+                "我帮您在现货里挑挑看有没有能替代的合适好物~"
+            )
         lines: list[str] = []
         for index, raw in enumerate(raw_items, start=1):
             item = raw.get("product", raw) if isinstance(raw, dict) else {}
@@ -62,6 +69,23 @@ class CustomerServicePresenter:
                 facts.append(f"库存 {item['stock_quantity']}")
             lines.append("；".join(facts))
         return "\n".join(lines)
+
+    @staticmethod
+    def _has_product_items(result: Any) -> bool:
+        return (
+            isinstance(result, dict)
+            and isinstance(result.get("items"), list)
+            and bool(result["items"])
+        )
+
+    @staticmethod
+    def _requested_product_type(state: Any) -> str:
+        execution = state.get("customer_service_execution")
+        goal = execution.get("goal") if isinstance(execution, dict) else None
+        frame = goal.get("semantic_frame") if isinstance(goal, dict) else None
+        slots = frame.get("slots") if isinstance(frame, dict) else None
+        keyword = slots.get("keyword") if isinstance(slots, dict) else None
+        return keyword if isinstance(keyword, str) and keyword else "商品"
 
     @staticmethod
     def _category_switch_notice(state: Any, *, knowledge_answer: bool) -> str | None:
