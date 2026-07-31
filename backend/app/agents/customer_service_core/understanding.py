@@ -262,7 +262,29 @@ def _product_slots(query: str) -> dict[str, Any]:
         remove_filters.extend(["price_min", "price_max"])
     if remove_filters:
         slots["remove_filters"] = remove_filters
+    if "keyword" not in slots:
+        keyword = _open_product_keyword(query)
+        if keyword is not None:
+            slots["keyword"] = keyword
     return slots
+
+
+def _open_product_keyword(query: str) -> str | None:
+    action = re.search(r"(?:推荐|找|查询)", query)
+    if action is None:
+        return None
+    remainder = query[action.end() :].strip()
+    remainder = re.sub(r"^(?:给我|一下)", "", remainder).strip()
+    remainder = re.sub(
+        r"^(?:(?:一|二|两|三|四|五|[1-5])?(?:个|款|件|只)|一些)",
+        "",
+        remainder,
+    ).strip()
+    remainder = re.sub(r"[，,。.!！?？\s]+$", "", remainder)
+    remainder = re.sub(r"[吗么嘛呢]$", "", remainder).strip()
+    if not remainder or remainder in {"商品", "产品", "东西", "其他", "别的"}:
+        return None
+    return remainder[:128]
 
 
 def _references(

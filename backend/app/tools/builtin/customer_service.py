@@ -81,8 +81,7 @@ class ProductToolQueryArgs(BaseModel):
         default=None,
         ge=1,
         description=(
-            "平台注入的当前知识库范围，用于限定主说明书 document_id；"
-            "缺失时不返回说明书 ID。"
+            "平台注入的当前知识库范围，用于限定主说明书 document_id；缺失时不返回说明书 ID。"
         ),
     )
 
@@ -131,6 +130,32 @@ class SearchProductsArgs(ProductToolQueryArgs):
 
 class RecommendProductsArgs(ProductToolQueryArgs):
     page_size: int = Field(default=3, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def require_query_condition(self) -> RecommendProductsArgs:
+        scalar_values = (
+            self.product_code,
+            self.keyword,
+            self.brand,
+            self.category,
+            self.model,
+            self.price_min,
+            self.price_max,
+        )
+        list_values = (
+            self.required_features,
+            self.excluded_features,
+            self.preferred_features,
+            self.required_use_cases,
+            self.preferred_use_cases,
+            self.features,
+            self.use_cases,
+        )
+        if not any(value is not None and value != "" for value in scalar_values) and not any(
+            list_values
+        ):
+            raise ValueError("推荐商品必须提供至少一个有效查询条件")
+        return self
 
 
 class CompareProductsArgs(BaseModel):
@@ -288,8 +313,7 @@ class _ProductTool(BaseTool):
 class SearchProductsTool(_ProductTool):
     name = "search_products"
     description = (
-        "查询模拟商品目录，支持硬条件、软偏好、分页和排序；"
-        "只返回商品数据，不自动放宽条件。"
+        "查询模拟商品目录，支持硬条件、软偏好、分页和排序；只返回商品数据，不自动放宽条件。"
     )
     args_schema = SearchProductsArgs
 
@@ -326,8 +350,7 @@ class SearchProductsTool(_ProductTool):
 class RecommendProductsTool(_ProductTool):
     name = "recommend_products"
     description = (
-        "按 ProductService 的确定性硬过滤和评分规则推荐商品；"
-        "保留 score、reasons 和无结果原因。"
+        "按 ProductService 的确定性硬过滤和评分规则推荐商品；保留 score、reasons 和无结果原因。"
     )
     args_schema = RecommendProductsArgs
 
@@ -369,8 +392,7 @@ class RecommendProductsTool(_ProductTool):
 class CompareProductsTool(_ProductTool):
     name = "compare_products"
     description = (
-        "对用户明确指定的商品编码做字段级对比；"
-        "缺失字段标记为当前资料未提供，不臆造商品能力。"
+        "对用户明确指定的商品编码做字段级对比；缺失字段标记为当前资料未提供，不臆造商品能力。"
     )
     args_schema = CompareProductsArgs
 
@@ -430,9 +452,7 @@ class QueryOrderTool(_CustomerServiceTool):
                 name=self.name,
                 success=True,
                 result=(
-                    self.customer_service.query_demo_order(args.order_ref).model_dump(
-                        mode="json"
-                    )
+                    self.customer_service.query_demo_order(args.order_ref).model_dump(mode="json")
                     if args.order_ref is not None
                     else self.customer_service.list_demo_orders()
                 ),
@@ -453,9 +473,9 @@ class QueryLogisticsTool(_CustomerServiceTool):
             lambda: ToolResult(
                 name=self.name,
                 success=True,
-                result=self.customer_service.query_demo_logistics(
-                    args.order_ref
-                ).model_dump(mode="json"),
+                result=self.customer_service.query_demo_logistics(args.order_ref).model_dump(
+                    mode="json"
+                ),
                 metadata={"mock": True, "failed": False},
             ),
         )

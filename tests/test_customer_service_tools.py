@@ -21,6 +21,7 @@ from backend.app.tools.builtin.customer_service import (
     ProductServiceResource,
     QueryLogisticsTool,
     QueryOrderTool,
+    RecommendProductsArgs,
     RecommendProductsTool,
     SearchProductsTool,
 )
@@ -233,6 +234,11 @@ def test_recommend_products_preserves_service_score_reasons_and_order() -> None:
     }
 
 
+def test_recommend_products_rejects_empty_query_conditions() -> None:
+    with pytest.raises(ValueError, match="必须提供至少一个有效查询条件"):
+        RecommendProductsArgs.model_validate({})
+
+
 def test_recommend_products_defensively_respects_page_size() -> None:
     class MultipleProductService(FakeProductService):
         def recommend(self, query: ProductQuery):
@@ -242,7 +248,7 @@ def test_recommend_products_defensively_respects_page_size() -> None:
     service = MultipleProductService()
     tool = RecommendProductsTool(_product_provider(service))
 
-    result = tool.run({"page_size": 1})
+    result = tool.run({"keyword": "鼠标", "page_size": 1})
     result_data = _result_dict(result)
 
     assert result.success is True

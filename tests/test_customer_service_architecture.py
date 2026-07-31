@@ -904,6 +904,31 @@ def test_simple_product_availability_question_never_calls_llm(monkeypatch) -> No
     assert result.frame.slots["keyword"] == "鼠标"
 
 
+def test_open_product_keyword_is_forwarded_to_recommendation_tool() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("推荐个键帽", metadata)
+
+    tool_call = planned["decision"].tool_calls[0]
+    assert tool_call.tool_name == "recommend_products"
+    assert tool_call.arguments["keyword"] == "键帽"
+
+
+def test_recommendation_without_query_condition_stops_before_tool() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("推荐一个", metadata)
+
+    assert planned["decision"].tool_calls == []
+    assert "请说明您需要推荐的商品名称、类型或具体需求" in str(planned["decision"].content)
+
+
 def test_llm_rewrite_context_keeps_complete_turns_and_excludes_raw_query(
     monkeypatch,
 ) -> None:

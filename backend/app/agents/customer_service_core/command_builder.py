@@ -96,6 +96,8 @@ def build_command(
     if frame.intent in {"recommend_products", "search_products"}:
         filters = dict(state.product.filters)
         filters.pop("confirmed_pending_product_query", None)
+        if not _has_product_query_condition(filters):
+            return CommandBuildResult(clarification="请说明您需要推荐的商品名称、类型或具体需求。")
         page_size = frame.requested_count or 1
         command_type = (
             RecommendProductsCommand
@@ -285,6 +287,30 @@ def _trusted_knowledge_base_id(runtime: dict[str, Any]) -> int | None:
     if isinstance(knowledge_base_id, int) and knowledge_base_id in allowed:
         return knowledge_base_id
     return None
+
+
+def _has_product_query_condition(filters: dict[str, Any]) -> bool:
+    scalar_fields = {
+        "product_code",
+        "keyword",
+        "brand",
+        "category",
+        "model",
+        "price_min",
+        "price_max",
+    }
+    list_fields = {
+        "required_features",
+        "excluded_features",
+        "preferred_features",
+        "required_use_cases",
+        "preferred_use_cases",
+        "features",
+        "use_cases",
+    }
+    return any(filters.get(field) not in {None, ""} for field in scalar_fields) or any(
+        isinstance(filters.get(field), list) and bool(filters[field]) for field in list_fields
+    )
 
 
 def _resolve_product(
