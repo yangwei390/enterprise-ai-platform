@@ -10,24 +10,33 @@ from backend.app.agents.customer_service_core.contracts import (
     SemanticFrame,
 )
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
+from backend.app.tools.registry import get_tool_registry
 from pydantic import BaseModel, ConfigDict, Field
 
-ReadOnlyCapability = Literal[
+ReadOnlyToolName = Literal[
     "search_products",
     "recommend_products",
     "compare_products",
     "query_order",
     "query_logistics",
-    "product_manual_fact",
     "none",
 ]
+
+_READ_ONLY_TOOL_NAMES = (
+    "search_products",
+    "recommend_products",
+    "compare_products",
+    "query_order",
+    "query_logistics",
+)
+_PROTECTED_ARGUMENTS = {"knowledge_base_id", "excluded_product_codes"}
 
 
 class ReadOnlyToolSuggestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    capability: ReadOnlyCapability
-    slots: dict[str, Any] = Field(default_factory=dict)
+    tool_name: ReadOnlyToolName
+    arguments: dict[str, Any] = Field(default_factory=dict)
     reason: str = Field(default="", max_length=500)
 
 
@@ -57,13 +66,17 @@ async def recommend_read_only_capability(
         suggestion = ReadOnlyToolSuggestion.model_validate(
             response.tool_calls[0].arguments
         )
-        frame = _to_semantic_frame(suggestion, rewritten_query)
+        validated_arguments = _validate_suggested_arguments(suggestion)
+        frame = _to_semantic_frame(
+            suggestion,
+            validated_arguments,
+        )
         return ReadOnlyFallbackResult(
             rewritten_query=rewritten_query,
             suggestion=suggestion,
             semantic_frame=frame,
             failure_reason=(
-                "no_read_only_capability" if frame is None else None
+                "no_read_only_tool" if frame is None else None
             ),
         )
     except Exception as exc:
@@ -80,16 +93,20 @@ def _build_request(
 ) -> LLMRequest:
     schema = ReadOnlyToolSuggestion.model_json_schema()
     active_batch = state.product.active_batch
+    tool_catalog = _read_only_tool_catalog()
     return LLMRequest(
         messages=[
             LLMMessage(
                 role="system",
                 content=(
                     "你是智能客服只读能力推荐器。当前本地状态机无法承接用户请求。"
-                    "只能从给定白名单中推荐一个只读能力，并提取用户明确表达的候选槽位。"
+                    "只能从给定白名单中推荐一个只读 Tool，并严格按该 Tool "
+                    "的 parameters 生成 arguments。"
                     "禁止推荐写操作，禁止虚构商品、订单、说明书或数据库事实，"
                     "禁止把历史候选当作用户明确指定的实体。"
-                    "无法安全匹配时 capability 必须为 none。"
+                    "参数名必须与 parameters 完全一致，不得自创 product_name 等字段。"
+                    "knowledge_base_id 和 excluded_product_codes 是平台保护参数，禁止输出。"
+                    "无法安全匹配时 tool_name 必须为 none。"
                     "你只提供建议，Python 状态机、Resolver 和 Adapter 将独立校验。"
                 ),
             ),
@@ -98,18 +115,7 @@ def _build_request(
                 content=json.dumps(
                     {
                         "rewritten_query": rewritten_query,
-                        "read_only_capabilities": {
-                            "search_products": "按商品名称、类型、型号等条件查询商品",
-                            "recommend_products": "按用户需求推荐商品",
-                            "compare_products": "对比用户明确指定的多个商品",
-                            "query_order": "查询订单或列出用户订单",
-                            "query_logistics": "查询用户明确指向订单的物流",
-                            "product_manual_fact": (
-                                "查询商品使用、连接、兼容、充电、按键等说明书事实；"
-                                "执行时必须先由商品工具验证商品"
-                            ),
-                            "none": "没有合适且安全的只读能力",
-                        },
+                        "read_only_tools": tool_catalog,
                         "trusted_state_summary": {
                             "active_product_category": state.product.active_category,
                             "active_product_codes": (
@@ -147,18 +153,18 @@ def _build_request(
 
 def _to_semantic_frame(
     suggestion: ReadOnlyToolSuggestion,
-    rewritten_query: str,
+    arguments: dict[str, Any],
 ) -> SemanticFrame | None:
-    if suggestion.capability == "none":
+    if suggestion.tool_name == "none":
         return None
-    slots = _safe_slots(suggestion.slots)
-    if suggestion.capability in {"search_products", "recommend_products"}:
+    slots = dict(arguments)
+    if suggestion.tool_name in {"search_products", "recommend_products"}:
         return SemanticFrame(
-            intent=suggestion.capability,
+            intent=suggestion.tool_name,
             slots=slots,
-            requested_count=_safe_requested_count(slots.pop("requested_count", None)),
+            requested_count=_safe_requested_count(slots.pop("page_size", None)),
         )
-    if suggestion.capability == "compare_products":
+    if suggestion.tool_name == "compare_products":
         raw_codes = slots.pop("product_codes", [])
         references = (
             [
@@ -174,49 +180,70 @@ def _to_semantic_frame(
             slots=slots,
             references=references,
         )
-    if suggestion.capability == "query_order":
+    if suggestion.tool_name == "query_order":
         return SemanticFrame(intent="order", slots=slots)
-    if suggestion.capability == "query_logistics":
+    if suggestion.tool_name == "query_logistics":
         return SemanticFrame(intent="logistics", slots=slots)
-    if suggestion.capability == "product_manual_fact":
-        product_code = slots.get("product_code")
-        keyword = slots.get("keyword")
-        references = []
-        if isinstance(product_code, str):
-            references.append(
-                ReferenceExpression(text=product_code, explicit_code=product_code)
-            )
-        elif isinstance(keyword, str):
-            references.append(
-                ReferenceExpression(text=keyword, explicit_name=keyword)
-            )
-        return SemanticFrame(
-            intent="product_fact",
-            slots=slots,
-            references=references,
-            question=rewritten_query,
-            requires_manual_evidence=True,
-        )
     return None
 
 
-def _safe_slots(raw: dict[str, Any]) -> dict[str, Any]:
-    allowed = {
-        "keyword",
-        "category",
-        "brand",
-        "model",
-        "product_code",
-        "product_codes",
-        "order_ref",
-        "question_predicate",
-        "requested_count",
-    }
+def _validate_suggested_arguments(
+    suggestion: ReadOnlyToolSuggestion,
+) -> dict[str, Any]:
+    if suggestion.tool_name == "none":
+        if suggestion.arguments:
+            raise ValueError("none tool must not contain arguments")
+        return {}
+    protected = _PROTECTED_ARGUMENTS & suggestion.arguments.keys()
+    if protected:
+        raise ValueError(f"protected tool arguments: {sorted(protected)}")
+    tool = get_tool_registry().get_tool(suggestion.tool_name, require_enabled=True)
+    if tool is None:
+        raise ValueError(f"read-only tool not found: {suggestion.tool_name}")
+    validated = tool.args_schema.model_validate(suggestion.arguments).model_dump()
     return {
-        key: value
-        for key, value in raw.items()
-        if key in allowed and value not in (None, "", [], {})
+        key: validated[key]
+        for key in suggestion.arguments
+        if key in validated
     }
+
+
+def _read_only_tool_catalog() -> list[dict[str, Any]]:
+    registry = get_tool_registry()
+    catalog: list[dict[str, Any]] = []
+    for tool_name in _READ_ONLY_TOOL_NAMES:
+        tool = registry.get_tool(tool_name, require_enabled=True)
+        if tool is None:
+            continue
+        parameters = tool.args_schema.model_json_schema()
+        properties = parameters.get("properties")
+        if isinstance(properties, dict):
+            for protected in _PROTECTED_ARGUMENTS:
+                properties.pop(protected, None)
+        required = parameters.get("required")
+        if isinstance(required, list):
+            parameters["required"] = [
+                name for name in required if name not in _PROTECTED_ARGUMENTS
+            ]
+        catalog.append(
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": parameters,
+            }
+        )
+    catalog.append(
+        {
+            "name": "none",
+            "description": "没有合适且安全的只读 Tool",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        }
+    )
+    return catalog
 
 
 def _safe_requested_count(value: Any) -> int | None:

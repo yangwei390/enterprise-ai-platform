@@ -919,16 +919,19 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
     monkeypatch,
 ) -> None:
     calls = 0
+    fallback_request = None
 
     class FallbackLLM:
         def chat(self, request):
-            nonlocal calls
+            nonlocal calls, fallback_request
             calls += 1
             tool_name = request.tools[0]["function"]["name"]
+            if tool_name == "recommend_read_only_capability":
+                fallback_request = request
             arguments = (
                 {
-                    "capability": "recommend_products",
-                    "slots": {"keyword": "键帽", "requested_count": 1},
+                    "tool_name": "recommend_products",
+                    "arguments": {"keyword": "键帽", "page_size": 1},
                     "reason": "用户询问是否销售键帽",
                 }
                 if tool_name == "recommend_read_only_capability"
@@ -948,13 +951,17 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
     planned = _plan_turn("你家卖键帽么", metadata)
 
     assert calls == 2
+    assert fallback_request is not None
+    catalog_message = fallback_request.messages[-1].content
+    assert '"name": "recommend_products"' in catalog_message
+    assert '"keyword"' in catalog_message
     tool_call = planned["decision"].tool_calls[0]
     assert tool_call.tool_name == "recommend_products"
     assert tool_call.arguments["keyword"] == "键帽"
     assert (
         planned["state"]["metadata"]["customer_service"]["execution_details"][
             "read_only_tool_fallback"
-        ]["suggestion"]["capability"]
+        ]["suggestion"]["tool_name"]
         == "recommend_products"
     )
 
@@ -969,8 +976,8 @@ def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
             tool_name = request.tools[0]["function"]["name"]
             arguments = (
                 {
-                    "capability": "none",
-                    "slots": {},
+                    "tool_name": "none",
+                    "arguments": {},
                     "reason": "没有安全的只读能力",
                 }
                 if tool_name == "recommend_read_only_capability"
@@ -998,11 +1005,49 @@ def test_read_only_fallback_contract_rejects_write_capability() -> None:
     with pytest.raises(ValueError):
         ReadOnlyToolSuggestion.model_validate(
             {
-                "capability": "create_after_sales_ticket",
-                "slots": {},
+                "tool_name": "create_after_sales_ticket",
+                "arguments": {},
                 "reason": "禁止写操作",
             }
         )
+
+
+def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> None:
+    calls = 0
+
+    class InvalidArgumentLLM:
+        def chat(self, request):
+            nonlocal calls
+            calls += 1
+            tool_name = request.tools[0]["function"]["name"]
+            arguments = (
+                {
+                    "tool_name": "search_products",
+                    "arguments": {"product_name": "鼠标"},
+                    "reason": "错误参数名",
+                }
+                if tool_name == "recommend_read_only_capability"
+                else {"rewritten_query": "你家卖鼠标吗"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: InvalidArgumentLLM(),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("你家卖鼠标么", metadata)
+
+    assert calls == 2
+    assert planned["decision"].tool_calls == []
+    failure = planned["state"]["metadata"]["customer_service"]["execution_details"][
+        "read_only_tool_fallback"
+    ]["failure_reason"]
+    assert "extra_forbidden" in failure
 
 
 def test_open_product_keyword_is_forwarded_to_recommendation_tool() -> None:

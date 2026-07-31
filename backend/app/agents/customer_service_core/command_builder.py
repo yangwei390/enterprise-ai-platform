@@ -145,6 +145,11 @@ def build_command(
         return CommandBuildResult(
             command=CompareProductsCommand(
                 product_codes=product_codes[:5],
+                fields=(
+                    frame.slots["fields"]
+                    if isinstance(frame.slots.get("fields"), list)
+                    else []
+                ),
                 knowledge_base_id=knowledge_base_id,
             ),
             expected_result_type="product_comparison",

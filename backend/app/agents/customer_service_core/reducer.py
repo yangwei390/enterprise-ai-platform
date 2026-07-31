@@ -57,9 +57,17 @@ def reduce_state(
             "price_min",
             "price_max",
             "required_features",
+            "excluded_features",
+            "preferred_features",
             "required_use_cases",
+            "preferred_use_cases",
+            "features",
+            "use_cases",
             "in_stock_only",
             "sale_status",
+            "sort_by",
+            "sort_order",
+            "page",
         }
         and value is not None
     }
