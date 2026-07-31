@@ -21,6 +21,9 @@ from backend.app.agents.customer_service_core.contracts import (
     StatePreview,
     TransactionStatus,
 )
+from backend.app.agents.customer_service_core.read_only_fallback import (
+    recommend_read_only_capability,
+)
 from backend.app.agents.customer_service_core.reducer import reduce_state
 from backend.app.agents.customer_service_core.understanding import understand
 from backend.app.agents.langgraph.tool_calling import (
@@ -72,6 +75,41 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             preview=preview,
             runtime=self._runtime_scope(state),
         )
+        if (
+            understanding.llm_used
+            and understanding.frame.intent
+            in {
+                "other",
+                "recommend_products",
+                "search_products",
+                "compare_products",
+                "order",
+                "logistics",
+                "product_fact",
+            }
+            and build.clarification is not None
+        ):
+            fallback = await recommend_read_only_capability(
+                rewritten_query=understanding.rewritten_query or execution.goal.raw_query,
+                state=business_state,
+            )
+            details["read_only_tool_fallback"] = fallback.model_dump(mode="json")
+            if fallback.semantic_frame is not None:
+                fallback_preview = reduce_state(
+                    business_state,
+                    fallback.semantic_frame,
+                )
+                fallback_build = build_command(
+                    frame=fallback.semantic_frame,
+                    preview=fallback_preview,
+                    runtime=self._runtime_scope(state),
+                )
+                if fallback_build.command is not None:
+                    execution.goal.intent = fallback.semantic_frame.intent
+                    execution.goal.semantic_frame = fallback.semantic_frame
+                    preview = fallback_preview
+                    build = fallback_build
+                    details["state_preview"] = preview.model_dump(mode="json")
         details["resolution"] = build.resolution.model_dump(mode="json") if build.resolution else {}
         execution.goal.resolved_entities = (
             build.resolution.product_codes if build.resolution else []

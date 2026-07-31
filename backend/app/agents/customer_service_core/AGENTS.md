@@ -23,12 +23,15 @@
 - `reducer.py`：业务状态预览；只生成 proposed patch，不直接提交可信状态。
 - `entity_resolver.py`：候选批次内引用解析与池外显式实体校验决策。
 - `understanding.py`：规则优先、LLM 补充的正式 SemanticFrame 理解入口。
+- `read_only_fallback.py`：重写后规则仍无法承接时，只推荐白名单只读能力和候选槽位。
 - `command_builder.py`：从 SemanticFrame、状态预览和解析结果生成强类型 Command。
 
 ## 约束
 
 - 不写具体商品类别、品牌、型号或订单号。
 - LLM 输出只能作为候选语义，真实目标必须由 DST 校验。
+- 只读能力 Fallback 不得推荐或生成写操作；建议必须重新经过强类型 Command、
+  Resolver、权限和 Adapter Schema 校验。
 - Tool 参数只能从已校验请求和 DST 生成。
 - 新逻辑只读取 `ConversationDST`；旧字段仅允许作为会话迁移输入和兼容输出，
   不得参与新的路由、目标解析或状态决策。

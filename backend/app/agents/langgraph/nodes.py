@@ -84,6 +84,16 @@ class PlannerNode:
             is True
         ):
             state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
+        if (
+            is_customer_service_strategy
+            and state.get("metadata", {})
+            .get("customer_service", {})
+            .get("execution_details", {})
+            .get("read_only_tool_fallback", {})
+            .get("triggered")
+            is True
+        ):
+            state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
         state["current_action"] = decision.action
         state["pending_tool_calls"] = [tool_call.model_dump() for tool_call in decision.tool_calls]
         if decision.content and decision.action == "final":

@@ -53,6 +53,7 @@ def reduce_state(
             "category",
             "brand",
             "model",
+            "product_code",
             "price_min",
             "price_max",
             "required_features",

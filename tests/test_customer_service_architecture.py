@@ -38,6 +38,9 @@ from backend.app.agents.customer_service_core.entity_resolver import (
 )
 from backend.app.agents.customer_service_core.hooks import evaluate_tool_policy
 from backend.app.agents.customer_service_core.presenter import CustomerServicePresenter
+from backend.app.agents.customer_service_core.read_only_fallback import (
+    ReadOnlyToolSuggestion,
+)
 from backend.app.agents.customer_service_core.reducer import (
     preview_product_filters,
     reduce_state,
@@ -902,6 +905,102 @@ def test_simple_product_availability_question_never_calls_llm(monkeypatch) -> No
     assert result.rewritten_query is None
     assert result.frame.intent == "recommend_products"
     assert result.frame.slots["keyword"] == "鼠标"
+
+
+def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    class FallbackLLM:
+        def chat(self, request):
+            nonlocal calls
+            calls += 1
+            arguments = (
+                {"rewritten_query": "你家卖键帽吗"}
+                if calls == 1
+                else {
+                    "capability": "recommend_products",
+                    "slots": {"keyword": "键帽", "requested_count": 1},
+                    "reason": "用户询问是否销售键帽",
+                }
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda: FallbackLLM(),
+    )
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.read_only_fallback.LLMFactory.get_llm",
+        lambda: FallbackLLM(),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("你家卖键帽么", metadata)
+
+    assert calls == 2
+    tool_call = planned["decision"].tool_calls[0]
+    assert tool_call.tool_name == "recommend_products"
+    assert tool_call.arguments["keyword"] == "键帽"
+    assert (
+        planned["state"]["metadata"]["customer_service"]["execution_details"][
+            "read_only_tool_fallback"
+        ]["suggestion"]["capability"]
+        == "recommend_products"
+    )
+
+
+def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
+    calls = 0
+
+    class NoCapabilityLLM:
+        def chat(self, request):
+            nonlocal calls
+            calls += 1
+            arguments = (
+                {"rewritten_query": "随便处理一下"}
+                if calls == 1
+                else {
+                    "capability": "none",
+                    "slots": {},
+                    "reason": "没有安全的只读能力",
+                }
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda: NoCapabilityLLM(),
+    )
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.read_only_fallback.LLMFactory.get_llm",
+        lambda: NoCapabilityLLM(),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("随便处理一下", metadata)
+
+    assert calls == 2
+    assert planned["decision"].tool_calls == []
+    assert "请说明您要查询的商品、订单或具体问题" in str(planned["decision"].content)
+
+
+def test_read_only_fallback_contract_rejects_write_capability() -> None:
+    with pytest.raises(ValueError):
+        ReadOnlyToolSuggestion.model_validate(
+            {
+                "capability": "create_after_sales_ticket",
+                "slots": {},
+                "reason": "禁止写操作",
+            }
+        )
 
 
 def test_open_product_keyword_is_forwarded_to_recommendation_tool() -> None:
