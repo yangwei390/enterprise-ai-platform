@@ -150,6 +150,12 @@ class CommitCoordinator:
             ):
                 execution.verified_products = items
                 return
+            if execution.pending_transaction.expected_result_type == "product_catalog_detail":
+                if len(items) != 1:
+                    raise ValueError("product catalog detail requires one product")
+                state.product.active_product_code = items[0].product_code
+                state.product.last_question = None
+                return
             category = arguments.get("category")
             if not isinstance(category, str):
                 category = (
@@ -264,6 +270,8 @@ class CommitCoordinator:
         state.product.last_question = ProductQuestionFocus(
             predicate=predicate,
             batch_id=batch.batch_id,
+            source_turn_id=execution.turn_id,
+            source_question=frame.question,
         )
 
     @staticmethod

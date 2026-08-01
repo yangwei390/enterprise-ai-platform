@@ -358,16 +358,131 @@ def test_ordinal_only_followup_inherits_question_inside_current_batch() -> None:
             last_question=ProductQuestionFocus(
                 predicate="bluetooth_connectivity",
                 batch_id="mouse-1",
+                source_turn_id="turn-previous",
+                source_question="第二个支持蓝牙吗",
             ),
         )
     )
+    messages = [
+        {"role": "user", "content": "第二个支持蓝牙吗"},
+        {"role": "assistant", "content": "已根据说明书回答。"},
+        {"role": "user", "content": "第一个呢"},
+    ]
 
-    result = asyncio.run(understand(query="第一个呢", state=state, messages=[]))
+    result = asyncio.run(understand(query="第一个呢", state=state, messages=messages))
 
     assert result.llm_used is False
     assert result.frame.intent == "product_fact"
     assert result.frame.question == "该商品支持蓝牙吗"
     assert result.frame.references[0].ordinal == 0
+
+
+def test_ordinal_only_after_product_list_opens_catalog_detail_without_rag() -> None:
+    batch = ProductCandidateBatch(
+        batch_id="mouse-list",
+        query="你家卖鼠标么",
+        category="鼠标和指针设备",
+        items=[
+            CandidateProduct(
+                product_code="M-1",
+                name="Mouse One",
+                category="鼠标和指针设备",
+                batch_id="mouse-list",
+                position=0,
+                primary_manual_document_id=9,
+            ),
+            CandidateProduct(
+                product_code="M-2",
+                name="Mouse Two",
+                category="鼠标和指针设备",
+                batch_id="mouse-list",
+                position=1,
+                primary_manual_document_id=10,
+            ),
+        ],
+    )
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            filters={"keyword": "鼠标"},
+            active_batch=batch,
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": state.model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("第二个呢？", metadata)
+
+    assert planned["state"]["customer_service_execution"]["goal"]["intent"] == (
+        "product_catalog_detail"
+    )
+    assert planned["decision"].tool_calls[0].tool_name == "search_products"
+    assert planned["decision"].tool_calls[0].arguments["product_code"] == "M-2"
+    assert planned["state"]["customer_service_execution"]["pending_transaction"][
+        "expected_result_type"
+    ] == "product_catalog_detail"
+    _commit_planned_products(
+        planned["state"],
+        planned["decision"],
+        [
+            {
+                "product_code": "M-2",
+                "name": "Mouse Two",
+                "category": "鼠标和指针设备",
+                "primary_manual_document_id": 10,
+            }
+        ],
+    )
+    committed = CustomerServiceState.model_validate(
+        planned["state"]["metadata"]["customer_service"]["state"]
+    )
+    assert committed.product.active_batch == batch
+    assert committed.product.active_product_code == "M-2"
+    assert committed.product.last_question is None
+
+
+def test_stale_question_focus_does_not_force_ordinal_into_rag() -> None:
+    state = CustomerServiceState(
+        product=ProductContext(
+            active_batch=ProductCandidateBatch(
+                batch_id="mouse-list",
+                query="你家卖鼠标么",
+                items=[
+                    CandidateProduct(
+                        product_code="M-1",
+                        name="Mouse One",
+                        batch_id="mouse-list",
+                        position=0,
+                    ),
+                    CandidateProduct(
+                        product_code="M-2",
+                        name="Mouse Two",
+                        batch_id="mouse-list",
+                        position=1,
+                    ),
+                ],
+            ),
+            last_question=ProductQuestionFocus(
+                predicate="bluetooth_connectivity",
+                batch_id="mouse-list",
+                source_turn_id="old-turn",
+                source_question="之前的商品支持蓝牙吗",
+            ),
+        )
+    )
+    messages = [
+        {"role": "user", "content": "你家卖鼠标么"},
+        {"role": "assistant", "content": "1. Mouse One\n2. Mouse Two"},
+        {"role": "user", "content": "第二个呢？"},
+    ]
+
+    result = asyncio.run(understand(query="第二个呢？", state=state, messages=messages))
+
+    assert result.llm_used is False
+    assert result.frame.intent == "product_catalog_detail"
+    assert result.frame.requires_manual_evidence is False
 
 
 def test_ordinal_does_not_search_an_old_product_batch() -> None:
@@ -799,6 +914,7 @@ def test_cross_category_manual_question_carries_scope_into_both_tools() -> None:
     assert second_call.tool_name == "knowledge_search"
     assert second_call.arguments["knowledge_base_id"] == 1
     assert second_call.arguments["document_id"] == 9
+    assert second_call.arguments["query"] == "Mouse One：第一个鼠标能连接蓝牙么"
 
 
 def test_cross_category_product_answer_explains_automatic_requery() -> None:

@@ -81,6 +81,8 @@ class ProductQuestionFocus(BaseModel):
 
     predicate: ProductQuestionPredicate
     batch_id: str
+    source_turn_id: str | None = None
+    source_question: str | None = None
 
 
 class PendingProductQuery(BaseModel):

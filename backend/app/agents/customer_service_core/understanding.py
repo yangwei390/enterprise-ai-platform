@@ -79,7 +79,7 @@ async def understand(
     state: CustomerServiceState,
     messages: list[dict[str, Any]],
 ) -> UnderstandingResult:
-    rule_frame = _rule_understand(query, state)
+    rule_frame = _rule_understand(query, state, messages)
     if rule_frame.intent != "other":
         return UnderstandingResult(
             frame=rule_frame,
@@ -88,7 +88,7 @@ async def understand(
         )
     context = _build_understanding_context(query, state, messages)
     rewritten_query, failure_reason = await _llm_rewrite(context)
-    rewritten_rule_frame = _rule_understand(rewritten_query, state)
+    rewritten_rule_frame = _rule_understand(rewritten_query, state, messages)
     return UnderstandingResult(
         frame=rewritten_rule_frame,
         rule_frame=rule_frame,
@@ -101,7 +101,11 @@ async def understand(
     )
 
 
-def _rule_understand(query: str, state: CustomerServiceState) -> SemanticFrame:
+def _rule_understand(
+    query: str,
+    state: CustomerServiceState,
+    messages: list[dict[str, Any]],
+) -> SemanticFrame:
     normalized = query.strip()
     lowered = normalized.casefold()
     if any(term in lowered for term in _INJECTION_TERMS):
@@ -169,10 +173,13 @@ def _rule_understand(query: str, state: CustomerServiceState) -> SemanticFrame:
     if (
         references
         and _is_ordinal_only_followup(normalized, references)
-        and state.product.last_question is not None
-        and state.product.active_batch is not None
-        and state.product.last_question.batch_id == state.product.active_batch.batch_id
+        and _can_inherit_product_question(
+            query=normalized,
+            state=state,
+            messages=messages,
+        )
     ):
+        assert state.product.last_question is not None
         predicate = state.product.last_question.predicate
         return SemanticFrame(
             intent="product_fact",
@@ -180,6 +187,13 @@ def _rule_understand(query: str, state: CustomerServiceState) -> SemanticFrame:
             references=references,
             question=_question_for_predicate(predicate),
             requires_manual_evidence=predicate != "price",
+        )
+    if references and _is_ordinal_only_followup(normalized, references):
+        return SemanticFrame(
+            intent="product_catalog_detail",
+            slots={"fact_type": "catalog"},
+            references=references,
+            question="查看该商品详情",
         )
     if manual:
         if _is_different_product_category(slots, state):
@@ -531,6 +545,58 @@ def _is_ordinal_only_followup(
     stripped = _ORDINAL_RE.sub("", query)
     stripped = re.sub(r"[\s，,。.!！?？呢吗呀]+", "", stripped)
     return bool(references) and not stripped
+
+
+def _can_inherit_product_question(
+    *,
+    query: str,
+    state: CustomerServiceState,
+    messages: list[dict[str, Any]],
+) -> bool:
+    focus = state.product.last_question
+    batch = state.product.active_batch
+    if (
+        focus is None
+        or batch is None
+        or focus.batch_id != batch.batch_id
+        or not focus.source_question
+    ):
+        return False
+    previous_user_query = _previous_user_query(query, messages)
+    if previous_user_query is None:
+        return False
+    return _explicit_question_predicate(previous_user_query) == focus.predicate
+
+
+def _previous_user_query(
+    current_query: str,
+    messages: list[dict[str, Any]],
+) -> str | None:
+    user_messages = [
+        str(message.get("content") or "").strip()
+        for message in messages
+        if message.get("role") in {"user", "human"}
+        and str(message.get("content") or "").strip()
+    ]
+    if user_messages and user_messages[-1] == current_query.strip():
+        user_messages.pop()
+    return user_messages[-1] if user_messages else None
+
+
+def _explicit_question_predicate(query: str) -> str | None:
+    if "蓝牙" in query:
+        return "bluetooth_connectivity"
+    if "充电" in query:
+        return "charging"
+    if "兼容" in query:
+        return "compatibility"
+    if "按键" in query:
+        return "buttons"
+    if any(term in query for term in _PRICE_TERMS):
+        return "price"
+    if any(term in query for term in ("特点", "功能", "特性")):
+        return "features"
+    return None
 
 
 def _question_predicate(query: str) -> str:

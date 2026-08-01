@@ -196,6 +196,22 @@ def build_command(
                 else "product_catalog_fact"
             ),
         )
+    if frame.intent == "product_catalog_detail":
+        resolution = _resolve_product(frame, state)
+        if resolution.status != ResolutionStatus.RESOLVED:
+            return CommandBuildResult(
+                clarification="请明确选择要查看的商品。",
+                resolution=resolution,
+            )
+        return CommandBuildResult(
+            command=SearchProductsCommand(
+                product_code=resolution.product_codes[0],
+                page_size=1,
+                knowledge_base_id=knowledge_base_id,
+            ),
+            resolution=resolution,
+            expected_result_type="product_catalog_detail",
+        )
     if frame.intent == "product_fact_with_selection":
         filters = dict(state.product.filters)
         return CommandBuildResult(

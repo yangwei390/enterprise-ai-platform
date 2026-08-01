@@ -213,7 +213,7 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             if knowledge_base_id is None:
                 return self._fail(state, execution, "knowledge_base_scope_missing")
             command = KnowledgeSearchCommand(
-                query=execution.goal.raw_query if execution.goal else "",
+                query=self._knowledge_query(execution, product.name),
                 knowledge_base_id=knowledge_base_id,
                 document_id=product.primary_manual_document_id,
                 conversation_id=state.get("conversation_id"),
@@ -261,6 +261,17 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
         execution.phase = ExecutionPhase.READY_FOR_FINAL
         state["customer_service_execution"] = execution.model_dump(mode="json")
         return self._final()
+
+    @staticmethod
+    def _knowledge_query(
+        execution: CustomerServiceExecution,
+        product_name: str,
+    ) -> str:
+        frame = execution.goal.semantic_frame if execution.goal is not None else None
+        question = frame.question if frame is not None else None
+        if not isinstance(question, str) or not question.strip():
+            question = execution.goal.raw_query if execution.goal is not None else ""
+        return f"{product_name}：{question.strip()}"
 
     def _tool_decision(
         self,
