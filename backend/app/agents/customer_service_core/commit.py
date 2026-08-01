@@ -150,9 +150,13 @@ class CommitCoordinator:
             ):
                 execution.verified_products = items
                 return
-            if execution.pending_transaction.expected_result_type == "product_catalog_detail":
+            if execution.pending_transaction.expected_result_type in {
+                "product_catalog_detail",
+                "product_feature_match",
+                "product_use_case_match",
+            }:
                 if len(items) != 1:
-                    raise ValueError("product catalog detail requires one product")
+                    raise ValueError("product catalog fact requires one product")
                 state.product.active_product_code = items[0].product_code
                 state.product.last_question = None
                 return

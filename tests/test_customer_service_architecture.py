@@ -1047,8 +1047,10 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
                 fallback_request = request
             arguments = (
                 {
-                    "tool_name": "recommend_products",
+                    "tool_name": "search_products",
                     "arguments": {"keyword": "键帽", "page_size": 1},
+                    "response_mode": "product_list",
+                    "question_slots": {},
                     "reason": "用户询问是否销售键帽",
                 }
                 if tool_name == "recommend_read_only_capability"
@@ -1070,16 +1072,19 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
     assert calls == 2
     assert fallback_request is not None
     catalog_message = fallback_request.messages[-1].content
-    assert '"name": "recommend_products"' in catalog_message
+    assert '"name": "search_products"' in catalog_message
+    assert '"use_when"' in catalog_message
+    assert '"argument_guidance"' in catalog_message
+    assert '"name": "knowledge_search"' in catalog_message
     assert '"keyword"' in catalog_message
     tool_call = planned["decision"].tool_calls[0]
-    assert tool_call.tool_name == "recommend_products"
+    assert tool_call.tool_name == "search_products"
     assert tool_call.arguments["keyword"] == "键帽"
     assert (
         planned["state"]["metadata"]["customer_service"]["execution_details"][
             "read_only_tool_fallback"
         ]["suggestion"]["tool_name"]
-        == "recommend_products"
+        == "search_products"
     )
 
 
@@ -1094,8 +1099,10 @@ def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
             requested_tools.append(tool_name)
             arguments = (
                 {
-                    "tool_name": "recommend_products",
+                    "tool_name": "search_products",
                     "arguments": {"keyword": "鼠标", "page_size": 1},
+                    "response_mode": "product_list",
+                    "question_slots": {},
                     "reason": "用户询问是否销售鼠标",
                 }
                 if tool_name == "recommend_read_only_capability"
@@ -1120,7 +1127,7 @@ def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
         "recommend_read_only_capability",
     ]
     tool_call = planned["decision"].tool_calls[0]
-    assert tool_call.tool_name == "recommend_products"
+    assert tool_call.tool_name == "search_products"
     assert tool_call.arguments["keyword"] == "鼠标"
     understanding = planned["state"]["metadata"]["customer_service"][
         "execution_details"
@@ -1141,6 +1148,8 @@ def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
                 {
                     "tool_name": "none",
                     "arguments": {},
+                    "response_mode": "clarification",
+                    "question_slots": {},
                     "reason": "没有安全的只读能力",
                 }
                 if tool_name == "recommend_read_only_capability"
@@ -1170,6 +1179,8 @@ def test_read_only_fallback_contract_rejects_write_capability() -> None:
             {
                 "tool_name": "create_after_sales_ticket",
                 "arguments": {},
+                "response_mode": "clarification",
+                "question_slots": {},
                 "reason": "禁止写操作",
             }
         )
@@ -1187,6 +1198,8 @@ def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> N
                 {
                     "tool_name": "search_products",
                     "arguments": {"product_name": "鼠标"},
+                    "response_mode": "product_list",
+                    "question_slots": {},
                     "reason": "错误参数名",
                 }
                 if tool_name == "recommend_read_only_capability"
@@ -1211,6 +1224,179 @@ def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> N
         "read_only_tool_fallback"
     ]["failure_reason"]
     assert "extra_forbidden" in failure
+
+
+def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
+    monkeypatch,
+) -> None:
+    batch = ProductCandidateBatch(
+        batch_id="keyboard-1",
+        query="你家卖键盘么",
+        category="键盘",
+        items=[
+            CandidateProduct(
+                product_code="3",
+                name="G512 X 75",
+                category="键盘",
+                batch_id="keyboard-1",
+                position=0,
+                primary_manual_document_id=11,
+            )
+        ],
+    )
+
+    class UseCaseLLM:
+        def chat(self, request):
+            tool_name = request.tools[0]["function"]["name"]
+            arguments = (
+                {
+                    "tool_name": "search_products",
+                    "arguments": {"product_code": "3"},
+                    "response_mode": "product_use_case_match",
+                    "question_slots": {"use_case": "游戏"},
+                    "reason": "用户询问当前键盘是否适合游戏",
+                }
+                if tool_name == "recommend_read_only_capability"
+                else {"rewritten_query": "G512 X 75键盘能打游戏么"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: UseCaseLLM(),
+    )
+    business_state = CustomerServiceState(
+        product=ProductContext(
+            active_category="键盘",
+            filters={"keyword": "键盘"},
+            active_batch=batch,
+            active_product_code="3",
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("能打游戏么", metadata)
+
+    tool_call = planned["decision"].tool_calls[0]
+    assert tool_call.tool_name == "search_products"
+    assert tool_call.arguments["product_code"] == "3"
+    assert "keyword" not in tool_call.arguments
+    transaction = planned["state"]["customer_service_execution"]["pending_transaction"]
+    assert transaction["expected_result_type"] == "product_use_case_match"
+    result = {
+        "items": [
+            {
+                "product_code": "3",
+                "name": "G512 X 75",
+                "category": "键盘",
+                "use_cases": ["游戏"],
+                "primary_manual_document_id": 11,
+            }
+        ],
+        "total": 1,
+    }
+    _commit_tool_result(planned["state"], planned["decision"], result)
+    planned["state"]["observations"] = [
+        {
+            "tool_name": "search_products",
+            "success": True,
+            "raw_result": result,
+        }
+    ]
+
+    assert CustomerServicePresenter().present(planned["state"]) == (
+        "G512 X 75适合游戏。"
+    )
+    committed = CustomerServiceState.model_validate(
+        planned["state"]["metadata"]["customer_service"]["state"]
+    )
+    assert committed.product.active_batch is not None
+    assert committed.product.active_batch.batch_id == "keyboard-1"
+    assert committed.product.filters == {"keyword": "键盘"}
+
+
+def test_llm_only_manual_fact_uses_trusted_product_then_scoped_knowledge(
+    monkeypatch,
+) -> None:
+    batch = ProductCandidateBatch(
+        batch_id="mouse-1",
+        query="你家卖鼠标么",
+        category="鼠标和指针设备",
+        items=[
+            CandidateProduct(
+                product_code="1",
+                name="罗技G304",
+                category="鼠标和指针设备",
+                batch_id="mouse-1",
+                position=0,
+                primary_manual_document_id=9,
+            )
+        ],
+    )
+
+    class ManualLLM:
+        def chat(self, request):
+            tool_name = request.tools[0]["function"]["name"]
+            arguments = (
+                {
+                    "tool_name": "knowledge_search",
+                    "arguments": {},
+                    "response_mode": "manual_fact",
+                    "question_slots": {
+                        "manual_question": "罗技G304鼠标能连接蓝牙吗"
+                    },
+                    "reason": "连接能力需要查询商品说明书",
+                }
+                if tool_name == "recommend_read_only_capability"
+                else {"rewritten_query": "罗技G304鼠标能连接蓝牙吗"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: ManualLLM(),
+    )
+    business_state = CustomerServiceState(
+        product=ProductContext(
+            active_category="鼠标和指针设备",
+            active_batch=batch,
+            active_product_code="1",
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("它能连接蓝牙么", metadata)
+
+    first_call = planned["decision"].tool_calls[0]
+    assert first_call.tool_name == "search_products"
+    assert first_call.arguments["product_code"] == "1"
+    _commit_planned_products(
+        planned["state"],
+        planned["decision"],
+        [
+            {
+                "product_code": "1",
+                "name": "罗技G304",
+                "category": "鼠标和指针设备",
+                "primary_manual_document_id": 9,
+            }
+        ],
+    )
+    continued = asyncio.run(CustomerServiceStrategy().adecide(planned["state"]))
+
+    second_call = continued.tool_calls[0]
+    assert second_call.tool_name == "knowledge_search"
+    assert second_call.arguments["document_id"] == 9
+    assert second_call.arguments["knowledge_base_id"] == 1
+    assert "罗技G304鼠标能连接蓝牙吗" in second_call.arguments["query"]
 
 
 def test_open_product_keyword_is_forwarded_to_recommendation_tool() -> None:

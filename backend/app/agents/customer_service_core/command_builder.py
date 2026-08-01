@@ -193,7 +193,7 @@ def build_command(
             expected_result_type=(
                 "product_verification_for_manual"
                 if frame.requires_manual_evidence
-                else "product_catalog_fact"
+                else _catalog_expected_result(frame)
             ),
         )
     if frame.intent == "product_catalog_detail":
@@ -332,6 +332,17 @@ def _has_product_query_condition(filters: dict[str, Any]) -> bool:
     return any(filters.get(field) not in {None, ""} for field in scalar_fields) or any(
         isinstance(filters.get(field), list) and bool(filters[field]) for field in list_fields
     )
+
+
+def _catalog_expected_result(frame: SemanticFrame) -> str:
+    response_mode = frame.slots.get("response_mode")
+    if response_mode in {
+        "product_catalog_detail",
+        "product_feature_match",
+        "product_use_case_match",
+    }:
+        return str(response_mode)
+    return "product_catalog_fact"
 
 
 def _resolve_product(

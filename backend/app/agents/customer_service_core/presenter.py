@@ -20,6 +20,13 @@ class CustomerServicePresenter:
             notice = self._category_switch_notice(state, knowledge_answer=True)
             return f"{notice}\n{answer}" if notice else answer
         if tool_name in {"search_products", "recommend_products", "compare_products"}:
+            response_mode, question_slots = self._response_contract(state)
+            if response_mode in {"product_feature_match", "product_use_case_match"}:
+                return self._product_match(
+                    result,
+                    response_mode=response_mode,
+                    question_slots=question_slots,
+                )
             answer = self._products(result, self._requested_product_type(state))
             if not self._has_product_items(result):
                 return answer
@@ -77,6 +84,61 @@ class CustomerServicePresenter:
             and isinstance(result.get("items"), list)
             and bool(result["items"])
         )
+
+    @staticmethod
+    def _response_contract(state: Any) -> tuple[str | None, dict[str, Any]]:
+        execution = state.get("customer_service_execution")
+        transaction = (
+            execution.get("pending_transaction") if isinstance(execution, dict) else None
+        )
+        response_mode = (
+            transaction.get("expected_result_type")
+            if isinstance(transaction, dict)
+            else None
+        )
+        goal = execution.get("goal") if isinstance(execution, dict) else None
+        frame = goal.get("semantic_frame") if isinstance(goal, dict) else None
+        slots = frame.get("slots") if isinstance(frame, dict) else None
+        return (
+            response_mode if isinstance(response_mode, str) else None,
+            slots if isinstance(slots, dict) else {},
+        )
+
+    @staticmethod
+    def _product_match(
+        result: Any,
+        *,
+        response_mode: str,
+        question_slots: dict[str, Any],
+    ) -> str:
+        if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+            return "商品工具未返回可核验的数据。"
+        if len(result["items"]) != 1 or not isinstance(result["items"][0], dict):
+            return "当前没有找到唯一商品，无法核验该问题。"
+        item = result["items"][0].get("product", result["items"][0])
+        if not isinstance(item, dict):
+            return "商品工具未返回可核验的数据。"
+        name = str(item.get("name") or item.get("product_code") or "该商品")
+        if response_mode == "product_use_case_match":
+            target = question_slots.get("use_case")
+            evidence = item.get("use_cases")
+            label = "适合"
+        else:
+            target = question_slots.get("feature")
+            evidence = item.get("features")
+            label = "支持"
+        if not isinstance(target, str) or not target.strip():
+            return f"当前商品资料无法确认{name}的相关能力。"
+        values = [str(value) for value in evidence] if isinstance(evidence, list) else []
+        normalized_target = target.strip().casefold()
+        matched = any(
+            normalized_target in value.casefold() or value.casefold() in normalized_target
+            for value in values
+            if value
+        )
+        if matched:
+            return f"{name}{label}{target.strip()}。"
+        return f"当前商品资料无法确认{name}是否{label}{target.strip()}。"
 
     @staticmethod
     def _requested_product_type(state: Any) -> str:

@@ -19,7 +19,21 @@ ReadOnlyToolName = Literal[
     "compare_products",
     "query_order",
     "query_logistics",
+    "knowledge_search",
     "none",
+]
+ResponseMode = Literal[
+    "product_list",
+    "product_recommendation",
+    "product_catalog_detail",
+    "product_feature_match",
+    "product_use_case_match",
+    "product_comparison",
+    "manual_fact",
+    "order_list",
+    "order_detail",
+    "logistics_status",
+    "clarification",
 ]
 
 _READ_ONLY_TOOL_NAMES = (
@@ -32,11 +46,21 @@ _READ_ONLY_TOOL_NAMES = (
 _PROTECTED_ARGUMENTS = {"knowledge_base_id", "excluded_product_codes"}
 
 
+class ReadOnlyQuestionSlots(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    use_case: str | None = Field(default=None, min_length=1, max_length=64)
+    feature: str | None = Field(default=None, min_length=1, max_length=64)
+    manual_question: str | None = Field(default=None, min_length=1, max_length=500)
+
+
 class ReadOnlyToolSuggestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tool_name: ReadOnlyToolName
     arguments: dict[str, Any] = Field(default_factory=dict)
+    response_mode: ResponseMode
+    question_slots: ReadOnlyQuestionSlots = Field(default_factory=ReadOnlyQuestionSlots)
     reason: str = Field(default="", max_length=500)
 
 
@@ -66,10 +90,12 @@ async def recommend_read_only_capability(
         suggestion = ReadOnlyToolSuggestion.model_validate(
             response.tool_calls[0].arguments
         )
-        validated_arguments = _validate_suggested_arguments(suggestion)
+        validated_arguments = _validate_suggested_arguments(suggestion, state)
         frame = _to_semantic_frame(
             suggestion,
             validated_arguments,
+            rewritten_query=rewritten_query,
+            state=state,
         )
         return ReadOnlyFallbackResult(
             rewritten_query=rewritten_query,
@@ -102,6 +128,14 @@ def _build_request(
                     "你是智能客服只读能力推荐器。当前本地状态机无法承接用户请求。"
                     "只能从给定白名单中推荐一个只读 Tool，并严格按该 Tool "
                     "的 parameters 生成 arguments。"
+                    "先区分用户是在找商品，还是询问当前商品的事实。"
+                    "当前商品已经确定时必须使用可信 product_code，不得把问题中的"
+                    "用途或能力词当作 keyword 重新搜索。"
+                    "价格、库存、features、use_cases 属于商品目录事实；"
+                    "蓝牙、连接、充电、兼容、按键和使用方法属于说明书事实。"
+                    "只有用户明确要求推荐、换一个或其他选择时才使用 recommend_products。"
+                    "arguments 只表示 Tool 查询条件；回答目标必须通过 response_mode "
+                    "和 question_slots 表达。"
                     "禁止推荐写操作，禁止虚构商品、订单、说明书或数据库事实，"
                     "禁止把历史候选当作用户明确指定的实体。"
                     "参数名必须与 parameters 完全一致，不得自创 product_name 等字段。"
@@ -118,10 +152,22 @@ def _build_request(
                         "read_only_tools": tool_catalog,
                         "trusted_state_summary": {
                             "active_product_category": state.product.active_category,
-                            "active_product_codes": (
-                                [item.product_code for item in active_batch.items]
-                                if active_batch is not None
-                                else []
+                            "active_product": _active_product_summary(state),
+                            "visible_product_batch": (
+                                [
+                                    {
+                                        "position": item.position + 1,
+                                        "product_code": item.product_code,
+                                        "name": item.name,
+                                        "category": item.category,
+                                        "primary_manual_document_id": (
+                                            item.primary_manual_document_id
+                                        ),
+                                        "source": "verified_tool_result",
+                                    }
+                                    for item in active_batch.items
+                                ]
+                                if active_batch is not None else []
                             ),
                             "active_order_ref": state.active_order_ref,
                             "order_candidate_count": len(state.order_candidates),
@@ -154,11 +200,45 @@ def _build_request(
 def _to_semantic_frame(
     suggestion: ReadOnlyToolSuggestion,
     arguments: dict[str, Any],
+    *,
+    rewritten_query: str,
+    state: CustomerServiceState,
 ) -> SemanticFrame | None:
     if suggestion.tool_name == "none":
         return None
-    slots = dict(arguments)
+    slots = {
+        **arguments,
+        "response_mode": suggestion.response_mode,
+        **suggestion.question_slots.model_dump(exclude_none=True),
+    }
+    if suggestion.tool_name == "knowledge_search":
+        active_code = state.product.active_product_code
+        if active_code is None:
+            return None
+        return SemanticFrame(
+            intent="product_fact",
+            slots=slots,
+            references=[ReferenceExpression(text=active_code, explicit_code=active_code)],
+            question=suggestion.question_slots.manual_question or rewritten_query,
+            requires_manual_evidence=True,
+        )
     if suggestion.tool_name in {"search_products", "recommend_products"}:
+        if suggestion.response_mode in {
+            "product_catalog_detail",
+            "product_feature_match",
+            "product_use_case_match",
+        }:
+            product_code = arguments.get("product_code")
+            if not isinstance(product_code, str):
+                return None
+            return SemanticFrame(
+                intent="product_fact",
+                slots=slots,
+                references=[
+                    ReferenceExpression(text=product_code, explicit_code=product_code)
+                ],
+                question=rewritten_query,
+            )
         return SemanticFrame(
             intent=suggestion.tool_name,
             slots=slots,
@@ -189,10 +269,19 @@ def _to_semantic_frame(
 
 def _validate_suggested_arguments(
     suggestion: ReadOnlyToolSuggestion,
+    state: CustomerServiceState,
 ) -> dict[str, Any]:
+    _validate_response_contract(suggestion)
     if suggestion.tool_name == "none":
         if suggestion.arguments:
             raise ValueError("none tool must not contain arguments")
+        return {}
+    if suggestion.tool_name == "knowledge_search":
+        if suggestion.arguments:
+            raise ValueError("knowledge_search arguments are injected by Python")
+        active = _active_product_summary(state)
+        if active is None or active.get("primary_manual_document_id") is None:
+            raise ValueError("trusted active product manual is missing")
         return {}
     protected = _PROTECTED_ARGUMENTS & suggestion.arguments.keys()
     if protected:
@@ -201,6 +290,22 @@ def _validate_suggested_arguments(
     if tool is None:
         raise ValueError(f"read-only tool not found: {suggestion.tool_name}")
     validated = tool.args_schema.model_validate(suggestion.arguments).model_dump()
+    product_code = suggestion.arguments.get("product_code")
+    if isinstance(product_code, str) and suggestion.response_mode in {
+        "product_catalog_detail",
+        "product_feature_match",
+        "product_use_case_match",
+    }:
+        trusted_codes = {
+            item.product_code
+            for item in (
+                state.product.active_batch.items
+                if state.product.active_batch is not None
+                else []
+            )
+        }
+        if product_code not in trusted_codes:
+            raise ValueError("suggested product_code is outside trusted visible batch")
     return {
         key: validated[key]
         for key in suggestion.arguments
@@ -229,7 +334,26 @@ def _read_only_tool_catalog() -> list[dict[str, Any]]:
             {
                 "name": tool.name,
                 "description": tool.description,
+                **_tool_guidance(tool_name),
                 "parameters": parameters,
+            }
+        )
+    knowledge_tool = registry.get_tool("knowledge_search", require_enabled=True)
+    if knowledge_tool is not None:
+        catalog.append(
+            {
+                "name": "knowledge_search",
+                "description": "查询当前可信商品绑定的主说明书，回答使用和能力事实。",
+                **_tool_guidance("knowledge_search"),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                    "description": (
+                        "LLM 不填写参数；Python 从可信商品状态注入 document_id、"
+                        "knowledge_base_id 和完整问题。"
+                    ),
+                },
             }
         )
     catalog.append(
@@ -244,6 +368,130 @@ def _read_only_tool_catalog() -> list[dict[str, Any]]:
         }
     )
     return catalog
+
+
+def _active_product_summary(state: CustomerServiceState) -> dict[str, Any] | None:
+    code = state.product.active_product_code
+    batch = state.product.active_batch
+    if code is None or batch is None:
+        return None
+    item = next((candidate for candidate in batch.items if candidate.product_code == code), None)
+    if item is None:
+        return None
+    return {
+        "product_code": item.product_code,
+        "name": item.name,
+        "category": item.category,
+        "primary_manual_document_id": item.primary_manual_document_id,
+        "source": "verified_tool_result",
+    }
+
+
+def _validate_response_contract(suggestion: ReadOnlyToolSuggestion) -> None:
+    allowed = {
+        "search_products": {
+            "product_list",
+            "product_catalog_detail",
+            "product_feature_match",
+            "product_use_case_match",
+        },
+        "recommend_products": {"product_recommendation"},
+        "compare_products": {"product_comparison"},
+        "query_order": {"order_list", "order_detail"},
+        "query_logistics": {"logistics_status"},
+        "knowledge_search": {"manual_fact"},
+        "none": {"clarification"},
+    }
+    if suggestion.response_mode not in allowed[suggestion.tool_name]:
+        raise ValueError("response_mode is incompatible with selected tool")
+    if (
+        suggestion.response_mode == "product_use_case_match"
+        and suggestion.question_slots.use_case is None
+    ):
+        raise ValueError("product_use_case_match requires use_case")
+    if (
+        suggestion.response_mode == "product_feature_match"
+        and suggestion.question_slots.feature is None
+    ):
+        raise ValueError("product_feature_match requires feature")
+    if (
+        suggestion.response_mode == "manual_fact"
+        and suggestion.question_slots.manual_question is None
+    ):
+        raise ValueError("manual_fact requires manual_question")
+
+
+def _tool_guidance(tool_name: str) -> dict[str, Any]:
+    guidance: dict[str, dict[str, Any]] = {
+        "search_products": {
+            "purpose": "查询指定商品事实，或按明确条件检索商品目录。",
+            "use_when": [
+                "查询已确定商品的价格、库存、features 或 use_cases",
+                "用户询问店内是否存在某类商品",
+                "按明确名称、型号、类别或筛选条件查询商品",
+            ],
+            "do_not_use_when": [
+                "用户明确要求推荐、换一个或其他选择",
+                "用户询问说明书中的连接、充电、兼容、按键或使用方法",
+                "当前商品已确定时，不得把用途或能力词作为 keyword 重新搜索",
+            ],
+            "argument_guidance": {
+                "product_code": "查询当前已确定商品时必须使用可信商品编码",
+                "keyword": "仅用于名称、型号或自由检索词，不得填用户询问的动作或用途",
+                "required_use_cases": "仅用于筛选满足某用途的商品，不用于询问当前商品",
+            },
+            "returns": ["商品目录字段", "features", "use_cases", "主说明书ID"],
+            "examples": [
+                {
+                    "query": "这款键盘能打游戏吗",
+                    "arguments": {"product_code": "可信上下文中的编码"},
+                    "response_mode": "product_use_case_match",
+                    "question_slots": {"use_case": "游戏"},
+                }
+            ],
+        },
+        "recommend_products": {
+            "purpose": "按用户明确需求推荐商品，并支持换一个或继续推荐。",
+            "use_when": ["用户明确说推荐、换一个、再推荐或还有其他选择"],
+            "do_not_use_when": ["用户仅询问当前商品的价格、能力或适用场景"],
+            "argument_guidance": {
+                "required_use_cases": "用户要求推荐适合某用途的商品时使用",
+                "page_size": "用户未明确数量时使用 1",
+            },
+            "returns": ["商品", "推荐评分", "推荐原因", "无结果原因"],
+        },
+        "compare_products": {
+            "purpose": "比较用户明确指定的两个及以上可信商品。",
+            "use_when": ["用户明确要求比较或询问区别"],
+            "do_not_use_when": ["商品不足两个或尚未明确"],
+            "argument_guidance": {"product_codes": "只能使用可信可见商品编码"},
+            "returns": ["逐字段对比", "缺失商品编码"],
+        },
+        "query_order": {
+            "purpose": "查询当前用户订单列表或指定订单详情。",
+            "use_when": ["用户查询订单列表或订单详情"],
+            "do_not_use_when": ["用户只查询已确定订单的物流"],
+            "argument_guidance": {"order_ref": "仅使用用户明确提供或可信状态中的订单号"},
+            "returns": ["脱敏订单列表或订单详情"],
+        },
+        "query_logistics": {
+            "purpose": "查询已确定订单的物流状态。",
+            "use_when": ["用户查询某笔可信订单到哪了或物流进度"],
+            "do_not_use_when": ["订单尚未明确"],
+            "argument_guidance": {"order_ref": "必须是可信订单号"},
+            "returns": ["物流状态和轨迹"],
+        },
+        "knowledge_search": {
+            "purpose": "查询当前商品绑定说明书中的使用、连接和能力事实。",
+            "use_when": ["蓝牙、连接、充电、兼容、按键、操作或使用方法"],
+            "do_not_use_when": ["价格、库存、features、use_cases 等商品目录事实"],
+            "argument_guidance": {
+                "arguments": "必须为空；可信文档和知识库范围由 Python 注入"
+            },
+            "returns": ["有来源和引用的说明书答案"],
+        },
+    }
+    return guidance[tool_name]
 
 
 def _safe_requested_count(value: Any) -> int | None:
