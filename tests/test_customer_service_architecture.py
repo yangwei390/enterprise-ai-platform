@@ -49,6 +49,7 @@ from backend.app.agents.customer_service_core.strategy import CustomerServiceStr
 from backend.app.agents.customer_service_core.understanding import understand
 from backend.app.agents.langgraph.budget import AgentExecutionBudget
 from backend.app.agents.langgraph.nodes import FinalNode, ObservationNode, PlannerNode, ToolNode
+from backend.app.config import settings
 from backend.app.tools.base import ToolResult
 from backend.app.tools.builtin.customer_service import (
     CompareProductsTool,
@@ -1080,6 +1081,52 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
         ]["suggestion"]["tool_name"]
         == "recommend_products"
     )
+
+
+def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
+    monkeypatch,
+) -> None:
+    requested_tools: list[str] = []
+
+    class RoutedLLM:
+        def chat(self, request):
+            tool_name = request.tools[0]["function"]["name"]
+            requested_tools.append(tool_name)
+            arguments = (
+                {
+                    "tool_name": "recommend_products",
+                    "arguments": {"keyword": "鼠标", "page_size": 1},
+                    "reason": "用户询问是否销售鼠标",
+                }
+                if tool_name == "recommend_read_only_capability"
+                else {"rewritten_query": "你家卖鼠标吗"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: RoutedLLM(),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("你家卖鼠标么", metadata)
+
+    assert requested_tools == [
+        "emit_rewritten_query",
+        "recommend_read_only_capability",
+    ]
+    tool_call = planned["decision"].tool_calls[0]
+    assert tool_call.tool_name == "recommend_products"
+    assert tool_call.arguments["keyword"] == "鼠标"
+    understanding = planned["state"]["metadata"]["customer_service"][
+        "execution_details"
+    ]["understanding"]
+    assert understanding["rule_frame"]["intent"] == "other"
+    assert understanding["read_only_fallback_required"] is True
 
 
 def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:

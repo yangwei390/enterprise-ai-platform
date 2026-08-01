@@ -12,6 +12,7 @@ from backend.app.agents.customer_service_core.contracts import (
     SemanticFrame,
     UnderstandingContext,
 )
+from backend.app.config import settings
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.llms.config import get_customer_service_intent_llm_config
 from backend.app.schemas.product import normalize_product_category
@@ -28,6 +29,7 @@ class UnderstandingResult(BaseModel):
     llm_used: bool = False
     llm_failure_reason: str | None = None
     llm_context: UnderstandingContext | None = None
+    read_only_fallback_required: bool = False
     merge: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -80,6 +82,26 @@ async def understand(
     messages: list[dict[str, Any]],
 ) -> UnderstandingResult:
     rule_frame = _rule_understand(query, state, messages)
+    if rule_frame.intent == "blocked":
+        return UnderstandingResult(
+            frame=rule_frame,
+            rule_frame=rule_frame,
+            merge={"source": "safety_rules", "conflicts": []},
+        )
+    if settings.CUSTOMER_SERVICE_INTENT_MODE == "llm_only":
+        context = _build_understanding_context(query, state, messages)
+        rewritten_query, failure_reason = await _llm_rewrite(context)
+        bypassed_frame = SemanticFrame(intent="other")
+        return UnderstandingResult(
+            frame=bypassed_frame,
+            rule_frame=bypassed_frame,
+            rewritten_query=rewritten_query,
+            llm_used=True,
+            llm_failure_reason=failure_reason,
+            llm_context=context,
+            read_only_fallback_required=True,
+            merge={"source": "llm_query_rewrite_then_read_only_fallback", "conflicts": []},
+        )
     if rule_frame.intent != "other":
         return UnderstandingResult(
             frame=rule_frame,

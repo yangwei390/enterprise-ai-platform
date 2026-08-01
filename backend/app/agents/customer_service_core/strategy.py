@@ -76,18 +76,21 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             runtime=self._runtime_scope(state),
         )
         if (
-            understanding.llm_used
-            and understanding.frame.intent
-            in {
-                "other",
-                "recommend_products",
-                "search_products",
-                "compare_products",
-                "order",
-                "logistics",
-                "product_fact",
-            }
-            and build.clarification is not None
+            understanding.read_only_fallback_required
+            or (
+                understanding.llm_used
+                and understanding.frame.intent
+                in {
+                    "other",
+                    "recommend_products",
+                    "search_products",
+                    "compare_products",
+                    "order",
+                    "logistics",
+                    "product_fact",
+                }
+                and build.clarification is not None
+            )
         ):
             fallback = await recommend_read_only_capability(
                 rewritten_query=understanding.rewritten_query or execution.goal.raw_query,
