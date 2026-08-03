@@ -1042,21 +1042,23 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
         def chat(self, request):
             nonlocal calls, fallback_request
             calls += 1
-            tool_name = request.tools[0]["function"]["name"]
-            if tool_name == "recommend_read_only_capability":
-                fallback_request = request
-            arguments = (
-                {
-                    "tool_name": "search_products",
-                    "arguments": {"keyword": "键帽", "page_size": 1},
-                    "response_mode": "product_list",
-                    "question_slots": {},
-                    "reason": "用户询问是否销售键帽",
-                }
-                if tool_name == "recommend_read_only_capability"
-                else {"rewritten_query": "你家卖键帽吗"}
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
             )
-            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+            if is_fallback:
+                fallback_request = request
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="search_products" if is_fallback else "emit_rewritten_query",
+                        arguments=(
+                            {"keyword": "键帽", "page_size": 1}
+                            if is_fallback
+                            else {"rewritten_query": "你家卖键帽吗"}
+                        ),
+                    )
+                ]
+            )
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
@@ -1071,16 +1073,21 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
 
     assert calls == 2
     assert fallback_request is not None
-    catalog_message = fallback_request.messages[-1].content
-    assert '"name": "search_products"' in catalog_message
-    assert '"use_when"' in catalog_message
-    assert '"argument_guidance"' in catalog_message
-    assert '"parameter_requirements"' in catalog_message
-    assert '"schema_required_parameters"' in catalog_message
-    assert '"business_required_rules"' in catalog_message
-    assert '"examples"' not in catalog_message
-    assert '"name": "knowledge_search"' in catalog_message
-    assert '"keyword"' in catalog_message
+    native_tools = {
+        tool["function"]["name"]: tool["function"] for tool in fallback_request.tools
+    }
+    assert "recommend_read_only_capability" not in native_tools
+    assert "search_products" in native_tools
+    assert native_tools["search_products"]["parameters"]["required"] == ["keyword"]
+    assert native_tools["get_product_catalog_detail"]["parameters"]["required"] == [
+        "product_code"
+    ]
+    assert set(native_tools["check_product_feature"]["parameters"]["required"]) == {
+        "product_code",
+        "feature",
+    }
+    assert fallback_request.tool_choice == "required"
+    assert fallback_request.parallel_tool_calls is False
     tool_call = planned["decision"].tool_calls[0]
     assert tool_call.tool_name == "search_products"
     assert tool_call.arguments["keyword"] == "键帽"
@@ -1099,20 +1106,23 @@ def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
 
     class RoutedLLM:
         def chat(self, request):
-            tool_name = request.tools[0]["function"]["name"]
-            requested_tools.append(tool_name)
-            arguments = (
-                {
-                    "tool_name": "search_products",
-                    "arguments": {"keyword": "鼠标", "page_size": 1},
-                    "response_mode": "product_list",
-                    "question_slots": {},
-                    "reason": "用户询问是否销售鼠标",
-                }
-                if tool_name == "recommend_read_only_capability"
-                else {"rewritten_query": "你家卖鼠标吗"}
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
             )
-            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+            selected_name = "search_products" if is_fallback else "emit_rewritten_query"
+            requested_tools.append(selected_name)
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=selected_name,
+                        arguments=(
+                            {"keyword": "鼠标", "page_size": 1}
+                            if is_fallback
+                            else {"rewritten_query": "你家卖鼠标吗"}
+                        ),
+                    )
+                ]
+            )
 
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
     monkeypatch.setattr(
@@ -1128,7 +1138,7 @@ def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
 
     assert requested_tools == [
         "emit_rewritten_query",
-        "recommend_read_only_capability",
+        "search_products",
     ]
     tool_call = planned["decision"].tool_calls[0]
     assert tool_call.tool_name == "search_products"
@@ -1147,19 +1157,19 @@ def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
         def chat(self, request):
             nonlocal calls
             calls += 1
-            tool_name = request.tools[0]["function"]["name"]
-            arguments = (
-                {
-                    "tool_name": "none",
-                    "arguments": {},
-                    "response_mode": "clarification",
-                    "question_slots": {},
-                    "reason": "没有安全的只读能力",
-                }
-                if tool_name == "recommend_read_only_capability"
-                else {"rewritten_query": "随便处理一下"}
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
             )
-            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="clarify_request" if is_fallback else "emit_rewritten_query",
+                        arguments=(
+                            {} if is_fallback else {"rewritten_query": "随便处理一下"}
+                        ),
+                    )
+                ]
+            )
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
@@ -1197,19 +1207,21 @@ def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> N
         def chat(self, request):
             nonlocal calls
             calls += 1
-            tool_name = request.tools[0]["function"]["name"]
-            arguments = (
-                {
-                    "tool_name": "search_products",
-                    "arguments": {"product_name": "鼠标"},
-                    "response_mode": "product_list",
-                    "question_slots": {},
-                    "reason": "错误参数名",
-                }
-                if tool_name == "recommend_read_only_capability"
-                else {"rewritten_query": "你家卖鼠标吗"}
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
             )
-            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="search_products" if is_fallback else "emit_rewritten_query",
+                        arguments=(
+                            {"product_name": "鼠标"}
+                            if is_fallback
+                            else {"rewritten_query": "你家卖鼠标吗"}
+                        ),
+                    )
+                ]
+            )
 
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
@@ -1235,19 +1247,19 @@ def test_read_only_fallback_rejects_product_list_without_query_condition(
 ) -> None:
     class MissingConditionLLM:
         def chat(self, request):
-            tool_name = request.tools[0]["function"]["name"]
-            arguments = (
-                {
-                    "tool_name": "search_products",
-                    "arguments": {},
-                    "response_mode": "product_list",
-                    "question_slots": {},
-                    "reason": "遗漏了用户明确表达的商品类别",
-                }
-                if tool_name == "recommend_read_only_capability"
-                else {"rewritten_query": "你家卖键盘么"}
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
             )
-            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="search_products" if is_fallback else "emit_rewritten_query",
+                        arguments=(
+                            {} if is_fallback else {"rewritten_query": "你家卖键盘么"}
+                        ),
+                    )
+                ]
+            )
 
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
     monkeypatch.setattr(
@@ -1265,7 +1277,51 @@ def test_read_only_fallback_rejects_product_list_without_query_condition(
     failure = planned["state"]["metadata"]["customer_service"]["execution_details"][
         "read_only_tool_fallback"
     ]["failure_reason"]
-    assert "product_list requires at least one product query condition" in failure
+    assert "Field required" in failure
+    assert "keyword" in failure
+
+
+def test_native_catalog_detail_rejects_missing_product_code_before_real_tool(
+    monkeypatch,
+) -> None:
+    class MissingProductCodeLLM:
+        def chat(self, request):
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
+            )
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=(
+                            "get_product_catalog_detail"
+                            if is_fallback
+                            else "emit_rewritten_query"
+                        ),
+                        arguments=(
+                            {} if is_fallback else {"rewritten_query": "键盘是机械键盘吗"}
+                        ),
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: MissingProductCodeLLM(),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("是机械键盘吗", metadata)
+
+    assert planned["decision"].tool_calls == []
+    failure = planned["state"]["metadata"]["customer_service"]["execution_details"][
+        "read_only_tool_fallback"
+    ]["failure_reason"]
+    assert "Field required" in failure
+    assert "product_code" in failure
 
 
 def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
@@ -1289,19 +1345,25 @@ def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
 
     class UseCaseLLM:
         def chat(self, request):
-            tool_name = request.tools[0]["function"]["name"]
-            arguments = (
-                {
-                    "tool_name": "search_products",
-                    "arguments": {"product_code": "3"},
-                    "response_mode": "product_use_case_match",
-                    "question_slots": {"use_case": "游戏"},
-                    "reason": "用户询问当前键盘是否适合游戏",
-                }
-                if tool_name == "recommend_read_only_capability"
-                else {"rewritten_query": "G512 X 75键盘能打游戏么"}
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
             )
-            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=(
+                            "check_product_use_case"
+                            if is_fallback
+                            else "emit_rewritten_query"
+                        ),
+                        arguments=(
+                            {"product_code": "3", "use_case": "游戏"}
+                            if is_fallback
+                            else {"rewritten_query": "G512 X 75键盘能打游戏么"}
+                        ),
+                    )
+                ]
+            )
 
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
     monkeypatch.setattr(
@@ -1382,21 +1444,28 @@ def test_llm_only_manual_fact_uses_trusted_product_then_scoped_knowledge(
 
     class ManualLLM:
         def chat(self, request):
-            tool_name = request.tools[0]["function"]["name"]
-            arguments = (
-                {
-                    "tool_name": "knowledge_search",
-                    "arguments": {},
-                    "response_mode": "manual_fact",
-                    "question_slots": {
-                        "manual_question": "罗技G304鼠标能连接蓝牙吗"
-                    },
-                    "reason": "连接能力需要查询商品说明书",
-                }
-                if tool_name == "recommend_read_only_capability"
-                else {"rewritten_query": "罗技G304鼠标能连接蓝牙吗"}
+            is_fallback = request.metadata.get("purpose") == (
+                "customer_service_read_only_tool_fallback"
             )
-            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=(
+                            "search_product_manual"
+                            if is_fallback
+                            else "emit_rewritten_query"
+                        ),
+                        arguments=(
+                            {
+                                "product_code": "1",
+                                "manual_question": "罗技G304鼠标能连接蓝牙吗",
+                            }
+                            if is_fallback
+                            else {"rewritten_query": "罗技G304鼠标能连接蓝牙吗"}
+                        ),
+                    )
+                ]
+            )
 
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
     monkeypatch.setattr(
