@@ -136,6 +136,12 @@ def _build_request(
                     "只有用户明确要求推荐、换一个或其他选择时才使用 recommend_products。"
                     "arguments 只表示 Tool 查询条件；回答目标必须通过 response_mode "
                     "和 question_slots 表达。"
+                    "必须从 rewritten_query 提取用户明确说出的商品名称、"
+                    "类别、型号、用途或其他查询条件，并写入对应 arguments。"
+                    "不得因为 JSON Schema 字段可选就遗漏用户已明确表达的条件。"
+                    "选择 Tool 后必须逐项检查该 Tool 的 parameter_requirements，"
+                    "满足 schema_required_parameters 和当前 response_mode 的"
+                    "business_required_rules。"
                     "禁止推荐写操作，禁止虚构商品、订单、说明书或数据库事实，"
                     "禁止把历史候选当作用户明确指定的实体。"
                     "参数名必须与 parameters 完全一致，不得自创 product_name 等字段。"
@@ -271,12 +277,13 @@ def _validate_suggested_arguments(
     suggestion: ReadOnlyToolSuggestion,
     state: CustomerServiceState,
 ) -> dict[str, Any]:
-    _validate_response_contract(suggestion)
     if suggestion.tool_name == "none":
+        _validate_response_contract(suggestion)
         if suggestion.arguments:
             raise ValueError("none tool must not contain arguments")
         return {}
     if suggestion.tool_name == "knowledge_search":
+        _validate_response_contract(suggestion)
         if suggestion.arguments:
             raise ValueError("knowledge_search arguments are injected by Python")
         active = _active_product_summary(state)
@@ -290,6 +297,7 @@ def _validate_suggested_arguments(
     if tool is None:
         raise ValueError(f"read-only tool not found: {suggestion.tool_name}")
     validated = tool.args_schema.model_validate(suggestion.arguments).model_dump()
+    _validate_response_contract(suggestion)
     product_code = suggestion.arguments.get("product_code")
     if isinstance(product_code, str) and suggestion.response_mode in {
         "product_catalog_detail",
@@ -335,6 +343,10 @@ def _read_only_tool_catalog() -> list[dict[str, Any]]:
                 "name": tool.name,
                 "description": tool.description,
                 **_tool_guidance(tool_name),
+                "parameter_requirements": _parameter_requirements(
+                    tool_name,
+                    parameters,
+                ),
                 "parameters": parameters,
             }
         )
@@ -345,6 +357,17 @@ def _read_only_tool_catalog() -> list[dict[str, Any]]:
                 "name": "knowledge_search",
                 "description": "查询当前可信商品绑定的主说明书，回答使用和能力事实。",
                 **_tool_guidance("knowledge_search"),
+                "parameter_requirements": {
+                    "schema_required_parameters": [],
+                    "optional_parameters": [],
+                    "business_required_rules": {
+                        "manual_fact": [
+                            "arguments 必须为空对象",
+                            "question_slots.manual_question 必填",
+                            "必须存在绑定主说明书的可信当前商品",
+                        ]
+                    },
+                },
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -360,6 +383,13 @@ def _read_only_tool_catalog() -> list[dict[str, Any]]:
         {
             "name": "none",
             "description": "没有合适且安全的只读 Tool",
+            "parameter_requirements": {
+                "schema_required_parameters": [],
+                "optional_parameters": [],
+                "business_required_rules": {
+                    "clarification": ["arguments 必须为空对象"]
+                },
+            },
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -404,6 +434,27 @@ def _validate_response_contract(suggestion: ReadOnlyToolSuggestion) -> None:
     }
     if suggestion.response_mode not in allowed[suggestion.tool_name]:
         raise ValueError("response_mode is incompatible with selected tool")
+    if suggestion.tool_name == "search_products":
+        if suggestion.response_mode == "product_list" and not _has_product_condition(
+            suggestion.arguments
+        ):
+            raise ValueError("product_list requires at least one product query condition")
+        if suggestion.response_mode in {
+            "product_catalog_detail",
+            "product_feature_match",
+            "product_use_case_match",
+        } and not isinstance(suggestion.arguments.get("product_code"), str):
+            raise ValueError(f"{suggestion.response_mode} requires product_code")
+    if suggestion.tool_name == "recommend_products" and not _has_product_condition(
+        suggestion.arguments
+    ):
+        raise ValueError("product_recommendation requires at least one product query condition")
+    if suggestion.response_mode == "order_list" and "order_ref" in suggestion.arguments:
+        raise ValueError("order_list must not contain order_ref")
+    if suggestion.response_mode == "order_detail" and not isinstance(
+        suggestion.arguments.get("order_ref"), str
+    ):
+        raise ValueError("order_detail requires order_ref")
     if (
         suggestion.response_mode == "product_use_case_match"
         and suggestion.question_slots.use_case is None
@@ -441,14 +492,6 @@ def _tool_guidance(tool_name: str) -> dict[str, Any]:
                 "required_use_cases": "仅用于筛选满足某用途的商品，不用于询问当前商品",
             },
             "returns": ["商品目录字段", "features", "use_cases", "主说明书ID"],
-            "examples": [
-                {
-                    "query": "这款键盘能打游戏吗",
-                    "arguments": {"product_code": "可信上下文中的编码"},
-                    "response_mode": "product_use_case_match",
-                    "question_slots": {"use_case": "游戏"},
-                }
-            ],
         },
         "recommend_products": {
             "purpose": "按用户明确需求推荐商品，并支持换一个或继续推荐。",
@@ -492,6 +535,86 @@ def _tool_guidance(tool_name: str) -> dict[str, Any]:
         },
     }
     return guidance[tool_name]
+
+
+def _parameter_requirements(
+    tool_name: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    properties = parameters.get("properties")
+    property_names = list(properties) if isinstance(properties, dict) else []
+    schema_required = parameters.get("required")
+    required_names = (
+        [name for name in schema_required if isinstance(name, str)]
+        if isinstance(schema_required, list)
+        else []
+    )
+    business_rules: dict[str, list[str]] = {
+        "search_products": {
+            "product_list": [
+                "product_code、keyword、brand、category、model、价格、"
+                "特征或用途条件中至少一项必填"
+            ],
+            "product_catalog_detail": ["product_code 必填"],
+            "product_feature_match": [
+                "product_code 必填",
+                "question_slots.feature 必填",
+            ],
+            "product_use_case_match": [
+                "product_code 必填",
+                "question_slots.use_case 必填",
+            ],
+        },
+        "recommend_products": {
+            "product_recommendation": [
+                "product_code、keyword、brand、category、model、价格、"
+                "特征或用途条件中至少一项必填",
+                "page_size 可选，用户未明确数量时为 1",
+            ]
+        },
+        "compare_products": {
+            "product_comparison": ["product_codes 必填，且必须包含 2 至 5 个不同编码"]
+        },
+        "query_order": {
+            "order_list": ["order_ref 禁止填写"],
+            "order_detail": ["order_ref 必填"],
+        },
+        "query_logistics": {
+            "logistics_status": ["order_ref 必填"]
+        },
+    }[tool_name]
+    return {
+        "schema_required_parameters": required_names,
+        "optional_parameters": [
+            name for name in property_names if name not in required_names
+        ],
+        "business_required_rules": business_rules,
+    }
+
+
+def _has_product_condition(arguments: dict[str, Any]) -> bool:
+    scalar_fields = {
+        "product_code",
+        "keyword",
+        "brand",
+        "category",
+        "model",
+        "price_min",
+        "price_max",
+    }
+    list_fields = {
+        "required_features",
+        "excluded_features",
+        "preferred_features",
+        "required_use_cases",
+        "preferred_use_cases",
+        "features",
+        "use_cases",
+    }
+    return any(arguments.get(field) not in {None, ""} for field in scalar_fields) or any(
+        isinstance(arguments.get(field), list) and bool(arguments[field])
+        for field in list_fields
+    )
 
 
 def _safe_requested_count(value: Any) -> int | None:

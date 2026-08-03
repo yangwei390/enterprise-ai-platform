@@ -1075,6 +1075,10 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
     assert '"name": "search_products"' in catalog_message
     assert '"use_when"' in catalog_message
     assert '"argument_guidance"' in catalog_message
+    assert '"parameter_requirements"' in catalog_message
+    assert '"schema_required_parameters"' in catalog_message
+    assert '"business_required_rules"' in catalog_message
+    assert '"examples"' not in catalog_message
     assert '"name": "knowledge_search"' in catalog_message
     assert '"keyword"' in catalog_message
     tool_call = planned["decision"].tool_calls[0]
@@ -1224,6 +1228,44 @@ def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> N
         "read_only_tool_fallback"
     ]["failure_reason"]
     assert "extra_forbidden" in failure
+
+
+def test_read_only_fallback_rejects_product_list_without_query_condition(
+    monkeypatch,
+) -> None:
+    class MissingConditionLLM:
+        def chat(self, request):
+            tool_name = request.tools[0]["function"]["name"]
+            arguments = (
+                {
+                    "tool_name": "search_products",
+                    "arguments": {},
+                    "response_mode": "product_list",
+                    "question_slots": {},
+                    "reason": "遗漏了用户明确表达的商品类别",
+                }
+                if tool_name == "recommend_read_only_capability"
+                else {"rewritten_query": "你家卖键盘么"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=arguments)])
+
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: MissingConditionLLM(),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("你家卖键盘么", metadata)
+
+    assert planned["decision"].tool_calls == []
+    failure = planned["state"]["metadata"]["customer_service"]["execution_details"][
+        "read_only_tool_fallback"
+    ]["failure_reason"]
+    assert "product_list requires at least one product query condition" in failure
 
 
 def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
