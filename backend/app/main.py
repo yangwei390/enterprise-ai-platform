@@ -9,6 +9,7 @@ from backend.app.api import (
     health_router,
     knowledge_base_router,
     mcp_router,
+    meeting_router,
     product_router,
     qdrant_router,
     redis_router,
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(redis_router)
     app.include_router(qdrant_router)
     app.include_router(mcp_router)
+    app.include_router(meeting_router)
     app.include_router(product_router)
     app.include_router(knowledge_base_router)
     app.include_router(document_router)

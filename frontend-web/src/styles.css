@@ -1457,6 +1457,25 @@ textarea:disabled {
   }
 }
 
+.meeting-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 18px; }
+.meeting-list, .transcript-pane, .minutes-pane { max-height: calc(100dvh - 160px); overflow: auto; }
+.meeting-items, .segments, .meeting-workspace { display: grid; gap: 12px; }
+.meeting-items, .segments { margin-top: 16px; }
+.meeting-item, .segment { display: grid; gap: 5px; text-align: left; }
+.meeting-item.active { outline: 2px solid var(--accent, #2563eb); }
+.meeting-item span, .segment time { opacity: .7; font-size: 12px; }
+.meeting-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.review-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(380px, 1fr); gap: 18px; }
+.meeting-toast { position: fixed; right: 24px; bottom: 24px; padding: 12px 18px; color: white; background: #111827; border-radius: 8px; }
+.email-preview textarea { min-height: 220px; }
+.danger { background: #b91c1c; }
+audio { width: 100%; margin-top: 12px; }
+
+@media (max-width: 900px) {
+  .meeting-layout, .review-grid { grid-template-columns: 1fr; }
+  .meeting-list, .transcript-pane, .minutes-pane { max-height: none; }
+}
+
 @media (max-width: 560px) {
   .page-header h1 {
     font-size: 25px;

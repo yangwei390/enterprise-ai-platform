@@ -213,9 +213,7 @@ class Settings(BaseSettings):
         "hybrid",
     ] = "hybrid"
     CUSTOMER_SERVICE_INTENT_LLM_MODEL: str = "qwen3.7-flash-2026-07-15"
-    CUSTOMER_SERVICE_INTENT_LLM_BASE_URL: str = (
-        "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
+    CUSTOMER_SERVICE_INTENT_LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     CUSTOMER_SERVICE_INTENT_LLM_API_KEY: str | None = None
     CUSTOMER_SERVICE_INTENT_LLM_TIMEOUT_SECONDS: int = Field(
         default=5,
@@ -258,6 +256,20 @@ class Settings(BaseSettings):
     WORKFLOW_STREAMING_ENABLED: bool = True
 
     UPLOAD_DIR: str
+    MEETING_ASR_PROVIDER: str = "openai_compatible"
+    MEETING_ASR_API_KEY: str | None = None
+    MEETING_ASR_BASE_URL: str = "https://api.openai.com/v1"
+    MEETING_ASR_MODEL: str = "gpt-4o-transcribe-diarize"
+    MEETING_ASR_TIMEOUT: int = 300
+    MEETING_ASR_REQUIRE_DIARIZATION: bool = True
+    MEETING_EMAIL_PROVIDER: str = "smtp"
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM_ADDRESS: str | None = None
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
 
     @field_validator("LLM_MAX_TOKENS", "EMBEDDING_DIMENSION", mode="before")
     @classmethod
@@ -273,6 +285,11 @@ class Settings(BaseSettings):
         "EMBEDDING_API_KEY",
         "EMBEDDING_BASE_URL",
         "RERANK_API_KEY",
+        "MEETING_ASR_API_KEY",
+        "SMTP_HOST",
+        "SMTP_USERNAME",
+        "SMTP_PASSWORD",
+        "SMTP_FROM_ADDRESS",
         mode="before",
     )
     @classmethod

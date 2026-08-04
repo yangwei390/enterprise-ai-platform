@@ -9,6 +9,7 @@ import KnowledgeDetailPage from "./pages/KnowledgeDetailPage";
 import HomePage from "./pages/HomePage";
 import KnowledgePage from "./pages/KnowledgePage";
 import ProductsPage from "./pages/ProductsPage";
+import MeetingsPage from "./pages/MeetingsPage";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="knowledge" element={<KnowledgePage />} />
       <Route path="knowledge/:knowledgeBaseId" element={<KnowledgeDetailPage />} />
       <Route path="products" element={<ProductsPage />} />
+        <Route path="meetings" element={<MeetingsPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
