@@ -207,11 +207,22 @@ class Settings(BaseSettings):
     AGENT_OBSERVATION_MAX_CHARS: int = 6000
     AGENT_MEMORY_MAX_LOOP_MESSAGES: int = 20
     CUSTOMER_SERVICE_ALLOWED_KNOWLEDGE_BASE_IDS: str = ""
-    CUSTOMER_SERVICE_INTENT_MODE: Literal[
-        "rule_only",
-        "llm_only",
-        "hybrid",
-    ] = "hybrid"
+    CUSTOMER_SERVICE_QUERY_REWRITE_MODE: Literal[
+        "rule_only", "llm_only", "hybrid"
+    ] = "llm_only"
+    CUSTOMER_SERVICE_INTENT_ROUTING_MODE: Literal[
+        "rule_only", "llm_only", "hybrid"
+    ] = "llm_only"
+    CUSTOMER_SERVICE_SLOT_EXTRACTION_MODE: Literal[
+        "rule_only", "llm_only", "hybrid"
+    ] = "llm_only"
+    CUSTOMER_SERVICE_TOOL_SELECTION_MODE: Literal[
+        "rule_only", "llm_only", "hybrid"
+    ] = "llm_only"
+    CUSTOMER_SERVICE_REFERENCE_INTERPRETATION_MODE: Literal[
+        "rule_only", "llm_only", "hybrid"
+    ] = "llm_only"
+    CUSTOMER_SERVICE_REASONING_LLM_MODEL: str = "qwen-turbo"
     CUSTOMER_SERVICE_INTENT_LLM_MODEL: str = "qwen3.7-flash-2026-07-15"
     CUSTOMER_SERVICE_INTENT_LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     CUSTOMER_SERVICE_INTENT_LLM_API_KEY: str | None = None

@@ -4,16 +4,6 @@
 
 ## 文件职责
 
-- `schemas.py`：意图、请求、槽位、DST 与 FSM 事件的数据契约。
-- `dst.py`：DST 的加载、迁移、校验与原子状态更新。
-- `router.py`：安全前置路由与确定性意图规则。
-- `contextualizer.py`：显式字段提取、请求重写与 LLM 输出规范化。
-- `semantic_schemas.py`：语义提取、字段来源与业务域候选载荷的数据契约。
-- `semantic_rewrite.py`：基于用户原话、受控记忆和 DST 生成候选语义，不解析真实目标。
-- `resolver.py`：基于可信 DST 的通用目标解析。
-- `fsm.py`：状态转移、槽位检查、打断和恢复。
-- `dispatcher.py`：把 FSM 指令转换为业务执行计划。
-- `actions.py`：FSM 业务动作到既有 Tool 的固定映射。
 - `contracts.py`：正式业务状态、执行阶段、事务、强类型 Command 和结果契约。
 - `adapters.py`：Command 到真实 Tool Schema 的唯一参数转换入口。
 - `commit.py`：Tool Result 契约校验和成功后原子提交。
@@ -23,17 +13,20 @@
 - `reducer.py`：业务状态预览；只生成 proposed patch，不直接提交可信状态。
 - `entity_resolver.py`：候选批次内引用解析与池外显式实体校验决策。
 - `understanding.py`：规则优先、LLM 补充的正式 SemanticFrame 理解入口。
-- `read_only_fallback.py`：重写后规则仍无法承接时，只推荐白名单只读能力和候选槽位。
+- `capability_selector.py`：重写后选择白名单能力候选。
+- `stage_modes.py`：五个独立理解阶段的模式读取、兼容和执行详情契约。
+- `context_lifecycle.py`：按当前消息窗口收敛商品、订单批次和问题焦点的可见性生命周期。
+- `after_sales_guard.py`：售后明确确认文本、跨请求预留和并发幂等门禁。
 - `command_builder.py`：从 SemanticFrame、状态预览和解析结果生成强类型 Command。
 
 ## 约束
 
 - 不写具体商品类别、品牌、型号或订单号。
 - LLM 输出只能作为候选语义，真实目标必须由 DST 校验。
-- 只读能力 Fallback 不得推荐或生成写操作；建议必须重新经过强类型 Command、
-  Resolver、权限和 Adapter Schema 校验。
+- 能力选择器只可提出只读 Tool、售后 draft 或转人工候选，不得提出售后 confirm；所有
+  候选必须重新经过强类型 Command、Resolver、权限和 Adapter Schema 校验。
 - Tool 参数只能从已校验请求和 DST 生成。
-- 新逻辑只读取 `ConversationDST`；旧字段仅允许作为会话迁移输入和兼容输出，
+- 新逻辑只读取 `CustomerServiceState`；兼容字段仅允许作为迁移输入或并发保护镜像，
   不得参与新的路由、目标解析或状态决策。
 - 不在本目录直接访问 Repository、数据库、Redis、Qdrant 或外部 API。
 - 写操作必须保留草稿、显式确认和幂等门禁。

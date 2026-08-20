@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from backend.app.agents.customer_service_contract import CUSTOMER_SERVICE_AGENT_ID
+from backend.app.agents.customer_service_contract import (
+    CUSTOMER_SERVICE_AGENT_ID,
+    CUSTOMER_SERVICE_PENDING_KEY,
+)
 from backend.app.agents.customer_service_core.adapters import (
     CommandAdapter,
 )
+from backend.app.agents.customer_service_core.after_sales_guard import (
+    confirmation_coordinator,
+)
+from backend.app.agents.customer_service_core.capability_selector import (
+    CapabilitySuggestion,
+)
 from backend.app.agents.customer_service_core.commit import CommitCoordinator
+from backend.app.agents.customer_service_core.context_lifecycle import (
+    reconcile_visible_context,
+)
 from backend.app.agents.customer_service_core.contracts import (
     CandidateProduct,
     CompareProductsCommand,
@@ -18,9 +33,15 @@ from backend.app.agents.customer_service_core.contracts import (
     CreateHumanHandoffCommand,
     CustomerServiceExecution,
     CustomerServiceState,
+    DialogFocus,
     ExecutionPhase,
     GoalSnapshot,
     KnowledgeSearchCommand,
+    OrderCandidate,
+    OrderCandidateBatch,
+    OrderContext,
+    PendingAfterSales,
+    PendingClarification,
     PendingProductQuery,
     PendingTransaction,
     ProductCandidateBatch,
@@ -38,9 +59,6 @@ from backend.app.agents.customer_service_core.entity_resolver import (
 )
 from backend.app.agents.customer_service_core.hooks import evaluate_tool_policy
 from backend.app.agents.customer_service_core.presenter import CustomerServicePresenter
-from backend.app.agents.customer_service_core.read_only_fallback import (
-    ReadOnlyToolSuggestion,
-)
 from backend.app.agents.customer_service_core.reducer import (
     preview_product_filters,
     reduce_state,
@@ -49,7 +67,9 @@ from backend.app.agents.customer_service_core.strategy import CustomerServiceStr
 from backend.app.agents.customer_service_core.understanding import understand
 from backend.app.agents.langgraph.budget import AgentExecutionBudget
 from backend.app.agents.langgraph.nodes import FinalNode, ObservationNode, PlannerNode, ToolNode
+from backend.app.agents.langgraph.runtime import LangGraphAgentRuntime
 from backend.app.config import settings
+from backend.app.memory.state import MemoryState
 from backend.app.tools.base import ToolResult
 from backend.app.tools.builtin.customer_service import (
     CompareProductsTool,
@@ -62,6 +82,25 @@ from backend.app.tools.builtin.customer_service import (
 )
 from backend.app.tools.builtin.knowledge_tool import KnowledgeSearchTool
 from backend.app.tools.registry import ToolRegistry
+
+_FORMAL_STAGE_SETTINGS = (
+    "CUSTOMER_SERVICE_QUERY_REWRITE_MODE",
+    "CUSTOMER_SERVICE_INTENT_ROUTING_MODE",
+    "CUSTOMER_SERVICE_SLOT_EXTRACTION_MODE",
+    "CUSTOMER_SERVICE_TOOL_SELECTION_MODE",
+    "CUSTOMER_SERVICE_REFERENCE_INTERPRETATION_MODE",
+)
+
+
+def _set_formal_stage_modes(monkeypatch, mode: str) -> None:
+    for setting_name in _FORMAL_STAGE_SETTINGS:
+        monkeypatch.setattr(settings, setting_name, mode)
+
+
+@pytest.fixture(autouse=True)
+def _default_formal_stage_modes_to_rules(monkeypatch):
+    _set_formal_stage_modes(monkeypatch, "rule_only")
+    confirmation_coordinator.reset()
 
 
 def _registry() -> ToolRegistry:
@@ -172,6 +211,114 @@ def test_product_context_keeps_only_one_active_batch() -> None:
 
     assert state.product.active_batch == batch
     assert not hasattr(state.product, "candidate_batches")
+
+
+def test_customer_service_state_uses_typed_domain_contexts() -> None:
+    state = CustomerServiceState()
+
+    assert state.order == OrderContext()
+    assert state.dialog_focus == DialogFocus()
+    assert state.pending_clarification is None
+    dumped = state.model_dump(mode="json")
+    assert "order_candidates" not in dumped
+    assert "active_order_ref" not in dumped
+    assert "clarification_target" not in dumped
+    assert "clarification_rounds" not in dumped
+
+
+def test_legacy_order_state_migrates_to_typed_order_context() -> None:
+    state = CustomerServiceState.model_validate(
+        {
+            "order_candidates": [
+                {"order_no": "ORDER-001", "status": "delivered"},
+                {"order_ref": "ORDER-002", "status": "cancelled"},
+            ],
+            "active_order_ref": "ORDER-002",
+        }
+    )
+
+    assert state.order.active_order_ref == "ORDER-002"
+    assert state.order.active_batch is not None
+    assert [item.order_ref for item in state.order.active_batch.items] == [
+        "ORDER-001",
+        "ORDER-002",
+    ]
+    assert state.order.active_batch.items[0].details == {
+        "order_no": "ORDER-001",
+        "status": "delivered",
+    }
+    assert "order_candidates" not in state.model_dump(mode="json")
+
+
+def test_legacy_clarification_state_migrates_to_typed_pending_contract() -> None:
+    state = CustomerServiceState.model_validate(
+        {
+            "clarification_target": "product.category",
+            "clarification_rounds": 2,
+        }
+    )
+
+    assert state.pending_clarification == PendingClarification(
+        clarification_id="legacy-clarification",
+        kind="missing_slot",
+        domain="general",
+        target_description="product.category",
+        missing_fields=["product.category"],
+        attempts=2,
+    )
+
+
+def test_order_candidate_requires_real_reference() -> None:
+    with pytest.raises(ValueError):
+        OrderCandidate.model_validate(
+            {
+                "display_label": "订单",
+                "batch_id": "orders-1",
+                "position": 0,
+            }
+        )
+
+
+def test_typed_order_context_round_trip() -> None:
+    state = CustomerServiceState(
+        order=OrderContext(
+            active_batch=OrderCandidateBatch(
+                batch_id="orders-1",
+                query="我的订单",
+                items=[
+                    OrderCandidate(
+                        order_ref="ORDER-001",
+                        display_label="ORDER-001",
+                        batch_id="orders-1",
+                        position=0,
+                        details={"status": "delivered"},
+                    )
+                ],
+            ),
+            active_order_ref="ORDER-001",
+        )
+    )
+
+    restored = CustomerServiceState.model_validate(state.model_dump(mode="json"))
+    assert restored == state
+
+
+def test_candidate_batches_record_source_turn_without_fixed_ttl() -> None:
+    product_batch = ProductCandidateBatch(
+        batch_id="products-1",
+        query="推荐鼠标",
+        source_turn_id="turn-product",
+    )
+    order_batch = OrderCandidateBatch(
+        batch_id="orders-1",
+        query="我的订单",
+        source_turn_id="turn-order",
+    )
+
+    assert product_batch.source_turn_id == "turn-product"
+    assert order_batch.source_turn_id == "turn-order"
+    assert not hasattr(product_batch, "expires_after_turn_sequence")
+    assert not hasattr(order_batch, "expires_after_turn_sequence")
 
 
 def test_category_switch_preview_clears_old_product_context() -> None:
@@ -484,6 +631,145 @@ def test_stale_question_focus_does_not_force_ordinal_into_rag() -> None:
     assert result.llm_used is False
     assert result.frame.intent == "product_catalog_detail"
     assert result.frame.requires_manual_evidence is False
+
+
+def test_product_ordinal_expires_when_source_turn_leaves_message_window() -> None:
+    batch = ProductCandidateBatch(
+        batch_id="mouse-list",
+        query="推荐两个鼠标",
+        source_turn_id="turn-products",
+        items=[
+            CandidateProduct(
+                product_code="M-1",
+                name="Mouse One",
+                batch_id="mouse-list",
+                position=0,
+            ),
+            CandidateProduct(
+                product_code="M-2",
+                name="Mouse Two",
+                batch_id="mouse-list",
+                position=1,
+            ),
+        ],
+    )
+    business_state = CustomerServiceState(
+        product=ProductContext(active_batch=batch, active_product_code="M-1"),
+        dialog_focus=DialogFocus(
+            active_domain="product",
+            active_batch_id=batch.batch_id,
+            source_turn_id="turn-products",
+        ),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "runtime_turn_id": "turn-current",
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+    state = {
+        "query": "第二个呢",
+        "messages": [
+            {"role": "user", "content": "聊点别的", "turn_id": "turn-other"},
+            {"role": "assistant", "content": "好的", "turn_id": "turn-other"},
+            {"role": "user", "content": "第二个呢", "turn_id": "turn-current"},
+        ],
+        "metadata": metadata,
+        "conversation_id": 52,
+        "knowledge_base_id": 1,
+        "allowed_knowledge_base_ids": [1],
+    }
+
+    decision = asyncio.run(CustomerServiceStrategy().adecide(state))
+
+    assert decision.action == "final"
+    committed = CustomerServiceState.model_validate(
+        state["metadata"]["customer_service"]["state"]
+    )
+    assert committed.product.active_batch is None
+    assert committed.product.active_product_code is None
+    assert committed.dialog_focus.active_batch_id is None
+
+
+def test_product_ordinal_remains_valid_while_source_turn_is_visible() -> None:
+    batch = ProductCandidateBatch(
+        batch_id="mouse-list",
+        query="推荐两个鼠标",
+        source_turn_id="turn-products",
+        items=[
+            CandidateProduct(
+                product_code="M-1",
+                name="Mouse One",
+                batch_id="mouse-list",
+                position=0,
+            ),
+            CandidateProduct(
+                product_code="M-2",
+                name="Mouse Two",
+                batch_id="mouse-list",
+                position=1,
+            ),
+        ],
+    )
+    business_state = CustomerServiceState(product=ProductContext(active_batch=batch))
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "runtime_turn_id": "turn-current",
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+    state = {
+        "query": "第二个呢",
+        "messages": [
+            {"role": "user", "content": "推荐两个鼠标", "turn_id": "turn-products"},
+            {
+                "role": "assistant",
+                "content": "1. Mouse One\n2. Mouse Two",
+                "turn_id": "turn-products",
+            },
+            {"role": "user", "content": "第二个呢", "turn_id": "turn-current"},
+        ],
+        "metadata": metadata,
+        "conversation_id": 52,
+        "knowledge_base_id": 1,
+        "allowed_knowledge_base_ids": [1],
+    }
+
+    decision = asyncio.run(CustomerServiceStrategy().adecide(state))
+
+    assert decision.tool_calls[0].arguments["product_code"] == "M-2"
+
+
+def test_order_batch_expires_when_source_turn_leaves_message_window() -> None:
+    batch = OrderCandidateBatch(
+        batch_id="orders-1",
+        query="我的订单",
+        source_turn_id="turn-orders",
+        items=[
+            OrderCandidate(
+                order_ref="ORDER-001",
+                display_label="ORDER-001",
+                batch_id="orders-1",
+                position=0,
+            )
+        ],
+    )
+    state = CustomerServiceState(
+        order=OrderContext(active_batch=batch, active_order_ref="ORDER-001"),
+        dialog_focus=DialogFocus(
+            active_domain="order",
+            active_batch_id="orders-1",
+            source_turn_id="turn-orders",
+        ),
+    )
+
+    reconciled, changes = reconcile_visible_context(
+        state,
+        [{"role": "user", "content": "当前消息", "turn_id": "turn-current"}],
+    )
+
+    assert reconciled.order.active_batch is None
+    assert reconciled.order.active_order_ref is None
+    assert reconciled.dialog_focus.active_batch_id is None
+    assert changes[0]["domain"] == "order"
 
 
 def test_ordinal_does_not_search_an_old_product_batch() -> None:
@@ -958,6 +1244,7 @@ def test_cross_category_product_answer_explains_automatic_requery() -> None:
 def test_llm_fallback_receives_role_dialogue_and_confirms_pending_query(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_QUERY_REWRITE_MODE", "hybrid")
     captured_request = None
     captured_config = None
 
@@ -1032,18 +1319,20 @@ def test_simple_product_availability_question_never_calls_llm(monkeypatch) -> No
     assert result.frame.slots["keyword"] == "鼠标"
 
 
-def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
+def test_capability_selection_recommends_capability_then_adapter_builds_tool(
     monkeypatch,
 ) -> None:
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     calls = 0
     fallback_request = None
+    requested_models: list[str] = []
 
     class FallbackLLM:
         def chat(self, request):
             nonlocal calls, fallback_request
             calls += 1
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
             if is_fallback:
                 fallback_request = request
@@ -1060,9 +1349,13 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
                 ]
             )
 
+    def get_llm(*, config=None):
+        requested_models.append(config.model)
+        return FallbackLLM()
+
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
-        lambda **_kwargs: FallbackLLM(),
+        get_llm,
     )
     metadata = {
         "agent_id": CUSTOMER_SERVICE_AGENT_ID,
@@ -1072,11 +1365,12 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
     planned = _plan_turn("你家卖键帽么", metadata)
 
     assert calls == 2
+    assert requested_models == ["qwen3.7-flash-2026-07-15", "qwen-turbo"]
     assert fallback_request is not None
     native_tools = {
         tool["function"]["name"]: tool["function"] for tool in fallback_request.tools
     }
-    assert "recommend_read_only_capability" not in native_tools
+    assert "select_capability" not in native_tools
     assert "search_products" in native_tools
     assert native_tools["search_products"]["parameters"]["required"] == ["keyword"]
     assert native_tools["get_product_catalog_detail"]["parameters"]["required"] == [
@@ -1093,13 +1387,33 @@ def test_read_only_llm_fallback_recommends_capability_then_adapter_builds_tool(
     assert tool_call.arguments["keyword"] == "键帽"
     assert (
         planned["state"]["metadata"]["customer_service"]["execution_details"][
-            "read_only_tool_fallback"
+            "capability_selection"
         ]["suggestion"]["tool_name"]
         == "search_products"
     )
+    details = planned["state"]["metadata"]["customer_service"]["execution_details"]
+    assert details["llm_call_count"] == 2
+    assert set(details["llm_stages"]) == {
+        "query_rewrite",
+        "intent_routing",
+        "slot_extraction",
+        "reference_interpretation",
+        "capability_selection",
+    }
+    assert details["llm_stages"]["query_rewrite"]["shared_call_id"] is None
+    for stage_name in (
+        "intent_routing",
+        "slot_extraction",
+        "reference_interpretation",
+        "capability_selection",
+    ):
+        stage = details["llm_stages"][stage_name]
+        assert stage["executed"] is True
+        assert stage["source"] == "shared_llm"
+        assert stage["shared_call_id"] == "heavy_semantic_tool_call"
 
 
-def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
+def test_llm_only_mode_bypasses_business_rules_and_uses_capability_selector(
     monkeypatch,
 ) -> None:
     requested_tools: list[str] = []
@@ -1107,7 +1421,7 @@ def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
     class RoutedLLM:
         def chat(self, request):
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
             selected_name = "search_products" if is_fallback else "emit_rewritten_query"
             requested_tools.append(selected_name)
@@ -1124,7 +1438,7 @@ def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
                 ]
             )
 
-    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
         lambda **_kwargs: RoutedLLM(),
@@ -1147,10 +1461,54 @@ def test_llm_only_mode_bypasses_business_rules_and_uses_read_only_fallback(
         "execution_details"
     ]["understanding"]
     assert understanding["rule_frame"]["intent"] == "other"
-    assert understanding["read_only_fallback_required"] is True
+    assert understanding["capability_selector_required"] is True
 
 
-def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
+def test_planner_counts_light_and_shared_heavy_llm_calls_once(monkeypatch) -> None:
+    _set_formal_stage_modes(monkeypatch, "llm_only")
+
+    class TwoStageLLM:
+        def chat(self, request):
+            is_heavy = request.metadata.get("purpose") == (
+                "customer_service_capability_selection"
+            )
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name="search_products" if is_heavy else "emit_rewritten_query",
+                        arguments=(
+                            {"keyword": "鼠标", "page_size": 1}
+                            if is_heavy
+                            else {"rewritten_query": "你家卖鼠标吗"}
+                        ),
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: TwoStageLLM(),
+    )
+    state = {
+        "query": "你家卖鼠标么",
+        "messages": [{"role": "user", "content": "你家卖鼠标么"}],
+        "metadata": {
+            "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+            "planner_strategy": "customer_service",
+            "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+        },
+    }
+
+    result = asyncio.run(PlannerNode().acall(state))
+
+    assert result["llm_call_count"] == 2
+    assert result["metadata"]["customer_service"]["execution_details"][
+        "llm_calls_accounted"
+    ] is True
+
+
+def test_capability_selection_none_returns_clarification(monkeypatch) -> None:
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     calls = 0
 
     class NoCapabilityLLM:
@@ -1158,7 +1516,7 @@ def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
             nonlocal calls
             calls += 1
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
             return SimpleNamespace(
                 tool_calls=[
@@ -1187,20 +1545,143 @@ def test_read_only_llm_fallback_none_returns_clarification(monkeypatch) -> None:
     assert "请说明您要查询的商品、订单或具体问题" in str(planned["decision"].content)
 
 
-def test_read_only_fallback_contract_rejects_write_capability() -> None:
-    with pytest.raises(ValueError):
-        ReadOnlyToolSuggestion.model_validate(
-            {
-                "tool_name": "create_after_sales_ticket",
-                "arguments": {},
-                "response_mode": "clarification",
-                "question_slots": {},
-                "reason": "禁止写操作",
-            }
-        )
+def test_capability_contract_accepts_after_sales_draft_candidate_only() -> None:
+    suggestion = CapabilitySuggestion.model_validate(
+        {
+            "tool_name": "create_after_sales_ticket",
+            "arguments": {
+                "phone_last4": "5678",
+                "issue_type": "return",
+                "issue_description": "商品无法正常使用，需要退货",
+            },
+            "response_mode": "after_sales_draft",
+            "question_slots": {},
+            "reason": "只生成售后草稿候选",
+        }
+    )
+
+    assert suggestion.response_mode == "after_sales_draft"
 
 
-def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> None:
+def test_heavy_llm_can_propose_after_sales_draft_but_not_confirm(monkeypatch) -> None:
+    _set_formal_stage_modes(monkeypatch, "llm_only")
+    captured_request = None
+
+    class AfterSalesLLM:
+        def chat(self, request):
+            nonlocal captured_request
+            is_heavy = request.metadata.get("purpose") == (
+                "customer_service_capability_selection"
+            )
+            if is_heavy:
+                captured_request = request
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=(
+                            "create_after_sales_draft"
+                            if is_heavy
+                            else "emit_rewritten_query"
+                        ),
+                        arguments=(
+                            {
+                                "phone_last4": "5678",
+                                "issue_type": "return",
+                                "issue_description": "商品无法正常使用，需要退货",
+                            }
+                            if is_heavy
+                            else {
+                                "rewritten_query": (
+                                    "为当前订单申请退货，手机号后四位5678，"
+                                    "商品无法正常使用"
+                                )
+                            }
+                        ),
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: AfterSalesLLM(),
+    )
+    business_state = CustomerServiceState(
+        order=OrderContext(active_order_ref="ORDER-001")
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+
+    planned = _plan_turn(
+        "我要退货，手机号后四位5678，商品无法正常使用",
+        metadata,
+    )
+
+    call = planned["decision"].tool_calls[0]
+    assert call.tool_name == "create_after_sales_ticket"
+    assert call.arguments["action"] == "draft"
+    assert call.arguments["order_no"] == "ORDER-001"
+    assert call.arguments["customer_phone_last4"] == "5678"
+    assert captured_request is not None
+    available_tools = {
+        tool["function"]["name"] for tool in captured_request.tools
+    }
+    assert "create_after_sales_draft" in available_tools
+    assert "confirm_after_sales" not in available_tools
+
+
+def test_heavy_llm_handoff_candidate_still_uses_typed_command(monkeypatch) -> None:
+    _set_formal_stage_modes(monkeypatch, "llm_only")
+
+    class HandoffLLM:
+        def chat(self, request):
+            is_heavy = request.metadata.get("purpose") == (
+                "customer_service_capability_selection"
+            )
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=(
+                            "request_human_handoff"
+                            if is_heavy
+                            else "emit_rewritten_query"
+                        ),
+                        arguments=(
+                            {
+                                "phone_last4": "5678",
+                                "reason": "customer_request",
+                                "message": "需要人工客服协助",
+                            }
+                            if is_heavy
+                            else {"rewritten_query": "当前订单需要人工客服协助"}
+                        ),
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: HandoffLLM(),
+    )
+    business_state = CustomerServiceState(
+        order=OrderContext(active_order_ref="ORDER-001")
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("转人工，手机号后四位5678", metadata)
+
+    call = planned["decision"].tool_calls[0]
+    assert call.tool_name == "create_human_handoff"
+    assert call.arguments["order_no"] == "ORDER-001"
+    assert call.arguments["customer_phone_last4"] == "5678"
+
+
+def test_capability_selector_rejects_unknown_real_tool_argument(monkeypatch) -> None:
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     calls = 0
 
     class InvalidArgumentLLM:
@@ -1208,7 +1689,7 @@ def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> N
             nonlocal calls
             calls += 1
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
             return SimpleNamespace(
                 tool_calls=[
@@ -1237,18 +1718,18 @@ def test_read_only_fallback_rejects_unknown_real_tool_argument(monkeypatch) -> N
     assert calls == 2
     assert planned["decision"].tool_calls == []
     failure = planned["state"]["metadata"]["customer_service"]["execution_details"][
-        "read_only_tool_fallback"
+        "capability_selection"
     ]["failure_reason"]
     assert "extra_forbidden" in failure
 
 
-def test_read_only_fallback_rejects_product_list_without_query_condition(
+def test_capability_selector_rejects_product_list_without_query_condition(
     monkeypatch,
 ) -> None:
     class MissingConditionLLM:
         def chat(self, request):
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
             return SimpleNamespace(
                 tool_calls=[
@@ -1261,7 +1742,7 @@ def test_read_only_fallback_rejects_product_list_without_query_condition(
                 ]
             )
 
-    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
         lambda **_kwargs: MissingConditionLLM(),
@@ -1275,7 +1756,7 @@ def test_read_only_fallback_rejects_product_list_without_query_condition(
 
     assert planned["decision"].tool_calls == []
     failure = planned["state"]["metadata"]["customer_service"]["execution_details"][
-        "read_only_tool_fallback"
+        "capability_selection"
     ]["failure_reason"]
     assert "Field required" in failure
     assert "keyword" in failure
@@ -1287,7 +1768,7 @@ def test_native_catalog_detail_rejects_missing_product_code_before_real_tool(
     class MissingProductCodeLLM:
         def chat(self, request):
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
             return SimpleNamespace(
                 tool_calls=[
@@ -1304,7 +1785,7 @@ def test_native_catalog_detail_rejects_missing_product_code_before_real_tool(
                 ]
             )
 
-    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
         lambda **_kwargs: MissingProductCodeLLM(),
@@ -1318,15 +1799,16 @@ def test_native_catalog_detail_rejects_missing_product_code_before_real_tool(
 
     assert planned["decision"].tool_calls == []
     failure = planned["state"]["metadata"]["customer_service"]["execution_details"][
-        "read_only_tool_fallback"
+        "capability_selection"
     ]["failure_reason"]
     assert "Field required" in failure
     assert "product_code" in failure
 
 
-def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
+def test_llm_only_current_product_use_case_enters_manual_evidence_chain(
     monkeypatch,
 ) -> None:
+    fallback_request = None
     batch = ProductCandidateBatch(
         batch_id="keyboard-1",
         query="你家卖键盘么",
@@ -1345,19 +1827,25 @@ def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
 
     class UseCaseLLM:
         def chat(self, request):
+            nonlocal fallback_request
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
+            if is_fallback:
+                fallback_request = request
             return SimpleNamespace(
                 tool_calls=[
                     SimpleNamespace(
                         name=(
-                            "check_product_use_case"
+                            "search_product_manual"
                             if is_fallback
                             else "emit_rewritten_query"
                         ),
                         arguments=(
-                            {"product_code": "3", "use_case": "游戏"}
+                            {
+                                "product_code": "3",
+                                "manual_question": "G512 X 75键盘能打游戏么",
+                            }
                             if is_fallback
                             else {"rewritten_query": "G512 X 75键盘能打游戏么"}
                         ),
@@ -1365,7 +1853,7 @@ def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
                 ]
             )
 
-    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
         lambda **_kwargs: UseCaseLLM(),
@@ -1390,37 +1878,76 @@ def test_llm_only_current_product_use_case_is_answered_from_catalog_fact(
     assert tool_call.arguments["product_code"] == "3"
     assert "keyword" not in tool_call.arguments
     transaction = planned["state"]["customer_service_execution"]["pending_transaction"]
-    assert transaction["expected_result_type"] == "product_use_case_match"
-    result = {
-        "items": [
-            {
-                "product_code": "3",
-                "name": "G512 X 75",
-                "category": "键盘",
-                "use_cases": ["游戏"],
-                "primary_manual_document_id": 11,
-            }
-        ],
-        "total": 1,
+    assert transaction["expected_result_type"] == "product_verification_for_manual"
+    assert fallback_request is not None
+    available_tools = {
+        tool["function"]["name"] for tool in fallback_request.tools
     }
-    _commit_tool_result(planned["state"], planned["decision"], result)
-    planned["state"]["observations"] = [
-        {
-            "tool_name": "search_products",
-            "success": True,
-            "raw_result": result,
-        }
-    ]
+    assert "search_product_manual" in available_tools
+    assert "check_product_use_case" not in available_tools
 
-    assert CustomerServicePresenter().present(planned["state"]) == (
-        "G512 X 75适合游戏。"
+
+def test_llm_only_manual_question_without_trusted_product_selects_then_uses_rag(
+    monkeypatch,
+) -> None:
+    fallback_request = None
+
+    class ManualSelectionLLM:
+        def chat(self, request):
+            nonlocal fallback_request
+            is_heavy = request.metadata.get("purpose") == (
+                "customer_service_capability_selection"
+            )
+            if is_heavy:
+                fallback_request = request
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=(
+                            "select_product_for_manual"
+                            if is_heavy
+                            else "emit_rewritten_query"
+                        ),
+                        arguments=(
+                            {
+                                "keyword": "G304",
+                                "manual_question": "G304能打游戏么",
+                            }
+                            if is_heavy
+                            else {"rewritten_query": "G304能打游戏么"}
+                        ),
+                    )
+                ]
+            )
+
+    _set_formal_stage_modes(monkeypatch, "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: ManualSelectionLLM(),
     )
-    committed = CustomerServiceState.model_validate(
-        planned["state"]["metadata"]["customer_service"]["state"]
-    )
-    assert committed.product.active_batch is not None
-    assert committed.product.active_batch.batch_id == "keyboard-1"
-    assert committed.product.filters == {"keyword": "键盘"}
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    planned = _plan_turn("G304能打游戏么", metadata)
+
+    call = planned["decision"].tool_calls[0]
+    assert call.tool_name == "recommend_products"
+    assert call.arguments["keyword"] == "G304"
+    assert call.arguments["page_size"] == 1
+    transaction = planned["state"]["customer_service_execution"]["pending_transaction"]
+    assert transaction["expected_result_type"] == "product_selection_for_manual_fact"
+    goal = planned["state"]["customer_service_execution"]["goal"]
+    assert goal["semantic_frame"]["requires_manual_evidence"] is True
+    assert goal["semantic_frame"]["question"] == "G304能打游戏么"
+    assert fallback_request is not None
+    tools = {
+        tool["function"]["name"]: tool["function"]
+        for tool in fallback_request.tools
+    }
+    schema = tools["select_product_for_manual"]["parameters"]
+    assert set(schema["required"]) == {"keyword", "manual_question"}
 
 
 def test_llm_only_manual_fact_uses_trusted_product_then_scoped_knowledge(
@@ -1445,7 +1972,7 @@ def test_llm_only_manual_fact_uses_trusted_product_then_scoped_knowledge(
     class ManualLLM:
         def chat(self, request):
             is_fallback = request.metadata.get("purpose") == (
-                "customer_service_read_only_tool_fallback"
+                "customer_service_capability_selection"
             )
             return SimpleNamespace(
                 tool_calls=[
@@ -1467,7 +1994,7 @@ def test_llm_only_manual_fact_uses_trusted_product_then_scoped_knowledge(
                 ]
             )
 
-    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_INTENT_MODE", "llm_only")
+    _set_formal_stage_modes(monkeypatch, "llm_only")
     monkeypatch.setattr(
         "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
         lambda **_kwargs: ManualLLM(),
@@ -1510,6 +2037,78 @@ def test_llm_only_manual_fact_uses_trusted_product_then_scoped_knowledge(
     assert "罗技G304鼠标能连接蓝牙吗" in second_call.arguments["query"]
 
 
+def test_missing_manual_evidence_escalates_on_second_same_failure() -> None:
+    batch = ProductCandidateBatch(
+        batch_id="mouse-1",
+        query="推荐鼠标",
+        items=[
+            CandidateProduct(
+                product_code="1",
+                name="罗技G304",
+                batch_id="mouse-1",
+                position=0,
+                primary_manual_document_id=9,
+            )
+        ],
+    )
+    business_state = CustomerServiceState(
+        product=ProductContext(
+            active_batch=batch,
+            active_product_code="1",
+        )
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+
+    def run_without_evidence() -> dict:
+        planned = _plan_turn("它能连接蓝牙么", metadata)
+        _commit_planned_products(
+            planned["state"],
+            planned["decision"],
+            [
+                {
+                    "product_code": "1",
+                    "name": "罗技G304",
+                    "primary_manual_document_id": 9,
+                }
+            ],
+        )
+        continued = asyncio.run(CustomerServiceStrategy().adecide(planned["state"]))
+        knowledge_call = continued.tool_calls[0]
+        committed = CommitCoordinator().commit(
+            agent_state=planned["state"],
+            tool_name=knowledge_call.tool_name,
+            arguments=knowledge_call.arguments,
+            result=ToolResult(
+                name="knowledge_search",
+                success=True,
+                result={"answer": "", "sources": [], "citations": []},
+                metadata={"document_id": 9, "knowledge_base_id": 1},
+            ),
+        )
+        assert committed is False
+        return planned["state"]
+
+    first_state = run_without_evidence()
+
+    after_first = CustomerServiceState.model_validate(
+        metadata["customer_service"]["state"]
+    )
+    assert after_first.pending_clarification is not None
+    assert after_first.pending_clarification.kind == "missing_evidence"
+    assert "证据" in first_state["final_answer"]
+
+    second_state = run_without_evidence()
+
+    after_second = CustomerServiceState.model_validate(
+        metadata["customer_service"]["state"]
+    )
+    assert after_second.pending_clarification is None
+    assert "人工" in second_state["final_answer"]
+
+
 def test_open_product_keyword_is_forwarded_to_recommendation_tool() -> None:
     metadata = {
         "agent_id": CUSTOMER_SERVICE_AGENT_ID,
@@ -1538,6 +2137,7 @@ def test_recommendation_without_query_condition_stops_before_tool() -> None:
 def test_llm_rewrite_context_keeps_complete_turns_and_excludes_raw_query(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_QUERY_REWRITE_MODE", "hybrid")
     class RewriteLLM:
         def chat(self, request):
             return SimpleNamespace(
@@ -1768,6 +2368,275 @@ def test_after_sales_draft_then_confirm_uses_strong_commands() -> None:
         "operation_id": "mock-draft-0123456789abcdef01234567",
         "confirmed": True,
     }
+
+
+def test_interrupted_after_sales_requires_rearming_before_confirm() -> None:
+    business_state = CustomerServiceState(
+        pending_after_sales=PendingAfterSales(
+            draft_id="mock-draft-0123456789abcdef01234567",
+            operation_id="mock-draft-0123456789abcdef01234567",
+            order_no="202607240001",
+            customer_phone_last4="5678",
+            status="PENDING_CONFIRMATION",
+        ),
+        dialog_focus=DialogFocus(
+            active_domain="product",
+            active_action="recommend_products",
+            source_turn_id="turn-product",
+        ),
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+
+    rearm = _plan_turn("确认", metadata)
+
+    assert rearm["decision"].action == "final"
+    assert "售后" in str(rearm["decision"].content)
+    state_after_rearm = CustomerServiceState.model_validate(
+        metadata["customer_service"]["state"]
+    )
+    assert state_after_rearm.pending_after_sales is not None
+    assert state_after_rearm.dialog_focus.active_domain == "after_sales"
+    assert state_after_rearm.dialog_focus.active_action == "awaiting_explicit_confirmation"
+
+    confirm = _plan_turn("确认提交", metadata)
+
+    assert confirm["decision"].tool_calls[0].tool_name == "create_after_sales_ticket"
+    assert confirm["decision"].tool_calls[0].arguments["action"] == "confirm"
+
+
+def test_formal_after_sales_same_conversation_concurrent_confirm_executes_once() -> None:
+    operation_id = "mock-draft-0123456789abcdef01234567"
+    business_state = CustomerServiceState(
+        pending_after_sales=PendingAfterSales(
+            draft_id=operation_id,
+            operation_id=operation_id,
+            order_no="202607240001",
+            customer_phone_last4="5678",
+            status="PENDING_CONFIRMATION",
+            created_turn_id="draft-turn",
+            version=1,
+        ),
+        dialog_focus=DialogFocus(
+            active_domain="after_sales",
+            active_action="awaiting_explicit_confirmation",
+            source_turn_id="draft-turn",
+        ),
+    )
+    compatibility_pending = business_state.pending_after_sales.model_dump(mode="json")
+    states: list[dict[str, Any]] = []
+    for index in range(2):
+        metadata = {
+            "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+            "runtime_turn_id": f"confirm-turn-{index}",
+            "tool_allowlist": ["create_after_sales_ticket"],
+            "customer_service": {
+                "state": business_state.model_dump(mode="json"),
+                CUSTOMER_SERVICE_PENDING_KEY: deepcopy(compatibility_pending),
+            },
+        }
+        planned = _plan_turn("确认提交", metadata)
+        planned["state"]["messages"] = [{"role": "user", "content": "确认提交"}]
+        planned["state"]["pending_tool_calls"] = [
+            item.model_dump(mode="json") for item in planned["decision"].tool_calls
+        ]
+        states.append(planned["state"])
+
+    class ConcurrentConfirmExecutor:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self.calls = 0
+
+        def execute(self, tool_call):
+            with self._lock:
+                self.calls += 1
+            return ToolResult(
+                name=tool_call.name,
+                success=True,
+                result={"status": "confirmed"},
+            )
+
+    executor = ConcurrentConfirmExecutor()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda item: asyncio.run(ToolNode(executor).acall(item)),
+                states,
+            )
+        )
+
+    assert executor.calls == 1
+    statuses = [result["tool_results"][0]["status"] for result in results]
+    assert sorted(statuses) == ["blocked", "success"]
+
+
+@pytest.mark.parametrize("success_saved_first", [True, False])
+def test_formal_runtime_session_cas_never_resurrects_confirmed_pending(
+    monkeypatch,
+    success_saved_first: bool,
+) -> None:
+    lock = threading.RLock()
+    operation_id = "mock-draft-0123456789abcdef01234567"
+    pending_state = CustomerServiceState(
+        pending_after_sales=PendingAfterSales(
+            draft_id=operation_id,
+            operation_id=operation_id,
+            order_no="202607240001",
+            customer_phone_last4="5678",
+            status="PENDING_CONFIRMATION",
+        )
+    )
+    pending_metadata = {
+        "state": pending_state.model_dump(mode="json"),
+        CUSTOMER_SERVICE_PENDING_KEY: pending_state.pending_after_sales.model_dump(
+            mode="json"
+        ),
+    }
+    saved = MemoryState(
+        session_id="conversation:42",
+        revision=1,
+        session_metadata={"customer_service": deepcopy(pending_metadata)},
+    )
+
+    class FakeCASMemoryManager:
+        provider = type("Provider", (), {"name": "fake"})()
+
+        def load_session(self, _session_id: str) -> MemoryState | None:
+            with lock:
+                return saved.model_copy(deep=True)
+
+        def compare_and_save_session(
+            self,
+            state: MemoryState,
+            *,
+            expected_revision: int,
+        ) -> bool:
+            nonlocal saved
+            with lock:
+                if saved.revision != expected_revision:
+                    return False
+                saved = state.model_copy(deep=True)
+                return True
+
+    monkeypatch.setattr(
+        "backend.app.agents.langgraph.runtime.MemoryFactory.get_manager",
+        lambda: FakeCASMemoryManager(),
+    )
+    runtime = LangGraphAgentRuntime(graph_app=object())
+
+    def runtime_state(customer_service: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "query": "确认提交",
+            "messages": [{"role": "user", "content": "确认提交"}],
+            "metadata": {
+                "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+                "runtime_turn_id": "confirm-turn",
+                "customer_service": customer_service,
+                "session": {"revision": 1},
+            },
+            "customer_service_execution": CustomerServiceExecution(
+                turn_id="confirm-turn"
+            ).model_dump(mode="json"),
+        }
+
+    stale = runtime_state(deepcopy(pending_metadata))
+    confirmed = runtime_state(
+        {
+            "state": CustomerServiceState().model_dump(mode="json"),
+            "last_confirmed_operation_id": operation_id,
+        }
+    )
+    ordered_states = [confirmed, stale] if success_saved_first else [stale, confirmed]
+    for state in ordered_states:
+        runtime._save_session("conversation:42", state)
+
+    customer_service = saved.session_metadata["customer_service"]
+    assert CUSTOMER_SERVICE_PENDING_KEY not in customer_service
+    assert customer_service["last_confirmed_operation_id"] == operation_id
+
+
+def test_same_clarification_second_failure_escalates_and_clears_pending() -> None:
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": CustomerServiceState().model_dump(mode="json")},
+    }
+
+    first = _plan_turn("第二个呢", metadata)
+
+    assert first["decision"].action == "final"
+    after_first = CustomerServiceState.model_validate(
+        metadata["customer_service"]["state"]
+    )
+    assert after_first.pending_clarification is not None
+    assert after_first.pending_clarification.attempts == 1
+
+    second = _plan_turn("第二个呢", metadata)
+
+    assert second["decision"].action == "final"
+    assert "人工" in str(second["decision"].content)
+    after_second = CustomerServiceState.model_validate(
+        metadata["customer_service"]["state"]
+    )
+    assert after_second.pending_clarification is None
+
+
+def test_pending_clarification_safe_slots_resume_after_sales(monkeypatch) -> None:
+    business_state = CustomerServiceState(
+        order=OrderContext(active_order_ref="202607240001")
+    )
+    metadata = {
+        "agent_id": CUSTOMER_SERVICE_AGENT_ID,
+        "customer_service": {"state": business_state.model_dump(mode="json")},
+    }
+    first = _plan_turn("我要退货，商品无法正常使用", metadata)
+    assert first["decision"].action == "final"
+    pending = CustomerServiceState.model_validate(
+        metadata["customer_service"]["state"]
+    ).pending_clarification
+    assert pending is not None
+    assert pending.resume_action is not None
+    assert pending.resume_action.safe_slots["issue_description"] == (
+        "我要退货，商品无法正常使用"
+    )
+
+    class ResumeLLM:
+        def chat(self, request):
+            is_heavy = request.metadata.get("purpose") == (
+                "customer_service_capability_selection"
+            )
+            return SimpleNamespace(
+                tool_calls=[
+                    SimpleNamespace(
+                        name=(
+                            "create_after_sales_draft"
+                            if is_heavy
+                            else "emit_rewritten_query"
+                        ),
+                        arguments=(
+                            {"phone_last4": "5678"}
+                            if is_heavy
+                            else {"rewritten_query": "手机号后四位是5678"}
+                        ),
+                    )
+                ]
+            )
+
+    _set_formal_stage_modes(monkeypatch, "llm_only")
+    monkeypatch.setattr(
+        "backend.app.agents.customer_service_core.understanding.LLMFactory.get_llm",
+        lambda **_kwargs: ResumeLLM(),
+    )
+
+    resumed = _plan_turn("手机号后四位5678", metadata)
+
+    call = resumed["decision"].tool_calls[0]
+    assert call.tool_name == "create_after_sales_ticket"
+    assert call.arguments["action"] == "draft"
+    assert call.arguments["order_no"] == "202607240001"
+    assert call.arguments["customer_phone_last4"] == "5678"
+    assert call.arguments["issue_description"] == "我要退货，商品无法正常使用"
 
 
 def test_explicit_order_is_verified_before_after_sales_draft() -> None:

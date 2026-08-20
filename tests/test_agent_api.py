@@ -476,23 +476,30 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
 
     assert debug_trace["customer_service"]["route"]["intent"] == "order_query"
     assert debug_trace["customer_service"]["dst"]["status"] == "completed"
-    llm_step = next(step for step in debug_trace["steps"] if step["name"] == "LLM语义补充")
+    llm_step = next(step for step in debug_trace["steps"] if step["name"] == "Query补全")
     assert llm_step["status"] == "completed"
     assert llm_step["input"]["raw_query"] == "帮我看看"
     assert llm_step["input"]["recent_dialogue"][0]["role"] == "assistant"
     assert llm_step["output"]["rewritten_query"] == "查询我的订单"
     assert llm_step["output"]["rule_result_after_rewrite"]["intent"] == "order"
-    dst_step = next(step for step in debug_trace["steps"] if step["step"] == 6)
+    dst_step = next(
+        step
+        for step in debug_trace["steps"]
+        if step["name"] == "DST 与 FSM 状态更新"
+    )
     assert dst_step["output"]["dst_before"]["status"] == "idle"
     assert dst_step["output"]["dst_after_request"]["status"] == "ready_to_execute"
     assert dst_step["output"]["dst_after_tool"]["status"] == "completed"
     assert debug_trace["runtime_trace"]["graph_nodes"][0]["node"] == "planner"
     assert debug_trace["tool_calls"][0]["arguments"]["order_no"] == "[REDACTED]"
-    assert [step["step"] for step in debug_trace["steps"]] == list(range(1, 11))
+    assert [step["step"] for step in debug_trace["steps"]] == list(range(1, 14))
     assert [step["name"] for step in debug_trace["steps"]] == [
         "输入预处理与前置路由",
-        "意图识别",
-        "LLM语义补充",
+        "Query补全",
+        "意图路由",
+        "槽位提取",
+        "引用理解",
+        "Tool选择",
         "上下文化理解",
         "生成 ContextualizedRequest",
         "DST 与 FSM 状态更新",
@@ -501,8 +508,12 @@ def test_customer_agent_stream_returns_redacted_debug_trace_when_enabled(
         "证据校验",
         "最终回答",
     ]
-    assert debug_trace["steps"][6]["status"] == "completed"
-    assert debug_trace["steps"][9]["output"]["answer"] == "订单已送达"
+    tool_step = next(
+        step for step in debug_trace["steps"] if step["name"] == "Tool 路由与参数组装"
+    )
+    final_step = next(step for step in debug_trace["steps"] if step["name"] == "最终回答")
+    assert tool_step["status"] == "completed"
+    assert final_step["output"]["answer"] == "订单已送达"
     assert "202607240001" not in json.dumps(debug_trace, ensure_ascii=False)
 
 

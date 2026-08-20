@@ -96,11 +96,8 @@ def explicit_order_requires_verification(
     order_ref: str,
     state: CustomerServiceState,
 ) -> bool:
+    batch = state.order.active_batch
     return not any(
-        order_ref
-        in {
-            str(item.get("order_ref") or ""),
-            str(item.get("order_no") or ""),
-        }
-        for item in state.order_candidates
+        order_ref == item.order_ref
+        for item in (batch.items if batch is not None else [])
     )

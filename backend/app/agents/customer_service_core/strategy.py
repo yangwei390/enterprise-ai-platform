@@ -6,23 +6,32 @@ from typing import Any
 from uuid import uuid4
 
 from backend.app.agents.customer_service_core.adapters import CommandAdapter
+from backend.app.agents.customer_service_core.capability_selector import (
+    select_capability,
+)
 from backend.app.agents.customer_service_core.command_builder import build_command
 from backend.app.agents.customer_service_core.commit import CommitCoordinator
+from backend.app.agents.customer_service_core.context_lifecycle import (
+    reconcile_visible_context,
+)
 from backend.app.agents.customer_service_core.contracts import (
+    ClarificationKind,
     CustomerServiceCommand,
     CustomerServiceExecution,
     CustomerServiceState,
+    DialogDomain,
+    DialogFocus,
     ExecutionPhase,
     GoalSnapshot,
     KnowledgeSearchCommand,
+    PendingClarification,
     PendingProductQuery,
     PendingTransaction,
     ProductContext,
+    ResumeAction,
+    SemanticFrame,
     StatePreview,
     TransactionStatus,
-)
-from backend.app.agents.customer_service_core.read_only_fallback import (
-    recommend_read_only_capability,
 )
 from backend.app.agents.customer_service_core.reducer import reduce_state
 from backend.app.agents.customer_service_core.understanding import understand
@@ -52,10 +61,25 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
 
         business_state = self._business_state(state)
         details = self._reset_details(state, business_state)
+        reconciled_state, lifecycle_changes = reconcile_visible_context(
+            business_state,
+            state.get("messages", []),
+        )
+        if lifecycle_changes:
+            self._save_business_state(state, reconciled_state)
+            business_state = reconciled_state
+            details["context_lifecycle"] = {
+                "changes": lifecycle_changes,
+                "state_after": reconciled_state.model_dump(mode="json"),
+            }
         understanding = await understand(
             query=str(state.get("query") or ""),
             state=business_state,
             messages=state.get("messages", []),
+        )
+        understanding.frame = self._merge_pending_safe_slots(
+            business_state,
+            understanding.frame,
         )
         execution.goal = GoalSnapshot(
             raw_query=str(state.get("query") or ""),
@@ -67,6 +91,11 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
         }
         details["understanding"] = understanding.model_dump(mode="json")
         details["merge"] = understanding.merge
+        details["llm_stages"] = {
+            name: detail.model_dump(mode="json")
+            for name, detail in understanding.stage_details.items()
+        }
+        details["llm_call_count"] = understanding.llm_call_count
 
         preview = reduce_state(business_state, understanding.frame)
         details["state_preview"] = preview.model_dump(mode="json")
@@ -76,7 +105,7 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             runtime=self._runtime_scope(state),
         )
         if (
-            understanding.read_only_fallback_required
+            understanding.capability_selector_required
             or (
                 understanding.llm_used
                 and understanding.frame.intent
@@ -92,12 +121,23 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
                 and build.clarification is not None
             )
         ):
-            fallback = await recommend_read_only_capability(
+            fallback = await select_capability(
                 rewritten_query=understanding.rewritten_query or execution.goal.raw_query,
                 state=business_state,
             )
-            details["read_only_tool_fallback"] = fallback.model_dump(mode="json")
+            details["capability_selection"] = fallback.model_dump(mode="json")
+            details["llm_stages"].update(
+                {
+                    name: detail.model_dump(mode="json")
+                    for name, detail in fallback.stage_details.items()
+                }
+            )
+            details["llm_call_count"] += fallback.llm_call_count
             if fallback.semantic_frame is not None:
+                fallback.semantic_frame = self._merge_pending_safe_slots(
+                    business_state,
+                    fallback.semantic_frame,
+                )
                 fallback_preview = reduce_state(
                     business_state,
                     fallback.semantic_frame,
@@ -146,6 +186,15 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
                     state=preview.proposed_state,
                 )
                 details["state_commit"] = preview.proposed_state.model_dump(mode="json")
+            elif build.state_action == "rearm_after_sales_confirmation":
+                rearmed = business_state.model_copy(deep=True)
+                rearmed.dialog_focus = DialogFocus(
+                    active_domain="after_sales",
+                    active_action="awaiting_explicit_confirmation",
+                    source_turn_id=execution.turn_id,
+                )
+                self._save_business_state(state, rearmed)
+                details["state_commit"] = rearmed.model_dump(mode="json")
             execution.phase = ExecutionPhase.READY_FOR_FINAL
             state["customer_service_execution"] = execution.model_dump(mode="json")
             details["command"] = None
@@ -154,9 +203,24 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             execution.phase = ExecutionPhase.READY_FOR_CLARIFICATION
             state["customer_service_execution"] = execution.model_dump(mode="json")
             details["command"] = None
-            return self._final(build.clarification)
+            frame = execution.goal.semantic_frame or understanding.frame
+            answer = self._record_or_escalate_clarification(
+                state=state,
+                business_state=business_state,
+                execution=execution,
+                frame=frame,
+                clarification=build.clarification,
+                ambiguous=build.resolution is not None,
+            )
+            return self._final(answer)
         if build.command is None:
             return self._fail(state, execution, "command_missing")
+        if (
+            business_state.pending_clarification is not None
+            and not self._requires_continuation(build.expected_result_type)
+        ):
+            preview.proposed_state.pending_clarification = None
+            preview.proposed_patch["pending_clarification"] = None
         if preview.proposed_patch.get("invalidate_product_context") is True:
             invalidated = business_state.model_copy(deep=True)
             invalidated.product = ProductContext()
@@ -199,9 +263,22 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
                 )
             )
             if not verified:
-                execution.phase = ExecutionPhase.READY_FOR_FINAL
+                execution.phase = ExecutionPhase.READY_FOR_CLARIFICATION
                 state["customer_service_execution"] = execution.model_dump(mode="json")
-                return self._final("没有找到该商品，无法查询说明书。")
+                frame = execution.goal.semantic_frame if execution.goal is not None else None
+                if frame is None:
+                    return self._fail(state, execution, "semantic_frame_missing")
+                return self._final(
+                    self._record_or_escalate_clarification(
+                        state=state,
+                        business_state=business_state,
+                        execution=execution,
+                        frame=frame,
+                        clarification="没有找到该商品，暂时无法查询对应说明书。",
+                        ambiguous=False,
+                        clarification_kind="missing_evidence",
+                    )
+                )
             if len(verified) != 1:
                 execution.phase = ExecutionPhase.READY_FOR_CLARIFICATION
                 state["customer_service_execution"] = execution.model_dump(mode="json")
@@ -209,9 +286,22 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
                 return self._final(f"找到多个匹配商品：{names}。请明确选择一个。")
             product = verified[0]
             if product.primary_manual_document_id is None:
-                execution.phase = ExecutionPhase.READY_FOR_FINAL
+                execution.phase = ExecutionPhase.READY_FOR_CLARIFICATION
                 state["customer_service_execution"] = execution.model_dump(mode="json")
-                return self._final("该商品没有绑定可用的主说明书。")
+                frame = execution.goal.semantic_frame if execution.goal is not None else None
+                if frame is None:
+                    return self._fail(state, execution, "semantic_frame_missing")
+                return self._final(
+                    self._record_or_escalate_clarification(
+                        state=state,
+                        business_state=business_state,
+                        execution=execution,
+                        frame=frame,
+                        clarification="该商品没有绑定可用的主说明书，暂时无法可靠回答。",
+                        ambiguous=False,
+                        clarification_kind="missing_evidence",
+                    )
+                )
             knowledge_base_id = self._allowed_knowledge_base_id(state)
             if knowledge_base_id is None:
                 return self._fail(state, execution, "knowledge_base_scope_missing")
@@ -226,6 +316,9 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
                 state_before=business_state,
                 proposed_state=business_state.model_copy(deep=True),
             )
+            if business_state.pending_clarification is not None:
+                preview.proposed_state.pending_clarification = None
+                preview.proposed_patch["pending_clarification"] = None
             return self._tool_decision(
                 state=state,
                 execution=execution,
@@ -254,6 +347,12 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             )
             if build.command is None:
                 return self._fail(state, execution, "verified_order_command_missing")
+            if (
+                business_state.pending_clarification is not None
+                and not self._requires_continuation(build.expected_result_type)
+            ):
+                preview.proposed_state.pending_clarification = None
+                preview.proposed_patch["pending_clarification"] = None
             return self._tool_decision(
                 state=state,
                 execution=execution,
@@ -330,6 +429,146 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
         )
 
     @staticmethod
+    def _save_business_state(
+        state: dict[str, Any],
+        business_state: CustomerServiceState,
+    ) -> None:
+        state.setdefault("metadata", {}).setdefault("customer_service", {})[
+            "state"
+        ] = business_state.model_dump(mode="json")
+
+    def _record_or_escalate_clarification(
+        self,
+        *,
+        state: dict[str, Any],
+        business_state: CustomerServiceState,
+        execution: CustomerServiceExecution,
+        frame: SemanticFrame,
+        clarification: str,
+        ambiguous: bool,
+        clarification_kind: ClarificationKind | None = None,
+    ) -> str:
+        domain = self._domain_for_intent(frame.intent)
+        kind = clarification_kind or (
+            "ambiguous_reference" if ambiguous else "missing_slot"
+        )
+        target = f"{domain}:{frame.intent}:{clarification}"
+        existing = business_state.pending_clarification
+        if (
+            existing is not None
+            and existing.domain == domain
+            and existing.kind == kind
+            and existing.target_description == target
+        ):
+            business_state.pending_clarification = None
+            self._save_business_state(state, business_state)
+            self._details(state)["clarification"] = {
+                "status": "escalated",
+                "attempts": 2,
+                "target": target,
+            }
+            return "连续两次仍无法确认您的具体需求，建议转人工客服继续处理。"
+
+        pending = PendingClarification(
+            clarification_id=f"clarification_{uuid4().hex}",
+            kind=kind,
+            domain=domain,
+            target_description=target,
+            missing_fields=self._missing_fields(frame),
+            resume_action=ResumeAction(
+                action=frame.intent,
+                domain=domain,
+                safe_slots=self._safe_resume_slots(frame),
+            ),
+            attempts=1,
+            created_turn_id=execution.turn_id,
+            last_asked_turn_id=execution.turn_id,
+        )
+        business_state.pending_clarification = pending
+        self._save_business_state(state, business_state)
+        self._details(state)["clarification"] = {
+            "status": "waiting",
+            "pending": pending.model_dump(mode="json"),
+        }
+        return clarification
+
+    @staticmethod
+    def _domain_for_intent(intent: str) -> DialogDomain:
+        if intent in {
+            "recommend_products",
+            "search_products",
+            "compare_products",
+            "product_catalog_detail",
+        }:
+            return "product"
+        if intent in {"product_fact", "product_fact_with_selection"}:
+            return "manual"
+        if intent == "order":
+            return "order"
+        if intent == "logistics":
+            return "logistics"
+        if intent == "after_sales":
+            return "after_sales"
+        if intent == "handoff":
+            return "handoff"
+        return "general"
+
+    @staticmethod
+    def _missing_fields(frame: SemanticFrame) -> list[str]:
+        if frame.intent == "after_sales":
+            required = ("order_ref", "phone_last4", "issue_description")
+        elif frame.intent == "handoff":
+            required = ("order_ref", "phone_last4")
+        elif frame.intent in {"recommend_products", "search_products"}:
+            required = ("keyword",)
+        else:
+            return ["target"]
+        return [field for field in required if not frame.slots.get(field)]
+
+    @staticmethod
+    def _safe_resume_slots(frame: SemanticFrame) -> dict[str, Any]:
+        allowed = {
+            "keyword",
+            "category",
+            "brand",
+            "model",
+            "order_ref",
+            "phone_last4",
+            "issue_type",
+            "issue_description",
+            "message",
+        }
+        return {
+            key: value
+            for key, value in frame.slots.items()
+            if key in allowed and value is not None
+        }
+
+    def _merge_pending_safe_slots(
+        self,
+        state: CustomerServiceState,
+        frame: SemanticFrame,
+    ) -> SemanticFrame:
+        pending = state.pending_clarification
+        resume = pending.resume_action if pending is not None else None
+        if resume is None or resume.action != frame.intent:
+            return frame
+        if resume.domain != self._domain_for_intent(frame.intent):
+            return frame
+        merged = frame.model_copy(deep=True)
+        merged.slots = {**resume.safe_slots, **frame.slots}
+        return merged
+
+    @staticmethod
+    def _requires_continuation(expected_result_type: str) -> bool:
+        return expected_result_type in {
+            "product_verification_for_manual",
+            "product_selection_for_manual_fact",
+            "order_list_for_logistics",
+            "order_list_for_after_sales",
+        } or expected_result_type.startswith("order_verification_for_")
+
+    @staticmethod
     def _load_execution(state: dict[str, Any]) -> CustomerServiceExecution:
         raw = state.get("customer_service_execution")
         if isinstance(raw, dict):
@@ -381,6 +620,9 @@ class CustomerServiceStrategy(BaseAgentPlannerStrategy):
             "safety": {},
             "understanding": {},
             "merge": {},
+            "llm_stages": {},
+            "llm_call_count": 0,
+            "llm_calls_accounted": False,
             "state_before": business_state.model_dump(mode="json"),
             "state_preview": {},
             "resolution": {},

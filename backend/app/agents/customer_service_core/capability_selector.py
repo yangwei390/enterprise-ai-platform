@@ -10,17 +10,28 @@ from backend.app.agents.customer_service_core.contracts import (
     ReferenceExpression,
     SemanticFrame,
 )
+from backend.app.agents.customer_service_core.stage_modes import (
+    StageExecutionDetail,
+    StageMode,
+    intent_routing_mode,
+    reference_interpretation_mode,
+    slot_extraction_mode,
+    tool_selection_mode,
+)
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
+from backend.app.llms.config import get_customer_service_reasoning_llm_config
 from backend.app.tools.registry import get_tool_registry
 from pydantic import BaseModel, ConfigDict, Field
 
-ReadOnlyToolName = Literal[
+CapabilityToolName = Literal[
     "search_products",
     "recommend_products",
     "compare_products",
     "query_order",
     "query_logistics",
     "knowledge_search",
+    "create_after_sales_ticket",
+    "create_human_handoff",
     "none",
 ]
 ResponseMode = Literal[
@@ -28,33 +39,34 @@ ResponseMode = Literal[
     "product_recommendation",
     "product_catalog_detail",
     "product_feature_match",
-    "product_use_case_match",
     "product_comparison",
     "manual_fact",
+    "manual_fact_with_selection",
     "order_list",
     "order_detail",
     "logistics_status",
+    "after_sales_draft",
+    "human_handoff",
     "clarification",
 ]
 
 _PROTECTED_ARGUMENTS = {"knowledge_base_id", "excluded_product_codes"}
 
 
-class ReadOnlyQuestionSlots(BaseModel):
+class CapabilityQuestionSlots(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    use_case: str | None = Field(default=None, min_length=1, max_length=64)
     feature: str | None = Field(default=None, min_length=1, max_length=64)
     manual_question: str | None = Field(default=None, min_length=1, max_length=500)
 
 
-class ReadOnlyToolSuggestion(BaseModel):
+class CapabilitySuggestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tool_name: ReadOnlyToolName
+    tool_name: CapabilityToolName
     arguments: dict[str, Any] = Field(default_factory=dict)
     response_mode: ResponseMode
-    question_slots: ReadOnlyQuestionSlots = Field(default_factory=ReadOnlyQuestionSlots)
+    question_slots: CapabilityQuestionSlots = Field(default_factory=CapabilityQuestionSlots)
     reason: str = Field(default="", max_length=500)
 
 
@@ -106,14 +118,6 @@ class ProductFeatureArgs(ProductCodeArgs):
     )
 
 
-class ProductUseCaseArgs(ProductCodeArgs):
-    use_case: str = Field(
-        min_length=1,
-        max_length=64,
-        description="必填。用户要核验的适用场景或用途。",
-    )
-
-
 class CompareProductArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -146,28 +150,68 @@ class ProductManualArgs(ProductCodeArgs):
     )
 
 
-class ReadOnlyFallbackResult(BaseModel):
+class ProductManualSelectionArgs(SearchProductListArgs):
+    page_size: int = Field(default=1, ge=1, le=1, description="固定先验证一个商品。")
+    manual_question: str = Field(
+        min_length=1,
+        max_length=500,
+        description="必填。商品验证成功后需要从说明书中核验的完整问题。",
+    )
+
+
+class AfterSalesDraftArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    order_ref: str | None = Field(default=None, min_length=4, max_length=64)
+    phone_last4: str | None = Field(default=None, pattern=r"^\d{4}$")
+    issue_type: Literal["quality", "repair", "return", "exchange", "other"] = "other"
+    issue_description: str | None = Field(default=None, min_length=1, max_length=1000)
+
+
+class HumanHandoffArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    order_ref: str | None = Field(default=None, min_length=4, max_length=64)
+    phone_last4: str | None = Field(default=None, pattern=r"^\d{4}$")
+    reason: Literal["customer_request", "complaint", "tool_unavailable", "other"] = (
+        "customer_request"
+    )
+    message: str = Field(min_length=2, max_length=1000)
+
+
+class CapabilitySelectionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     triggered: bool = True
     rewritten_query: str
-    suggestion: ReadOnlyToolSuggestion | None = None
+    suggestion: CapabilitySuggestion | None = None
     semantic_frame: SemanticFrame | None = None
     failure_reason: str | None = None
+    llm_call_count: int = Field(default=1, ge=0)
+    stage_details: dict[str, StageExecutionDetail] = Field(default_factory=dict)
 
 
-async def recommend_read_only_capability(
+async def select_capability(
     *,
     rewritten_query: str,
     state: CustomerServiceState,
-) -> ReadOnlyFallbackResult:
+) -> CapabilitySelectionResult:
     request = _build_request(rewritten_query=rewritten_query, state=state)
     try:
-        response = await asyncio.to_thread(LLMFactory.get_llm().chat, request)
+        response = await asyncio.to_thread(
+            LLMFactory.get_llm(
+                config=get_customer_service_reasoning_llm_config(),
+            ).chat,
+            request,
+        )
         if not response.tool_calls:
-            return ReadOnlyFallbackResult(
+            return CapabilitySelectionResult(
                 rewritten_query=rewritten_query,
                 failure_reason="llm_returned_no_tool_call",
+                stage_details=_failed_shared_stage_details(
+                    rewritten_query,
+                    "llm_returned_no_tool_call",
+                ),
             )
         suggestion = _suggestion_from_native_tool_call(
             tool_name=response.tool_calls[0].name,
@@ -180,19 +224,126 @@ async def recommend_read_only_capability(
             rewritten_query=rewritten_query,
             state=state,
         )
-        return ReadOnlyFallbackResult(
+        return CapabilitySelectionResult(
             rewritten_query=rewritten_query,
             suggestion=suggestion,
             semantic_frame=frame,
             failure_reason=(
-                "no_read_only_tool" if frame is None else None
+                "no_capability" if frame is None else None
+            ),
+            stage_details=_shared_stage_details(
+                rewritten_query=rewritten_query,
+                suggestion=suggestion,
+                semantic_frame=frame,
             ),
         )
     except Exception as exc:
-        return ReadOnlyFallbackResult(
+        failure_reason = f"{type(exc).__name__}:{exc}"
+        return CapabilitySelectionResult(
             rewritten_query=rewritten_query,
-            failure_reason=f"{type(exc).__name__}:{exc}",
+            failure_reason=failure_reason,
+            stage_details=_failed_shared_stage_details(
+                rewritten_query,
+                failure_reason,
+            ),
         )
+
+
+def _shared_stage_details(
+    *,
+    rewritten_query: str,
+    suggestion: CapabilitySuggestion,
+    semantic_frame: SemanticFrame | None,
+) -> dict[str, StageExecutionDetail]:
+    shared_call_id = "heavy_semantic_tool_call"
+    frame = semantic_frame or SemanticFrame(intent="other")
+    domain = _domain_for_intent(frame.intent)
+    common_input = {"rewritten_query": rewritten_query}
+    return {
+        "intent_routing": StageExecutionDetail(
+            mode=intent_routing_mode(),
+            source="shared_llm",
+            executed=True,
+            input=common_input,
+            output={"intent": frame.intent, "domain": domain},
+            shared_call_id=shared_call_id,
+        ),
+        "slot_extraction": StageExecutionDetail(
+            mode=slot_extraction_mode(),
+            source="shared_llm",
+            executed=True,
+            input=common_input,
+            output={
+                "slots": frame.slots,
+                "question": frame.question,
+                "requested_count": frame.requested_count,
+            },
+            shared_call_id=shared_call_id,
+        ),
+        "reference_interpretation": StageExecutionDetail(
+            mode=reference_interpretation_mode(),
+            source="shared_llm",
+            executed=True,
+            input=common_input,
+            output={
+                "references": [
+                    reference.model_dump(mode="json") for reference in frame.references
+                ]
+            },
+            shared_call_id=shared_call_id,
+        ),
+        "capability_selection": StageExecutionDetail(
+            mode=tool_selection_mode(),
+            source="shared_llm",
+            executed=True,
+            input=common_input,
+            output={
+                "tool_name": suggestion.tool_name,
+                "arguments": suggestion.arguments,
+                "response_mode": suggestion.response_mode,
+            },
+            shared_call_id=shared_call_id,
+        ),
+    }
+
+
+def _failed_shared_stage_details(
+    rewritten_query: str,
+    failure_reason: str,
+) -> dict[str, StageExecutionDetail]:
+    failed_stages: tuple[tuple[str, StageMode], ...] = (
+        ("intent_routing", intent_routing_mode()),
+        ("slot_extraction", slot_extraction_mode()),
+        ("reference_interpretation", reference_interpretation_mode()),
+        ("capability_selection", tool_selection_mode()),
+    )
+    return {
+        stage_name: StageExecutionDetail(
+            mode=mode,
+            source="shared_llm",
+            executed=True,
+            input={"rewritten_query": rewritten_query},
+            failure_reason=failure_reason,
+            shared_call_id="heavy_semantic_tool_call",
+        )
+        for stage_name, mode in failed_stages
+    }
+
+
+def _domain_for_intent(intent: str) -> str:
+    if intent in {"recommend_products", "search_products", "compare_products"}:
+        return "product"
+    if intent in {"product_fact", "product_fact_with_selection"}:
+        return "manual"
+    if intent == "logistics":
+        return "logistics"
+    if intent == "order":
+        return "order"
+    if intent == "after_sales":
+        return "after_sales"
+    if intent == "handoff":
+        return "handoff"
+    return "general"
 
 
 def _build_request(
@@ -206,18 +357,20 @@ def _build_request(
             LLMMessage(
                 role="system",
                 content=(
-                    "你是智能客服只读能力调度器。"
+                    "你是智能客服受控能力调度器。"
                     "必须从提供的原生 Function Tools 中选择一个，"
                     "严格按所选 Function 的 JSON Schema 生成参数。"
                     "先区分用户是在找商品，还是询问当前商品的事实。"
                     "当前商品已经确定时必须使用可信 product_code，不得把问题中的"
                     "用途或能力词当作 keyword 重新搜索。"
                     "价格、库存、features、use_cases 属于商品目录事实；"
-                    "蓝牙、连接、充电、兼容、按键和使用方法属于说明书事实。"
+                    "蓝牙、连接、充电、兼容、按键、使用方法、保修和是否适合某种用途"
+                    "都属于说明书事实，必须使用 search_product_manual。"
                     "只有用户明确要求推荐、换一个或其他选择时才使用 recommend_products。"
                     "必须从 rewritten_query 提取用户明确说出的商品名称、"
                     "类别、型号、用途或其他查询条件，填入所选 Function 的必填字段。"
-                    "禁止推荐写操作，禁止虚构商品、订单、说明书或数据库事实，"
+                    "售后只允许选择创建草稿，绝不能选择确认提交；"
+                    "禁止虚构商品、订单、说明书或数据库事实，"
                     "禁止把历史候选当作用户明确指定的实体。"
                     "无法安全匹配时调用 clarify_request。"
                     "Python 状态机、Resolver 和 Adapter 将独立校验。"
@@ -247,8 +400,24 @@ def _build_request(
                                 ]
                                 if active_batch is not None else []
                             ),
-                            "active_order_ref": state.active_order_ref,
-                            "order_candidate_count": len(state.order_candidates),
+                            "active_order_ref": state.order.active_order_ref,
+                            "visible_order_batch": (
+                                [
+                                    {
+                                        "position": item.position + 1,
+                                        "order_ref": item.order_ref,
+                                        "display_label": item.display_label,
+                                        "source": "verified_tool_result",
+                                    }
+                                    for item in state.order.active_batch.items
+                                ]
+                                if state.order.active_batch is not None else []
+                            ),
+                            "pending_clarification_user_expression": (
+                                state.pending_clarification.model_dump(mode="json")
+                                if state.pending_clarification is not None
+                                else None
+                            ),
                         },
                     },
                     ensure_ascii=False,
@@ -260,7 +429,7 @@ def _build_request(
         parallel_tool_calls=False,
         temperature=0,
         enable_thinking=False,
-        metadata={"purpose": "customer_service_read_only_tool_fallback"},
+        metadata={"purpose": "customer_service_capability_selection"},
     )
 
 
@@ -268,84 +437,104 @@ def _suggestion_from_native_tool_call(
     *,
     tool_name: str,
     arguments: dict[str, Any],
-) -> ReadOnlyToolSuggestion:
+) -> CapabilitySuggestion:
     if tool_name == "search_products":
         parsed = SearchProductListArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="search_products",
             arguments=parsed.model_dump(exclude_none=True),
             response_mode="product_list",
         )
     if tool_name == "recommend_products":
         parsed = RecommendProductArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="recommend_products",
             arguments=parsed.model_dump(exclude_none=True),
             response_mode="product_recommendation",
         )
     if tool_name == "get_product_catalog_detail":
         parsed = ProductCodeArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="search_products",
             arguments=parsed.model_dump(),
             response_mode="product_catalog_detail",
         )
     if tool_name == "check_product_feature":
         parsed = ProductFeatureArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="search_products",
             arguments={"product_code": parsed.product_code},
             response_mode="product_feature_match",
-            question_slots=ReadOnlyQuestionSlots(feature=parsed.feature),
-        )
-    if tool_name == "check_product_use_case":
-        parsed = ProductUseCaseArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
-            tool_name="search_products",
-            arguments={"product_code": parsed.product_code},
-            response_mode="product_use_case_match",
-            question_slots=ReadOnlyQuestionSlots(use_case=parsed.use_case),
+            question_slots=CapabilityQuestionSlots(feature=parsed.feature),
         )
     if tool_name == "compare_products":
         parsed = CompareProductArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="compare_products",
             arguments=parsed.model_dump(),
             response_mode="product_comparison",
         )
     if tool_name == "list_orders":
         EmptyArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="query_order",
             response_mode="order_list",
         )
     if tool_name == "get_order_detail":
         parsed = OrderRefArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="query_order",
             arguments=parsed.model_dump(),
             response_mode="order_detail",
         )
     if tool_name == "query_logistics":
         parsed = OrderRefArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="query_logistics",
             arguments=parsed.model_dump(),
             response_mode="logistics_status",
         )
     if tool_name == "search_product_manual":
         parsed = ProductManualArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="knowledge_search",
             arguments={"product_code": parsed.product_code},
             response_mode="manual_fact",
-            question_slots=ReadOnlyQuestionSlots(
+            question_slots=CapabilityQuestionSlots(
                 manual_question=parsed.manual_question,
             ),
         )
+    if tool_name == "select_product_for_manual":
+        parsed = ProductManualSelectionArgs.model_validate(arguments)
+        query_arguments = parsed.model_dump(
+            exclude={"manual_question"},
+            exclude_none=True,
+        )
+        return CapabilitySuggestion(
+            tool_name="recommend_products",
+            arguments=query_arguments,
+            response_mode="manual_fact_with_selection",
+            question_slots=CapabilityQuestionSlots(
+                manual_question=parsed.manual_question,
+            ),
+        )
+    if tool_name == "create_after_sales_draft":
+        parsed = AfterSalesDraftArgs.model_validate(arguments)
+        return CapabilitySuggestion(
+            tool_name="create_after_sales_ticket",
+            arguments=parsed.model_dump(exclude_none=True),
+            response_mode="after_sales_draft",
+        )
+    if tool_name == "request_human_handoff":
+        parsed = HumanHandoffArgs.model_validate(arguments)
+        return CapabilitySuggestion(
+            tool_name="create_human_handoff",
+            arguments=parsed.model_dump(exclude_none=True),
+            response_mode="human_handoff",
+        )
     if tool_name == "clarify_request":
         EmptyArgs.model_validate(arguments)
-        return ReadOnlyToolSuggestion(
+        return CapabilitySuggestion(
             tool_name="none",
             response_mode="clarification",
         )
@@ -372,11 +561,6 @@ def _native_capability_tools() -> list[dict[str, Any]]:
                     "check_product_feature",
                     "核验当前已确定商品是否具有某项目录特征。product_code和feature必填。",
                     ProductFeatureArgs,
-                ),
-                (
-                    "check_product_use_case",
-                    "核验当前已确定商品是否适合某个用途。product_code和use_case必填。",
-                    ProductUseCaseArgs,
                 ),
             ]
         )
@@ -416,11 +600,34 @@ def _native_capability_tools() -> list[dict[str, Any]]:
             )
         )
     if registry.get_tool("knowledge_search", require_enabled=True) is not None:
+        definitions.extend(
+            [
+                (
+                    "search_product_manual",
+                    "查询当前已确定商品说明书中的蓝牙、连接、充电、兼容、按键、使用方法、保修或用途能力。product_code和manual_question必填。",
+                    ProductManualArgs,
+                ),
+                (
+                    "select_product_for_manual",
+                    "用户明确询问某类或某款商品的说明书事实，但当前没有可信商品编码时，先按商品条件验证一个商品，成功后再查其说明书。keyword和manual_question必填。",
+                    ProductManualSelectionArgs,
+                ),
+            ]
+        )
+    if registry.get_tool("create_after_sales_ticket", require_enabled=True) is not None:
         definitions.append(
             (
-                "search_product_manual",
-                "查询当前已确定商品说明书中的蓝牙、连接、充电、兼容、按键或使用方法。product_code和manual_question必填。",
-                ProductManualArgs,
+                "create_after_sales_draft",
+                "提出售后草稿候选。只能创建draft，绝不能确认提交。已知字段按Schema填写，缺失字段留空。",
+                AfterSalesDraftArgs,
+            )
+        )
+    if registry.get_tool("create_human_handoff", require_enabled=True) is not None:
+        definitions.append(
+            (
+                "request_human_handoff",
+                "用户明确要求人工客服时提出转人工候选。不得伪造订单号或手机号。message必填。",
+                HumanHandoffArgs,
             )
         )
     definitions.append(
@@ -444,7 +651,7 @@ def _native_capability_tools() -> list[dict[str, Any]]:
 
 
 def _to_semantic_frame(
-    suggestion: ReadOnlyToolSuggestion,
+    suggestion: CapabilitySuggestion,
     arguments: dict[str, Any],
     *,
     rewritten_query: str,
@@ -461,20 +668,35 @@ def _to_semantic_frame(
         product_code = arguments.get("product_code")
         if not isinstance(product_code, str):
             return None
+        manual_question = suggestion.question_slots.manual_question or rewritten_query
         return SemanticFrame(
             intent="product_fact",
-            slots=slots,
+            slots={
+                **slots,
+                "question_predicate": _manual_question_predicate(manual_question),
+            },
             references=[
                 ReferenceExpression(text=product_code, explicit_code=product_code)
             ],
-            question=suggestion.question_slots.manual_question or rewritten_query,
+            question=manual_question,
             requires_manual_evidence=True,
         )
     if suggestion.tool_name in {"search_products", "recommend_products"}:
+        if suggestion.response_mode == "manual_fact_with_selection":
+            manual_question = suggestion.question_slots.manual_question or rewritten_query
+            return SemanticFrame(
+                intent="product_fact_with_selection",
+                slots={
+                    **slots,
+                    "question_predicate": _manual_question_predicate(manual_question),
+                },
+                requested_count=1,
+                question=manual_question,
+                requires_manual_evidence=True,
+            )
         if suggestion.response_mode in {
             "product_catalog_detail",
             "product_feature_match",
-            "product_use_case_match",
         }:
             product_code = arguments.get("product_code")
             if not isinstance(product_code, str):
@@ -512,11 +734,15 @@ def _to_semantic_frame(
         return SemanticFrame(intent="order", slots=slots)
     if suggestion.tool_name == "query_logistics":
         return SemanticFrame(intent="logistics", slots=slots)
+    if suggestion.tool_name == "create_after_sales_ticket":
+        return SemanticFrame(intent="after_sales", slots=slots)
+    if suggestion.tool_name == "create_human_handoff":
+        return SemanticFrame(intent="handoff", slots=slots)
     return None
 
 
 def _validate_suggested_arguments(
-    suggestion: ReadOnlyToolSuggestion,
+    suggestion: CapabilitySuggestion,
     state: CustomerServiceState,
 ) -> dict[str, Any]:
     if suggestion.tool_name == "none":
@@ -548,19 +774,21 @@ def _validate_suggested_arguments(
         if item is None or item.primary_manual_document_id is None:
             raise ValueError("trusted active product manual is missing")
         return {"product_code": product_code}
+    if suggestion.tool_name in {"create_after_sales_ticket", "create_human_handoff"}:
+        _validate_response_contract(suggestion)
+        return dict(suggestion.arguments)
     protected = _PROTECTED_ARGUMENTS & suggestion.arguments.keys()
     if protected:
         raise ValueError(f"protected tool arguments: {sorted(protected)}")
     tool = get_tool_registry().get_tool(suggestion.tool_name, require_enabled=True)
     if tool is None:
-        raise ValueError(f"read-only tool not found: {suggestion.tool_name}")
+        raise ValueError(f"capability tool not found: {suggestion.tool_name}")
     validated = tool.args_schema.model_validate(suggestion.arguments).model_dump()
     _validate_response_contract(suggestion)
     product_code = suggestion.arguments.get("product_code")
     if isinstance(product_code, str) and suggestion.response_mode in {
         "product_catalog_detail",
         "product_feature_match",
-        "product_use_case_match",
     }:
         trusted_codes = _trusted_product_codes(state)
         if product_code not in trusted_codes:
@@ -594,19 +822,23 @@ def _trusted_product_codes(state: CustomerServiceState) -> set[str]:
     return {item.product_code for item in batch.items} if batch is not None else set()
 
 
-def _validate_response_contract(suggestion: ReadOnlyToolSuggestion) -> None:
+def _validate_response_contract(suggestion: CapabilitySuggestion) -> None:
     allowed = {
         "search_products": {
             "product_list",
             "product_catalog_detail",
             "product_feature_match",
-            "product_use_case_match",
         },
-        "recommend_products": {"product_recommendation"},
+        "recommend_products": {
+            "product_recommendation",
+            "manual_fact_with_selection",
+        },
         "compare_products": {"product_comparison"},
         "query_order": {"order_list", "order_detail"},
         "query_logistics": {"logistics_status"},
         "knowledge_search": {"manual_fact"},
+        "create_after_sales_ticket": {"after_sales_draft"},
+        "create_human_handoff": {"human_handoff"},
         "none": {"clarification"},
     }
     if suggestion.response_mode not in allowed[suggestion.tool_name]:
@@ -619,13 +851,12 @@ def _validate_response_contract(suggestion: ReadOnlyToolSuggestion) -> None:
         if suggestion.response_mode in {
             "product_catalog_detail",
             "product_feature_match",
-            "product_use_case_match",
         } and not isinstance(suggestion.arguments.get("product_code"), str):
             raise ValueError(f"{suggestion.response_mode} requires product_code")
     if suggestion.tool_name == "recommend_products" and not _has_product_condition(
         suggestion.arguments
     ):
-        raise ValueError("product_recommendation requires at least one product query condition")
+        raise ValueError("recommend_products requires at least one product query condition")
     if suggestion.response_mode == "order_list" and "order_ref" in suggestion.arguments:
         raise ValueError("order_list must not contain order_ref")
     if suggestion.response_mode == "order_detail" and not isinstance(
@@ -633,20 +864,15 @@ def _validate_response_contract(suggestion: ReadOnlyToolSuggestion) -> None:
     ):
         raise ValueError("order_detail requires order_ref")
     if (
-        suggestion.response_mode == "product_use_case_match"
-        and suggestion.question_slots.use_case is None
-    ):
-        raise ValueError("product_use_case_match requires use_case")
-    if (
         suggestion.response_mode == "product_feature_match"
         and suggestion.question_slots.feature is None
     ):
         raise ValueError("product_feature_match requires feature")
     if (
-        suggestion.response_mode == "manual_fact"
+        suggestion.response_mode in {"manual_fact", "manual_fact_with_selection"}
         and suggestion.question_slots.manual_question is None
     ):
-        raise ValueError("manual_fact requires manual_question")
+        raise ValueError(f"{suggestion.response_mode} requires manual_question")
 
 
 def _has_product_condition(arguments: dict[str, Any]) -> bool:
@@ -676,3 +902,21 @@ def _has_product_condition(arguments: dict[str, Any]) -> bool:
 
 def _safe_requested_count(value: Any) -> int | None:
     return value if isinstance(value, int) and 1 <= value <= 5 else None
+
+
+def _manual_question_predicate(question: str) -> str:
+    if "蓝牙" in question or "连接" in question:
+        return "bluetooth_connectivity"
+    if "充电" in question:
+        return "charging"
+    if "兼容" in question:
+        return "compatibility"
+    if "按键" in question:
+        return "buttons"
+    if "保修" in question:
+        return "warranty"
+    if any(term in question for term in ("怎么用", "如何使用", "使用方法")):
+        return "usage"
+    if any(term in question for term in ("游戏", "办公", "适合")):
+        return "use_case"
+    return "features"

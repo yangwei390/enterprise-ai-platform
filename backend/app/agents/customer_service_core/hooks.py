@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.agents.customer_service_contract import CUSTOMER_SERVICE_AGENT_ID
+from backend.app.agents.customer_service_core.after_sales_guard import (
+    finalize_after_sales_confirmation,
+    reserve_after_sales_confirmation,
+)
 from backend.app.agents.customer_service_core.commit import CommitCoordinator
 from backend.app.tools.base import ToolResult
 
@@ -22,15 +26,7 @@ def prepare_tool_arguments(
     execution = state.get("customer_service_execution")
     transaction = execution.get("pending_transaction") if isinstance(execution, dict) else None
     if not isinstance(transaction, dict) or transaction.get("tool_name") != tool_name:
-        from backend.app.agents.customer_service import (
-            prepare_customer_service_tool_arguments,
-        )
-
-        return prepare_customer_service_tool_arguments(
-            state=state,
-            tool_name=tool_name,
-            arguments=arguments,
-        )
+        return arguments
     command = transaction.get("command")
     if not isinstance(command, dict):
         return arguments
@@ -54,23 +50,22 @@ def commit_tool_result(
     if not is_customer_service_state(state):
         return None
     if not isinstance(state.get("customer_service_execution"), dict):
-        from backend.app.agents.customer_service import (
-            update_customer_service_state_after_tool,
-        )
-
-        update_customer_service_state_after_tool(
-            state=state,
-            tool_name=tool_name,
-            arguments=arguments,
-            result=result,
-        )
-        return None
-    return CommitCoordinator().commit(
+        return False
+    committed = CommitCoordinator().commit(
         agent_state=state,
         tool_name=tool_name,
         arguments=arguments,
         result=result,
     )
+    if tool_name == "create_after_sales_ticket" and arguments.get("action") == "confirm":
+        operation_id = arguments.get("operation_id")
+        if isinstance(operation_id, str):
+            finalize_after_sales_confirmation(
+                state=state,
+                operation_id=operation_id,
+                result=result,
+            )
+    return committed
 
 
 def evaluate_tool_policy(
@@ -83,15 +78,7 @@ def evaluate_tool_policy(
         return None
     execution = state.get("customer_service_execution")
     if not isinstance(execution, dict):
-        from backend.app.agents.customer_service import (
-            evaluate_customer_service_tool_policy,
-        )
-
-        return evaluate_customer_service_tool_policy(
-            state=state,
-            tool_name=tool_name,
-            arguments=arguments,
-        )
+        return _blocked(tool_name, "customer_service_transaction_missing")
     transaction = execution.get("pending_transaction")
     if not isinstance(transaction, dict) or transaction.get("tool_name") != tool_name:
         return _blocked(tool_name, "customer_service_transaction_mismatch")
@@ -124,6 +111,12 @@ def evaluate_tool_policy(
         return _blocked(tool_name, "after_sales_confirmation_mismatch")
     if pending.get("created_turn_id") == execution.get("turn_id"):
         return _blocked(tool_name, "after_sales_same_turn_confirm_blocked")
+    reservation_error = reserve_after_sales_confirmation(
+        state=state,
+        pending=pending,
+    )
+    if reservation_error is not None:
+        return _blocked(tool_name, reservation_error)
     return None
 
 

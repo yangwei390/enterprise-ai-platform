@@ -84,6 +84,17 @@ def build_command(
         pending = state.pending_after_sales
         if pending is None:
             return CommandBuildResult(clarification="当前没有待确认的售后申请。")
+        if not (
+            state.dialog_focus.active_domain == "after_sales"
+            and state.dialog_focus.active_action == "awaiting_explicit_confirmation"
+        ):
+            summary = getattr(pending, "summary", None) or f"订单{pending.order_no}的售后申请"
+            return CommandBuildResult(
+                direct_answer=(
+                    f"当前保留着{summary}。请再次明确回复“确认提交”，我再为您提交售后申请。"
+                ),
+                state_action="rearm_after_sales_confirmation",
+            )
         return CommandBuildResult(
             command=ConfirmAfterSalesCommand(
                 order_no=pending.order_no,
@@ -235,7 +246,7 @@ def build_command(
     if frame.intent == "logistics":
         order_ref = _resolved_order_ref(frame, state)
         if order_ref is None:
-            if not state.order_candidates:
+            if state.order.active_batch is None or not state.order.active_batch.items:
                 return CommandBuildResult(
                     command=QueryOrderCommand(),
                     expected_result_type="order_list_for_logistics",
@@ -253,7 +264,7 @@ def build_command(
     if frame.intent == "after_sales":
         order_ref = _resolved_order_ref(frame, state)
         if order_ref is None:
-            if not state.order_candidates:
+            if state.order.active_batch is None or not state.order.active_batch.items:
                 return CommandBuildResult(
                     command=QueryOrderCommand(),
                     expected_result_type="order_list_for_after_sales",
@@ -339,7 +350,6 @@ def _catalog_expected_result(frame: SemanticFrame) -> str:
     if response_mode in {
         "product_catalog_detail",
         "product_feature_match",
-        "product_use_case_match",
     }:
         return str(response_mode)
     return "product_catalog_fact"
@@ -389,11 +399,10 @@ def _resolved_order_ref(
         return explicit
     if frame.references and frame.references[0].ordinal is not None:
         index = frame.references[0].ordinal
-        if index < len(state.order_candidates):
-            item = state.order_candidates[index]
-            value = item.get("order_ref") or item.get("order_no")
-            return str(value) if value else None
-    return state.active_order_ref
+        batch = state.order.active_batch
+        if batch is not None and index < len(batch.items):
+            return batch.items[index].order_ref
+    return state.order.active_order_ref
 
 
 def _requires_order_verification(

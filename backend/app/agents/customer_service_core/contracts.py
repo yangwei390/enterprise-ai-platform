@@ -63,6 +63,7 @@ class ProductCandidateBatch(BaseModel):
     batch_id: str
     query: str
     category: str | None = None
+    source_turn_id: str | None = Field(default=None, max_length=128)
     items: list[CandidateProduct] = Field(default_factory=list, max_length=20)
 
 
@@ -73,6 +74,9 @@ ProductQuestionPredicate = Literal[
     "price",
     "features",
     "buttons",
+    "use_case",
+    "usage",
+    "warranty",
 ]
 
 
@@ -106,6 +110,108 @@ class ProductContext(BaseModel):
     pending_query: PendingProductQuery | None = None
 
 
+class OrderCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_ref: str = Field(min_length=1, max_length=128)
+    display_label: str = Field(min_length=1, max_length=256)
+    batch_id: str = Field(min_length=1, max_length=128)
+    position: int = Field(ge=0)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_tool_result(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        order_ref = migrated.get("order_ref") or migrated.get("order_no")
+        if order_ref is not None:
+            migrated["order_ref"] = str(order_ref)
+        migrated.setdefault("display_label", str(order_ref or ""))
+        known = {"order_ref", "display_label", "batch_id", "position", "details"}
+        details = migrated.get("details")
+        normalized_details = dict(details) if isinstance(details, dict) else {}
+        normalized_details.update(
+            {key: item for key, item in migrated.items() if key not in known}
+        )
+        return {
+            "order_ref": migrated.get("order_ref"),
+            "display_label": migrated.get("display_label"),
+            "batch_id": migrated.get("batch_id"),
+            "position": migrated.get("position"),
+            "details": normalized_details,
+        }
+
+
+class OrderCandidateBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: str = Field(min_length=1, max_length=128)
+    query: str = Field(default="", max_length=2000)
+    source_turn_id: str | None = Field(default=None, max_length=128)
+    items: list[OrderCandidate] = Field(default_factory=list, max_length=20)
+
+
+class OrderContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_batch: OrderCandidateBatch | None = None
+    active_order_ref: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+DialogDomain = Literal[
+    "general",
+    "product",
+    "manual",
+    "order",
+    "logistics",
+    "after_sales",
+    "handoff",
+]
+
+
+class DialogFocus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_domain: DialogDomain | None = None
+    active_action: str | None = Field(default=None, max_length=128)
+    active_batch_id: str | None = Field(default=None, max_length=128)
+    last_successful_predicate: ProductQuestionPredicate | None = None
+    source_turn_id: str | None = Field(default=None, max_length=128)
+
+
+ClarificationKind = Literal[
+    "missing_slot",
+    "ambiguous_reference",
+    "confirm_safe_query",
+    "missing_evidence",
+    "confirm_write",
+]
+
+
+class ResumeAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1, max_length=128)
+    domain: DialogDomain
+    safe_slots: dict[str, Any] = Field(default_factory=dict)
+
+
+class PendingClarification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clarification_id: str = Field(min_length=1, max_length=128)
+    kind: ClarificationKind
+    domain: DialogDomain
+    target_description: str = Field(min_length=1, max_length=500)
+    missing_fields: list[str] = Field(default_factory=list, max_length=20)
+    resume_action: ResumeAction | None = None
+    attempts: int = Field(default=1, ge=1, le=2)
+    created_turn_id: str | None = Field(default=None, max_length=128)
+    last_asked_turn_id: str | None = Field(default=None, max_length=128)
+
+
 class DialogueContextMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -124,6 +230,7 @@ class UnderstandingContext(BaseModel):
     active_product_category: str | None = None
     active_product_codes: list[str] = Field(default_factory=list, max_length=20)
     pending_product_query: PendingProductQuery | None = None
+    pending_clarification: PendingClarification | None = None
 
 
 class PendingAfterSales(BaseModel):
@@ -140,37 +247,81 @@ class CustomerServiceState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     product: ProductContext = Field(default_factory=ProductContext)
-    order_candidates: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
-    active_order_ref: str | None = None
+    order: OrderContext = Field(default_factory=OrderContext)
+    dialog_focus: DialogFocus = Field(default_factory=DialogFocus)
     pending_after_sales: PendingAfterSales | None = None
-    clarification_target: str | None = None
-    clarification_rounds: int = Field(default=0, ge=0, le=2)
+    pending_clarification: PendingClarification | None = None
 
     @model_validator(mode="before")
     @classmethod
-    def migrate_legacy_product_state(cls, value: Any) -> Any:
-        if not isinstance(value, dict) or "product" in value:
+    def migrate_legacy_state(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
             return value
         migrated = dict(value)
-        filters = migrated.pop("filters", {})
-        raw_batches = migrated.pop("candidate_batches", [])
-        active_product_code = migrated.pop("active_product_code", None)
-        latest_batch = raw_batches[-1] if isinstance(raw_batches, list) and raw_batches else None
-        if isinstance(latest_batch, ProductCandidateBatch):
-            latest_batch = latest_batch.model_dump(mode="python")
-        category = filters.get("category") if isinstance(filters, dict) else None
-        if category is None and isinstance(latest_batch, dict):
-            category = latest_batch.get("category")
-            if category is None:
-                items = latest_batch.get("items")
-                if isinstance(items, list) and items and isinstance(items[0], dict):
-                    category = items[0].get("category")
-        migrated["product"] = {
-            "active_category": category,
-            "filters": filters if isinstance(filters, dict) else {},
-            "active_batch": latest_batch,
-            "active_product_code": active_product_code,
-        }
+        if "product" not in migrated:
+            filters = migrated.pop("filters", {})
+            raw_batches = migrated.pop("candidate_batches", [])
+            active_product_code = migrated.pop("active_product_code", None)
+            latest_batch = (
+                raw_batches[-1] if isinstance(raw_batches, list) and raw_batches else None
+            )
+            if isinstance(latest_batch, ProductCandidateBatch):
+                latest_batch = latest_batch.model_dump(mode="python")
+            category = filters.get("category") if isinstance(filters, dict) else None
+            if category is None and isinstance(latest_batch, dict):
+                category = latest_batch.get("category")
+                if category is None:
+                    items = latest_batch.get("items")
+                    if isinstance(items, list) and items and isinstance(items[0], dict):
+                        category = items[0].get("category")
+            migrated["product"] = {
+                "active_category": category,
+                "filters": filters if isinstance(filters, dict) else {},
+                "active_batch": latest_batch,
+                "active_product_code": active_product_code,
+            }
+
+        legacy_order_candidates = migrated.pop("order_candidates", [])
+        legacy_active_order_ref = migrated.pop("active_order_ref", None)
+        if "order" not in migrated:
+            batch_id = "legacy-order-batch"
+            items = [
+                {
+                    **dict(item),
+                    "batch_id": batch_id,
+                    "position": index,
+                }
+                for index, item in enumerate(legacy_order_candidates)
+                if isinstance(item, dict)
+            ]
+            migrated["order"] = {
+                "active_batch": (
+                    {
+                        "batch_id": batch_id,
+                        "query": "",
+                        "source_turn_id": None,
+                        "items": items,
+                    }
+                    if items
+                    else None
+                ),
+                "active_order_ref": legacy_active_order_ref,
+            }
+
+        clarification_target = migrated.pop("clarification_target", None)
+        clarification_rounds = migrated.pop("clarification_rounds", 0)
+        if "pending_clarification" not in migrated and isinstance(
+            clarification_target, str
+        ) and clarification_target:
+            attempts = clarification_rounds if isinstance(clarification_rounds, int) else 1
+            migrated["pending_clarification"] = {
+                "clarification_id": "legacy-clarification",
+                "kind": "missing_slot",
+                "domain": "general",
+                "target_description": clarification_target,
+                "missing_fields": [clarification_target],
+                "attempts": min(2, max(1, attempts)),
+            }
         return migrated
 
 

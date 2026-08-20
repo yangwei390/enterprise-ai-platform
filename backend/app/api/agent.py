@@ -310,7 +310,12 @@ def _customer_service_debug_steps(
     understanding = understanding if isinstance(understanding, dict) else {}
     llm_context = understanding.get("llm_context")
     llm_context = llm_context if isinstance(llm_context, dict) else {}
-    llm_used = understanding.get("llm_used") is True
+    llm_stages = execution_details.get("llm_stages")
+    llm_stages = llm_stages if isinstance(llm_stages, dict) else {}
+
+    def stage(name: str) -> dict:
+        value = llm_stages.get(name)
+        return value if isinstance(value, dict) else {}
 
     return [
         _debug_step(
@@ -322,40 +327,58 @@ def _customer_service_debug_steps(
         ),
         _debug_step(
             2,
-            "意图识别",
-            input_data={"query": request.query, "pre_route": turn_debug.get("pre_route")},
-            output_data={
-                "route": route,
-                "llm_classification": turn_debug.get("llm_classification"),
-                "classification_failure_reason": turn_debug.get("classification_failure_reason"),
-            },
-            executed=bool(route),
-        ),
-        _debug_step(
-            3,
-            "LLM语义补充",
-            input_data={
-                "triggered": llm_used,
+            "Query补全",
+            input_data=stage("query_rewrite").get("input")
+            or {
                 "raw_query": llm_context.get("raw_query") or request.query,
                 "recent_dialogue": llm_context.get("recent_dialogue") or [],
-                "dialog_focus": {
-                    "pending_product_query": llm_context.get("pending_product_query"),
-                },
-                "business_state_summary": {
-                    "active_product_category": llm_context.get("active_product_category"),
-                    "active_product_codes": llm_context.get("active_product_codes") or [],
-                },
             },
-            output_data={
+            output_data=stage("query_rewrite")
+            or {
                 "rewritten_query": understanding.get("rewritten_query"),
                 "rule_result_after_rewrite": understanding.get("rewritten_rule_frame"),
                 "failure_reason": understanding.get("llm_failure_reason"),
             },
-            executed=llm_used,
-            skipped_reason="本地规则已识别当前问题，本轮未调用 LLM 进行语义补充",
+            executed=stage("query_rewrite").get("executed") is True
+            or understanding.get("llm_used") is True,
+            skipped_reason="当前模式未调用轻量LLM进行Query补全",
+        ),
+        _debug_step(
+            3,
+            "意图路由",
+            input_data=stage("intent_routing").get("input") or {"query": request.query},
+            output_data=stage("intent_routing"),
+            executed=stage("intent_routing").get("executed") is True,
+            skipped_reason="当前请求由不可关闭的前置规则处理，未执行意图LLM阶段",
         ),
         _debug_step(
             4,
+            "槽位提取",
+            input_data=stage("slot_extraction").get("input") or {"query": request.query},
+            output_data=stage("slot_extraction"),
+            executed=stage("slot_extraction").get("executed") is True,
+            skipped_reason="当前请求未执行槽位LLM阶段",
+        ),
+        _debug_step(
+            5,
+            "引用理解",
+            input_data=stage("reference_interpretation").get("input")
+            or {"query": request.query},
+            output_data=stage("reference_interpretation"),
+            executed=stage("reference_interpretation").get("executed") is True,
+            skipped_reason="当前请求未执行引用LLM阶段",
+        ),
+        _debug_step(
+            6,
+            "Tool选择",
+            input_data=stage("capability_selection").get("input")
+            or {"query": request.query},
+            output_data=stage("capability_selection"),
+            executed=stage("capability_selection").get("executed") is True,
+            skipped_reason="当前请求未执行重量LLM Tool选择阶段",
+        ),
+        _debug_step(
+            7,
             "上下文化理解",
             input_data={
                 "raw_query": request.query,
@@ -374,14 +397,14 @@ def _customer_service_debug_steps(
             executed=bool(contextualized),
         ),
         _debug_step(
-            5,
+            8,
             "生成 ContextualizedRequest",
             input_data={"route": route},
             output_data=contextualized,
             executed=bool(contextualized),
         ),
         _debug_step(
-            6,
+            9,
             "DST 与 FSM 状态更新",
             input_data={"dst_before": dst_before},
             output_data={
@@ -395,7 +418,7 @@ def _customer_service_debug_steps(
             or dst_after_tool is not None,
         ),
         _debug_step(
-            7,
+            10,
             "Tool 路由与参数组装",
             input_data={
                 "intent": contextualized.get("intent") or route.get("intent"),
@@ -406,7 +429,7 @@ def _customer_service_debug_steps(
             skipped_reason="本轮直接回答，没有选择 Tool",
         ),
         _debug_step(
-            8,
+            11,
             "业务 Tool 执行",
             input_data={"tool_calls": result.tool_calls},
             output_data={"observations": result.observations},
@@ -414,7 +437,7 @@ def _customer_service_debug_steps(
             skipped_reason="本轮没有执行 Tool",
         ),
         _debug_step(
-            9,
+            12,
             "证据校验",
             input_data={
                 "observations": result.observations,
@@ -432,7 +455,7 @@ def _customer_service_debug_steps(
             skipped_reason="本轮没有需要校验的外部证据",
         ),
         _debug_step(
-            10,
+            13,
             "最终回答",
             input_data={
                 "action": result.action,

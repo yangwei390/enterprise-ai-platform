@@ -39,3 +39,15 @@ def get_customer_service_intent_llm_config() -> LLMConfig:
         stream=False,
         metadata={"purpose": "customer_service_intent"},
     )
+
+
+def get_customer_service_reasoning_llm_config() -> LLMConfig:
+    config = get_llm_config()
+    return config.model_copy(
+        update={
+            "model": settings.CUSTOMER_SERVICE_REASONING_LLM_MODEL,
+            "temperature": 0,
+            "stream": False,
+            "metadata": {"purpose": "customer_service_reasoning"},
+        }
+    )

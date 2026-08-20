@@ -74,26 +74,17 @@ class PlannerNode:
         if not is_customer_service_strategy:
             state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
         decision = await strategy.adecide(state)
-        if (
-            is_customer_service_strategy
-            and state.get("metadata", {})
-            .get("customer_service", {})
-            .get("execution_details", {})
-            .get("understanding", {})
-            .get("llm_used")
-            is True
-        ):
-            state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
-        if (
-            is_customer_service_strategy
-            and state.get("metadata", {})
-            .get("customer_service", {})
-            .get("execution_details", {})
-            .get("read_only_tool_fallback", {})
-            .get("triggered")
-            is True
-        ):
-            state["llm_call_count"] = int(state.get("llm_call_count", 0)) + 1
+        if is_customer_service_strategy:
+            execution_details = (
+                state.get("metadata", {})
+                .get("customer_service", {})
+                .get("execution_details", {})
+            )
+            if execution_details.get("llm_calls_accounted") is not True:
+                state["llm_call_count"] = int(state.get("llm_call_count", 0)) + int(
+                    execution_details.get("llm_call_count", 0)
+                )
+                execution_details["llm_calls_accounted"] = True
         state["current_action"] = decision.action
         state["pending_tool_calls"] = [tool_call.model_dump() for tool_call in decision.tool_calls]
         if decision.content and decision.action == "final":

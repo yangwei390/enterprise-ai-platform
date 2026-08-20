@@ -21,7 +21,7 @@ class CustomerServicePresenter:
             return f"{notice}\n{answer}" if notice else answer
         if tool_name in {"search_products", "recommend_products", "compare_products"}:
             response_mode, question_slots = self._response_contract(state)
-            if response_mode in {"product_feature_match", "product_use_case_match"}:
+            if response_mode == "product_feature_match":
                 return self._product_match(
                     result,
                     response_mode=response_mode,
@@ -119,14 +119,9 @@ class CustomerServicePresenter:
         if not isinstance(item, dict):
             return "商品工具未返回可核验的数据。"
         name = str(item.get("name") or item.get("product_code") or "该商品")
-        if response_mode == "product_use_case_match":
-            target = question_slots.get("use_case")
-            evidence = item.get("use_cases")
-            label = "适合"
-        else:
-            target = question_slots.get("feature")
-            evidence = item.get("features")
-            label = "支持"
+        target = question_slots.get("feature")
+        evidence = item.get("features")
+        label = "支持"
         if not isinstance(target, str) or not target.strip():
             return f"当前商品资料无法确认{name}的相关能力。"
         values = [str(value) for value in evidence] if isinstance(evidence, list) else []

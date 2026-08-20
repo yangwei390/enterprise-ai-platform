@@ -12,7 +12,16 @@ from backend.app.agents.customer_service_core.contracts import (
     SemanticFrame,
     UnderstandingContext,
 )
-from backend.app.config import settings
+from backend.app.agents.customer_service_core.stage_modes import (
+    StageExecutionDetail,
+    StageMode,
+    all_stage_modes,
+    intent_routing_mode,
+    query_rewrite_mode,
+    reference_interpretation_mode,
+    slot_extraction_mode,
+    tool_selection_mode,
+)
 from backend.app.llms import LLMFactory, LLMMessage, LLMRequest
 from backend.app.llms.config import get_customer_service_intent_llm_config
 from backend.app.schemas.product import normalize_product_category
@@ -29,7 +38,9 @@ class UnderstandingResult(BaseModel):
     llm_used: bool = False
     llm_failure_reason: str | None = None
     llm_context: UnderstandingContext | None = None
-    read_only_fallback_required: bool = False
+    capability_selector_required: bool = False
+    llm_call_count: int = Field(default=0, ge=0)
+    stage_details: dict[str, StageExecutionDetail] = Field(default_factory=dict)
     merge: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -82,44 +93,134 @@ async def understand(
     messages: list[dict[str, Any]],
 ) -> UnderstandingResult:
     rule_frame = _rule_understand(query, state, messages)
+    modes = all_stage_modes()
     if rule_frame.intent == "blocked":
         return UnderstandingResult(
             frame=rule_frame,
             rule_frame=rule_frame,
+            stage_details={
+                "query_rewrite": StageExecutionDetail(
+                    mode=modes["query_rewrite"],
+                    source="safety",
+                    output={"blocked": True},
+                )
+            },
             merge={"source": "safety_rules", "conflicts": []},
         )
-    if settings.CUSTOMER_SERVICE_INTENT_MODE == "llm_only":
-        context = _build_understanding_context(query, state, messages)
+
+    context = _build_understanding_context(query, state, messages)
+    rewrite_mode = query_rewrite_mode()
+    should_rewrite = rewrite_mode == "llm_only" or (
+        rewrite_mode == "hybrid" and rule_frame.intent == "other"
+    )
+    rewritten_query = query
+    failure_reason: str | None = None
+    llm_call_count = 0
+    if should_rewrite:
         rewritten_query, failure_reason = await _llm_rewrite(context)
-        bypassed_frame = SemanticFrame(intent="other")
+        llm_call_count = 1
+    rewritten_rule_frame = _rule_understand(rewritten_query, state, messages)
+    stage_details: dict[str, StageExecutionDetail] = {
+        "query_rewrite": StageExecutionDetail(
+            mode=rewrite_mode,
+            source="llm" if should_rewrite else "rule",
+            executed=should_rewrite,
+            input=context.model_dump(mode="json"),
+            output={"rewritten_query": rewritten_query},
+            failure_reason=failure_reason,
+        )
+    }
+
+    protected_intents = {
+        "greeting",
+        "confirm_pending_product_query",
+        "confirm",
+        "cancel",
+    }
+    if rewritten_rule_frame.intent in protected_intents:
+        for stage_name, mode in modes.items():
+            if stage_name == "query_rewrite":
+                continue
+            stage_details[stage_name] = StageExecutionDetail(
+                mode=mode,
+                source="safety" if rewritten_rule_frame.intent != "greeting" else "rule",
+                output={"intent": rewritten_rule_frame.intent},
+            )
         return UnderstandingResult(
-            frame=bypassed_frame,
-            rule_frame=bypassed_frame,
+            frame=rewritten_rule_frame,
+            rule_frame=rule_frame,
             rewritten_query=rewritten_query,
-            llm_used=True,
+            rewritten_rule_frame=rewritten_rule_frame,
+            llm_used=should_rewrite,
             llm_failure_reason=failure_reason,
             llm_context=context,
-            read_only_fallback_required=True,
-            merge={"source": "llm_query_rewrite_then_read_only_fallback", "conflicts": []},
+            llm_call_count=llm_call_count,
+            stage_details=stage_details,
+            merge={"source": "protected_local_route", "conflicts": []},
         )
-    if rule_frame.intent != "other":
+
+    semantic_llm_required = any(
+        mode == "llm_only"
+        for mode in (
+            intent_routing_mode(),
+            slot_extraction_mode(),
+            reference_interpretation_mode(),
+        )
+    )
+    fallback_required = tool_selection_mode() == "llm_only" or semantic_llm_required
+    if fallback_required:
+        pending_stages: tuple[tuple[str, StageMode], ...] = (
+            ("intent_routing", intent_routing_mode()),
+            ("slot_extraction", slot_extraction_mode()),
+            ("reference_interpretation", reference_interpretation_mode()),
+            ("capability_selection", tool_selection_mode()),
+        )
+        for stage_name, mode in pending_stages:
+            stage_details[stage_name] = StageExecutionDetail(
+                mode=mode,
+                source="shared_llm" if mode == "llm_only" else "rule",
+                input={"rewritten_query": rewritten_query},
+                shared_call_id="heavy_semantic_tool_call" if mode == "llm_only" else None,
+            )
         return UnderstandingResult(
-            frame=rule_frame,
+            frame=SemanticFrame(intent="other"),
             rule_frame=rule_frame,
-            merge={"source": "rules", "conflicts": []},
+            rewritten_query=rewritten_query,
+            rewritten_rule_frame=rewritten_rule_frame,
+            llm_used=should_rewrite,
+            llm_failure_reason=failure_reason,
+            llm_context=context,
+            capability_selector_required=True,
+            llm_call_count=llm_call_count,
+            stage_details=stage_details,
+            merge={"source": "query_rewrite_then_shared_heavy_llm", "conflicts": []},
         )
-    context = _build_understanding_context(query, state, messages)
-    rewritten_query, failure_reason = await _llm_rewrite(context)
-    rewritten_rule_frame = _rule_understand(rewritten_query, state, messages)
+
+    local_stages: tuple[tuple[str, StageMode], ...] = (
+        ("intent_routing", intent_routing_mode()),
+        ("slot_extraction", slot_extraction_mode()),
+        ("reference_interpretation", reference_interpretation_mode()),
+        ("capability_selection", tool_selection_mode()),
+    )
+    for stage_name, mode in local_stages:
+        stage_details[stage_name] = StageExecutionDetail(
+            mode=mode,
+            source="rule",
+            executed=True,
+            input={"query": rewritten_query},
+            output=rewritten_rule_frame.model_dump(mode="json"),
+        )
     return UnderstandingResult(
         frame=rewritten_rule_frame,
         rule_frame=rule_frame,
-        rewritten_query=rewritten_query,
+        rewritten_query=rewritten_query if should_rewrite else None,
         rewritten_rule_frame=rewritten_rule_frame,
-        llm_used=True,
+        llm_used=should_rewrite,
         llm_failure_reason=failure_reason,
         llm_context=context,
-        merge={"source": "llm_query_rewrite_then_rules", "conflicts": []},
+        llm_call_count=llm_call_count,
+        stage_details=stage_details,
+        merge={"source": "configured_local_stages", "conflicts": []},
     )
 
 
@@ -443,7 +544,12 @@ async def _llm_rewrite(
                                 context.pending_product_query.model_dump(mode="json")
                                 if context.pending_product_query is not None
                                 else None
-                            )
+                            ),
+                            "pending_clarification": (
+                                context.pending_clarification.model_dump(mode="json")
+                                if context.pending_clarification is not None
+                                else None
+                            ),
                         },
                         "business_state_summary": {
                             "active_product_category": context.active_product_category,
@@ -541,6 +647,7 @@ def _build_understanding_context(
             [item.product_code for item in batch.items] if batch is not None else []
         ),
         pending_product_query=state.product.pending_query,
+        pending_clarification=state.pending_clarification,
     )
 
 
@@ -614,6 +721,12 @@ def _explicit_question_predicate(query: str) -> str | None:
         return "compatibility"
     if "按键" in query:
         return "buttons"
+    if "保修" in query:
+        return "warranty"
+    if any(term in query for term in ("怎么用", "如何使用", "使用方法")):
+        return "usage"
+    if any(term in query for term in ("游戏", "办公", "适合")):
+        return "use_case"
     if any(term in query for term in _PRICE_TERMS):
         return "price"
     if any(term in query for term in ("特点", "功能", "特性")):
@@ -630,6 +743,12 @@ def _question_predicate(query: str) -> str:
         return "compatibility"
     if "按键" in query:
         return "buttons"
+    if "保修" in query:
+        return "warranty"
+    if any(term in query for term in ("怎么用", "如何使用", "使用方法")):
+        return "usage"
+    if any(term in query for term in ("游戏", "办公", "适合")):
+        return "use_case"
     return "features"
 
 
@@ -641,4 +760,7 @@ def _question_for_predicate(predicate: str) -> str:
         "price": "该商品多少钱",
         "features": "该商品有什么特点",
         "buttons": "该商品有哪些按键",
+        "use_case": "该商品适合这个使用场景吗",
+        "usage": "该商品如何使用",
+        "warranty": "该商品保修多久",
     }.get(predicate, "该商品有什么特点")
